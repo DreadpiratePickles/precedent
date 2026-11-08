@@ -93,9 +93,9 @@ def test_the_record_fields_follow_the_field_table():
 
 
 def test_an_instrument_that_is_not_a_ticker_gets_no_ticker_hint():
-    record = records_of(SAMPLE, "gvkey 001690")[0][0]
+    record = records_of(SAMPLE, "synthetic-id 0042")[0][0]
     assert record.event.impacted[0].ticker_hint is None
-    assert record.resolved_impacts[0].instrument == "gvkey 001690"
+    assert record.resolved_impacts[0].instrument == "synthetic-id 0042"
 
 
 def test_records_are_aligned_to_the_next_session_cutoff():
@@ -158,13 +158,13 @@ def test_a_repeated_item_code_in_one_filing_gives_one_record():
 @pytest.mark.parametrize("empty_items", ["", " , ", None], ids=["empty", "separators", "null"])
 def test_an_8k_without_items_is_counted_not_dropped_or_failed(empty_items):
     document = json.loads(json.dumps(SAMPLE))
-    document["filings"]["recent"]["items"][3] = empty_items  # the 8-K with items 2.02,5.02,9.01
+    document["filings"]["recent"]["items"][3] = empty_items  # the last filing, -000001: 8-K with 2.02,5.02,9.01
     records, report = records_of(document)
     assert [r.article_id for r in records] == ["0001234567-24-000002:5.02"]
     assert report == EdgarIngestReport(
         filings_read=4,
         records=1,
-        skipped_items=1,  # 7.01 of the fourth filing
+        skipped_items=1,  # 7.01 of the first filing in the arrays (-000004)
         skipped_forms=1,
         skipped_filings_without_items=1,
     )

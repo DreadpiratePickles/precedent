@@ -1,8 +1,8 @@
 {
-  "_label": "SYNTHETIC: hand-made in the shape of a data.sec.gov submissions document (field names checked 2026-11-07, amendment spec section 12); every value is invented.",
+  "_label": "SYNTHETIC: hand-made in the shape of a data.sec.gov submissions document (field names checked 2026-11-07, amendment spec section 12); every identifier (CIK, name, ticker, accession number, SIC, city) and every timestamp is invented; the state, country and exchange codes are real codes.",
   "cik": "7654321",
   "entityType": "operating",
-  "sic": "3571",
+  "sic": "9999",
   "name": "Synthetic Foreign Holdings plc",
   "tickers": [
     "XYZ"

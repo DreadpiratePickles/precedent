@@ -59,7 +59,8 @@ class ItemRules(BaseModel):
 class EdgarIngestReport:
     """Counts for one submissions document: filings seen, records made, and what was set aside.
 
-    `skipped_filings_without_items` counts 8-K filings whose `items` is empty or null."""
+    `skipped_filings_without_items` counts 8-K filings whose `items` is empty, separator-only
+    or null."""
 
     filings_read: int
     records: int
