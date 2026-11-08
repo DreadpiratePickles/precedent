@@ -24,27 +24,27 @@ def utc(text: str) -> datetime:
     return datetime.fromisoformat(text).replace(tzinfo=UTC)
 
 
-def records_of(submissions, instrument="AAPL", **kwargs):
+def records_of(submissions, instrument="ACME", **kwargs):
     return events_from_submissions(submissions, instrument, ingested_utc=INGESTED, **kwargs)
 
 
 def test_multi_item_filing_yields_one_event_per_item():
-    records = [r for r in records_of(SAMPLE)[0] if r.article_id.startswith("0000320193-24-000001")]
+    records = [r for r in records_of(SAMPLE)[0] if r.article_id.startswith("0001234567-24-000001")]
     assert [r.event.event_type.value for r in records] == ["earnings", "management_change"]
     assert [r.article_id for r in records] == [
-        "0000320193-24-000001:2.02",
-        "0000320193-24-000001:5.02",
+        "0001234567-24-000001:2.02",
+        "0001234567-24-000001:5.02",
     ]
     assert {r.first_seen_utc for r in records} == {utc("2024-02-01 21:30:05")}
     assert {r.published_utc for r in records} == {utc("2024-02-01 21:30:05")}
 
 
 def test_amendment_is_an_update():
-    amended = [r for r in records_of(SAMPLE)[0] if r.article_id.startswith("0000320193-24-000002")]
+    amended = [r for r in records_of(SAMPLE)[0] if r.article_id.startswith("0001234567-24-000002")]
     assert amended
     assert all(r.event.novelty.value == "update" for r in amended)
     originals = [
-        r for r in records_of(SAMPLE)[0] if r.article_id.startswith("0000320193-24-000001")
+        r for r in records_of(SAMPLE)[0] if r.article_id.startswith("0001234567-24-000001")
     ]
     assert all(r.event.novelty.value == "new" for r in originals)
 
@@ -78,12 +78,12 @@ def test_the_record_fields_follow_the_field_table():
     assert (impact.name, impact.kind.value, impact.ticker_hint, impact.direction_step) == (
         "Synthetic Devices Inc.",
         "company",
-        "AAPL",
+        "ACME",
         0,
     )
     resolved = earnings.resolved_impacts[0]
     assert (resolved.instrument, resolved.kind, resolved.direction, resolved.match_method) == (
-        "AAPL",
+        "ACME",
         "company",
         0.0,
         "cik_map",
@@ -101,10 +101,10 @@ def test_an_instrument_that_is_not_a_ticker_gets_no_ticker_hint():
 def test_records_are_aligned_to_the_next_session_cutoff():
     by_id = {r.article_id: r for r in records_of(SAMPLE)[0]}
     # Thu 2024-02-01 21:30 UTC is after the 16:00 New York cutoff (21:00 UTC): next session, Fri.
-    assert by_id["0000320193-24-000001:2.02"].effective_session.isoformat() == "2024-02-02"
-    assert by_id["0000320193-24-000001:2.02"].available_utc == utc("2024-02-01 21:35:05")
+    assert by_id["0001234567-24-000001:2.02"].effective_session.isoformat() == "2024-02-02"
+    assert by_id["0001234567-24-000001:2.02"].available_utc == utc("2024-02-01 21:35:05")
     # Thu 2024-02-08 14:00 UTC is before the cutoff that day.
-    assert by_id["0000320193-24-000002:5.02"].effective_session.isoformat() == "2024-02-08"
+    assert by_id["0001234567-24-000002:5.02"].effective_session.isoformat() == "2024-02-08"
 
 
 def test_explicit_cutoffs_and_latency_are_used():
@@ -114,20 +114,24 @@ def test_explicit_cutoffs_and_latency_are_used():
     )
     records, _ = records_of(SAMPLE, session_cutoffs_utc=cutoffs, latency=pd.Timedelta(minutes=30))
     by_id = {r.article_id: r for r in records}
-    assert by_id["0000320193-24-000001:2.02"].available_utc == utc("2024-02-01 22:00:05")
-    assert by_id["0000320193-24-000001:2.02"].effective_session.isoformat() == "2024-02-09"
+    assert by_id["0001234567-24-000001:2.02"].available_utc == utc("2024-02-01 22:00:05")
+    assert by_id["0001234567-24-000001:2.02"].effective_session.isoformat() == "2024-02-09"
 
 
 def test_the_report_counts_what_was_kept_and_skipped():
     records, report = records_of(SAMPLE)
     assert report == EdgarIngestReport(
-        filings_read=4, records=len(records), skipped_items=2, skipped_forms=1
+        filings_read=4,
+        records=len(records),
+        skipped_items=2,
+        skipped_forms=1,
+        skipped_filings_without_items=0,
     )
     assert len(records) == 3  # 2.02, 5.02 and the amendment's 5.02; 9.01 and 7.01 are not rules
 
 
 def test_only_8k_forms_produce_records():
-    assert all(not r.article_id.startswith("0000320193-24-000003") for r in records_of(SAMPLE)[0])
+    assert all(not r.article_id.startswith("0001234567-24-000003") for r in records_of(SAMPLE)[0])
 
 
 def test_a_submissions_document_with_no_filings_gives_nothing():
@@ -136,7 +140,7 @@ def test_a_submissions_document_with_no_filings_gives_nothing():
         column.clear()
     records, report = records_of(empty)
     assert records == []
-    assert report == EdgarIngestReport(0, 0, 0, 0)
+    assert report == EdgarIngestReport(0, 0, 0, 0, 0)
 
 
 def test_records_are_keyed_uniquely():
@@ -148,7 +152,29 @@ def test_a_repeated_item_code_in_one_filing_gives_one_record():
     doubled = json.loads(json.dumps(SAMPLE))
     doubled["filings"]["recent"]["items"][3] = "2.02,2.02"
     ids = [r.article_id for r in records_of(doubled)[0] if "000001" in r.article_id]
-    assert ids == ["0000320193-24-000001:2.02"]
+    assert ids == ["0001234567-24-000001:2.02"]
+
+
+@pytest.mark.parametrize("empty_items", ["", " , ", None], ids=["empty", "separators", "null"])
+def test_an_8k_without_items_is_counted_not_dropped_or_failed(empty_items):
+    document = json.loads(json.dumps(SAMPLE))
+    document["filings"]["recent"]["items"][3] = empty_items  # the 8-K with items 2.02,5.02,9.01
+    records, report = records_of(document)
+    assert [r.article_id for r in records] == ["0001234567-24-000002:5.02"]
+    assert report == EdgarIngestReport(
+        filings_read=4,
+        records=1,
+        skipped_items=1,  # 7.01 of the fourth filing
+        skipped_forms=1,
+        skipped_filings_without_items=1,
+    )
+
+
+def test_a_non_string_items_value_is_still_malformed():
+    document = json.loads(json.dumps(SAMPLE))
+    document["filings"]["recent"]["items"][3] = 202
+    with pytest.raises(ValueError, match="submissions"):
+        records_of(document)
 
 
 @pytest.mark.parametrize(

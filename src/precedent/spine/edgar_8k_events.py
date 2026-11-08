@@ -57,12 +57,15 @@ class ItemRules(BaseModel):
 
 @dataclass(frozen=True)
 class EdgarIngestReport:
-    """Counts for one submissions document: filings seen, records made, and what was set aside."""
+    """Counts for one submissions document: filings seen, records made, and what was set aside.
+
+    `skipped_filings_without_items` counts 8-K filings whose `items` is empty or null."""
 
     filings_read: int
     records: int
     skipped_items: int
     skipped_forms: int
+    skipped_filings_without_items: int
 
 
 def load_item_rules(path: Path | None = None) -> ItemRules:
@@ -128,6 +131,9 @@ def _accepted_utc(text: Any, accession: str) -> datetime:
 
 
 def _item_codes(items: Any, accession: str) -> list[str]:
+    """Item codes of one filing; a null `items` is no codes (the caller counts it)."""
+    if items is None:
+        return []
     if not isinstance(items, str):
         raise _malformed(f"items of {accession} is not a string")
     codes = [code.strip() for code in items.split(",") if code.strip()]
@@ -160,7 +166,7 @@ def events_from_submissions(
     is_us_filer = _business_state_or_country(submissions) in load_us_state_codes()
     ticker_hint = instrument if _TICKER_PATTERN.match(instrument) else None
     filings_read = len(columns["form"])
-    skipped_items = skipped_forms = 0
+    skipped_items = skipped_forms = skipped_without_items = 0
     records: list[EventRecord] = []
     for accession, accepted_text, form, items in zip(
         columns["accessionNumber"],
@@ -173,7 +179,11 @@ def events_from_submissions(
             skipped_forms += 1
             continue
         accepted = _accepted_utc(accepted_text, accession)
-        for item in _item_codes(items, accession):
+        codes = _item_codes(items, accession)
+        if not codes:
+            skipped_without_items += 1
+            continue
+        for item in codes:
             rule = rules.get(item)
             if rule is None:
                 skipped_items += 1
@@ -199,7 +209,9 @@ def events_from_submissions(
             else _default_cutoffs([r.first_seen_utc for r in records])
         )
         records = align_records(records, cutoffs, latency)
-    return records, EdgarIngestReport(filings_read, len(records), skipped_items, skipped_forms)
+    return records, EdgarIngestReport(
+        filings_read, len(records), skipped_items, skipped_forms, skipped_without_items
+    )
 
 
 def _record(

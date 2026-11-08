@@ -1,11 +1,11 @@
 {
   "_label": "SYNTHETIC: hand-made in the shape of a data.sec.gov submissions document (field names checked 2026-11-07, amendment spec section 12); every value is invented.",
-  "cik": "320193",
+  "cik": "1234567",
   "entityType": "operating",
   "sic": "3571",
   "name": "Synthetic Devices Inc.",
   "tickers": [
-    "AAPL"
+    "ACME"
   ],
   "exchanges": [
     "Nasdaq"
@@ -15,17 +15,17 @@
       "stateOrCountry": "CA"
     },
     "business": {
-      "city": "CUPERTINO",
+      "city": "SPRINGFIELD",
       "stateOrCountry": "CA"
     }
   },
   "filings": {
     "recent": {
       "accessionNumber": [
-        "0000320193-24-000004",
-        "0000320193-24-000003",
-        "0000320193-24-000002",
-        "0000320193-24-000001"
+        "0001234567-24-000004",
+        "0001234567-24-000003",
+        "0001234567-24-000002",
+        "0001234567-24-000001"
       ],
       "filingDate": [
         "2024-02-12",

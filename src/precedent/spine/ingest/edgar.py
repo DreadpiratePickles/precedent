@@ -10,7 +10,12 @@ from pathlib import Path
 
 from precedent.config import ConfigError, data_dir
 from precedent.spine.edgar_8k_events import events_from_submissions
-from precedent.spine.edgar_client import EdgarClient, EdgarError, EdgarRateLimitError
+from precedent.spine.edgar_client import (
+    EdgarBlockedError,
+    EdgarClient,
+    EdgarError,
+    EdgarRateLimitError,
+)
 from precedent.spine.event_store import EventStore
 from precedent.spine.http import Clock, SystemClock, Transport
 
@@ -55,8 +60,9 @@ def run(argv: list[str], *, transport: Transport | None = None, clock: Clock | N
     """
     try:
         args = _parse_args(argv)
-    except SystemExit as exit_request:
-        return int(exit_request.code or EXIT_USAGE_OR_CONFIG)
+    except SystemExit as exit_request:  # argparse: 0 for --help, 2 for a usage error
+        code = exit_request.code
+        return code if isinstance(code, int) else EXIT_USAGE_OR_CONFIG
     if args.max_requests < 1:
         print("--max-requests must be at least 1", file=sys.stderr)
         return EXIT_USAGE_OR_CONFIG
@@ -75,10 +81,17 @@ def _ingest(
     now = (clock if clock is not None else SystemClock()).now_utc()
     store = EventStore(data_dir() / "events")
     attempted = entries[:max_requests]
-    totals = {"filings_read": 0, "records": 0, "skipped_items": 0, "skipped_forms": 0}
+    totals = {
+        "filings_read": 0,
+        "records": 0,
+        "skipped_items": 0,
+        "skipped_forms": 0,
+        "skipped_filings_without_items": 0,
+    }
     failures: list[dict[str, str | int]] = []
     fetched = 0
     stopped_by_rate_limit = False
+    stopped_by_block = False
     for entry in attempted:
         try:
             records, report = events_from_submissions(
@@ -87,6 +100,10 @@ def _ingest(
         except EdgarRateLimitError as error:
             failures.append({"cik": entry.cik, "error": str(error)})
             stopped_by_rate_limit = True
+            break
+        except EdgarBlockedError as error:
+            failures.append({"cik": entry.cik, "error": str(error)})
+            stopped_by_block = True
             break
         except (EdgarError, ValueError) as error:
             failures.append({"cik": entry.cik, "error": str(error)})
@@ -97,6 +114,7 @@ def _ingest(
         totals["records"] += report.records
         totals["skipped_items"] += report.skipped_items
         totals["skipped_forms"] += report.skipped_forms
+        totals["skipped_filings_without_items"] += report.skipped_filings_without_items
     print(
         json.dumps(
             {
@@ -105,6 +123,7 @@ def _ingest(
                 "ciks_failed": failures,
                 "ciks_not_attempted": len(entries) - fetched - len(failures),
                 "stopped_by_rate_limit": stopped_by_rate_limit,
+                "stopped_by_block": stopped_by_block,
                 **totals,
             },
             sort_keys=True,

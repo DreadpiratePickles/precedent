@@ -20,9 +20,11 @@ from precedent.spine.http import (
 
 USER_AGENT_ENV = "PRECEDENT_SEC_USER_AGENT"
 DEFAULT_MAX_REQUESTS_PER_SECOND = 5.0
+STATUS_FORBIDDEN = 403
 
 __all__ = [
     "ConfigError",
+    "EdgarBlockedError",
     "EdgarClient",
     "EdgarError",
     "EdgarRateLimitError",
@@ -35,6 +37,10 @@ class EdgarError(RuntimeError):
 
 class EdgarRateLimitError(EdgarError):
     """EDGAR kept answering 429 after the retry budget was spent."""
+
+
+class EdgarBlockedError(EdgarError):
+    """EDGAR answered 403: the SEC's response to a blocked or undeclared User-Agent."""
 
 
 class EdgarClient:
@@ -85,6 +91,11 @@ class EdgarClient:
                 f"EDGAR rate-limited the request for {name}: {error}"
             ) from error
         except HttpError as error:
+            if error.status == STATUS_FORBIDDEN:
+                raise EdgarBlockedError(
+                    f"EDGAR refused the request for {name} (403); check the declared "
+                    f"{USER_AGENT_ENV}: {error}"
+                ) from error
             raise EdgarError(f"EDGAR request for {name} failed: {error}") from error
         try:
             document = response.json()
