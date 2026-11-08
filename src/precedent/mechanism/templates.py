@@ -91,9 +91,12 @@ def _build_graph(path: Path, vocabulary: frozenset[str]) -> CausalGraph:
 
 def load_templates(templates_dir: Path, vocabulary: frozenset[str]) -> dict[str, CausalGraph]:
     """Load every `<event_type>.json` in `templates_dir`; the first bad file stops the load."""
-    return {
-        path.stem: _build_graph(path, vocabulary) for path in sorted(templates_dir.glob("*.json"))
-    }
+    if not templates_dir.is_dir():
+        raise TemplateError(f"templates directory {templates_dir} does not exist")
+    paths = sorted(templates_dir.glob("*.json"))
+    if not paths:
+        raise TemplateError(f"templates directory {templates_dir} contains no *.json files")
+    return {path.stem: _build_graph(path, vocabulary) for path in paths}
 
 
 def template_for(key: EventKey, templates: dict[str, CausalGraph]) -> CausalGraph | None:

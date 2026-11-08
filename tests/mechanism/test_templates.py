@@ -116,3 +116,25 @@ def test_every_rationale_states_the_spines_direction_sign_convention():
         rationale = json.loads(file.read_text(encoding="utf-8"))["rationale"]
         assert "1 favourable, -1 unfavourable" in rationale, file.name
         assert "references/typing_prompt_v1.txt rule 8" in rationale, file.name
+
+
+def test_macro_data_release_has_no_rates_edge():
+    graph = load_templates(TEMPLATES_DIR, VOCAB)["macro_data_release"]
+    event = "event:macro_data_release:direction_sign"
+    assert {(e.source, e.target, e.sign) for e in graph.edges} == {
+        (event, "risk_appetite", 1),
+        ("risk_appetite", "SPY", 1),
+        ("risk_appetite", "IWM", 1),
+        ("risk_appetite", "HYG", 1),
+    }
+    assert "rates_expectation" not in {n.id for n in graph.nodes}
+
+
+def test_missing_or_empty_templates_dir_is_an_error_naming_the_directory(tmp_path: Path):
+    missing = tmp_path / "no_such_dir"
+    with pytest.raises(TemplateError, match="no_such_dir"):
+        load_templates(missing, VOCAB)
+    empty = tmp_path / "empty_dir"
+    empty.mkdir()
+    with pytest.raises(TemplateError, match="empty_dir"):
+        load_templates(empty, VOCAB)
