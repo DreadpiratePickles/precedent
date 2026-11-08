@@ -150,6 +150,49 @@ def test_truncation_test_has_teeth_against_a_later_graph_lookup(panel_inputs):
         pd.testing.assert_frame_equal(full, truncated)
 
 
+@pytest.fixture
+def panel_inputs_link_one_session_ahead(tmp_path):
+    """A shock on session 302 and a link A->E that becomes visible at session 303's cutoff."""
+    early = CUTOFFS.iloc[289] - pd.Timedelta(days=1)
+    links = [
+        make_link("A", "B", Relation.CUSTOMER_OF, early),
+        make_link("A", "E", Relation.CUSTOMER_OF, CUTOFFS.iloc[303]),
+    ]
+    abnormal = abnormal_frame(["A", "B", "E"])
+    return inputs_for(links, shock_series([(302, "A", 0.05)]), tmp_path, abnormal)
+
+
+def _lookup_shifted_by(inputs, sessions_ahead):
+    """The same builder, but the graph is read `sessions_ahead` sessions after the shock's."""
+    graph_of = inputs["graph_for_cutoff"]
+    position_of = {cutoff: position for position, cutoff in enumerate(CUTOFFS)}
+
+    def shifted(cutoff):
+        return graph_of(CUTOFFS.iloc[position_of[cutoff] + sessions_ahead])
+
+    return {**inputs, "graph_for_cutoff": shifted}
+
+
+@pytest.mark.parametrize("sessions_ahead", [1, 2, 3])
+def test_truncation_test_has_teeth_against_a_lookup_one_to_three_sessions_ahead(
+    panel_inputs_link_one_session_ahead, sessions_ahead
+):
+    """Negative control for the close case: the link is filed one session after the shock."""
+    inputs, cut = panel_inputs_link_one_session_ahead, SESSIONS[302]
+    # the correct builder passes the same comparison: the truncated world lacks the link, and
+    # the shock's session (302) does not see it either way
+    correct_full = build_ripple_factor_panel(**inputs).loc[:cut]
+    correct_cut = build_ripple_factor_panel(**truncate_inputs(inputs, cut)).loc[:cut]
+    assert "E" not in correct_full.index.get_level_values("instrument")
+    pd.testing.assert_frame_equal(correct_full, correct_cut)
+    wrong = _lookup_shifted_by(inputs, sessions_ahead)
+    full = build_ripple_factor_panel(**wrong).loc[:cut]
+    truncated = build_ripple_factor_panel(**_lookup_shifted_by(truncate_inputs(inputs, cut), sessions_ahead)).loc[:cut]
+    assert "E" in full.index.get_level_values("instrument")  # the wrong lookup does see the link
+    with pytest.raises(AssertionError):
+        pd.testing.assert_frame_equal(full, truncated)
+
+
 def test_a_link_filed_later_does_not_carry_an_earlier_shock(panel_inputs_late_link):
     panel = build_ripple_factor_panel(**panel_inputs_late_link)
     assert "RECEIVER" not in panel.index.get_level_values("instrument")

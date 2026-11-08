@@ -26,10 +26,12 @@ from precedent.ripple.control_graphs import shuffle_preserving_degree  # noqa: E
 from precedent.ripple.evaluate import (  # noqa: E402
     FOLD_COLUMNS,
     LADDER_COLUMNS,
-    PAIR_COLUMNS,
-    diffusion_table,
     evaluate_graph_ladder,
     load_fold_ics,
+)
+from precedent.ripple.ladder_report import (  # noqa: E402
+    PAIR_COLUMNS,
+    diffusion_table,
     placebo_pairs,
     render_report,
 )
@@ -404,6 +406,34 @@ def test_a_tiny_positive_margin_is_within_noise_and_no_graph_is_said_to_beat_its
     assert not pairs.loc[0, "beats_placebo"]
 
 
+def test_a_placebo_ahead_beyond_the_tolerance_reads_below_its_placebo_not_within_noise():
+    ladder = pair_ladder(0.0, 0.05)  # margin -0.05, tolerance 0.01
+    text = render_report(ladder, fold_ics=fold_ics_for(ladder), evidence_label="SYNTHETIC", counts={})
+    assert (
+        "- g1 at 20 sessions: margin -0.0500, tolerance 0.0100: below its placebo "
+        "(beyond the tolerance)." in text
+    )
+    assert "within noise" not in text
+    inside = pair_ladder(0.0, 0.005)  # margin -0.005 is inside the tolerance: still noise
+    inside_text = render_report(
+        inside, fold_ics=fold_ics_for(inside), evidence_label="SYNTHETIC", counts={}
+    )
+    assert "margin -0.0050, tolerance 0.0100: within noise." in inside_text
+
+
+def test_the_report_prints_how_many_graph_versus_placebo_comparisons_were_made():
+    ladder = ladder_frame(graphs=("g1", "g1_placebo", "g2", "g2_placebo"))
+    pairs = placebo_pairs(ladder, fold_ics_for(ladder))
+    text = render_report(ladder, fold_ics=fold_ics_for(ladder), evidence_label="SYNTHETIC", counts={})
+    assert f"{len(pairs)} graph-versus-placebo comparisons were made at this rule" in text
+    assert len(pairs) == 2 * len(set(ladder["horizon"]))
+    assert "a single win among many comparisons is weak evidence" in text
+    tolerance_line = next(
+        line for line in text.splitlines() if line.startswith("A graph beats its placebo")
+    )
+    assert "comparisons were made" in tolerance_line  # printed beside the tolerance sentence
+
+
 def test_a_margin_clearly_above_the_tolerance_beats_the_placebo():
     ladder = pair_ladder(0.05, 0.0)
     text = render_report(ladder, fold_ics=fold_ics_for(ladder), evidence_label="SYNTHETIC", counts={})
@@ -600,6 +630,29 @@ def test_script_dry_run_validates_inputs_and_writes_nothing(script_inputs):
     assert "rules-test" in result.stdout and "g1" in result.stdout
     assert files_under(script_inputs.root) == before
     assert not out_dir.exists() and not script_inputs.data_dir.exists()
+
+
+def test_script_dry_run_stops_when_the_qlib_calendar_and_the_price_files_disagree(script_inputs):
+    day_file = script_inputs.qlib_dir / "calendars" / "day.txt"
+    original = day_file.read_text(encoding="utf-8")
+    days = original.split()
+    missing = days[50]
+
+    day_file.write_text("\n".join(days[:50] + days[51:]) + "\n", encoding="utf-8")
+    result = run_script(*script_inputs.arguments("--dry-run"), cwd=script_inputs.root)
+    assert result.returncode == 1
+    assert missing in result.stderr and "only in the price files" in result.stderr
+
+    extra = "2022-01-08"  # a Saturday no price file has
+    day_file.write_text("\n".join(sorted([*days, extra])) + "\n", encoding="utf-8")
+    result = run_script(*script_inputs.arguments("--dry-run"), cwd=script_inputs.root)
+    assert result.returncode == 1
+    assert extra in result.stderr and "only in the Qlib calendar" in result.stderr
+
+    # days outside --start to --end are not compared
+    day_file.write_text(original + "2031-01-01\n", encoding="utf-8")
+    result = run_script(*script_inputs.arguments("--dry-run"), cwd=script_inputs.root)
+    assert result.returncode == 0, result.stderr
 
 
 def test_script_dry_run_reports_a_missing_input_on_stderr_with_exit_1(script_inputs):

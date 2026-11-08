@@ -23,6 +23,8 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from precedent import config
 from precedent.config import ConfigError
 from precedent.ripple.control_graphs import sector_links
@@ -173,6 +175,33 @@ def _read_sector_map(path: Path) -> dict[str, str]:
     return raw
 
 
+def _check_calendars_agree(args: argparse.Namespace) -> None:
+    """The Qlib calendar and the Parquet sessions must be the same over --start to --end.
+
+    A mismatch would misalign the ripple panel with Qlib's index (the left join and the zero fill
+    would hide it), so the run stops and names the first session where they differ.
+    """
+    parquet_days = list(ParquetPriceProvider(args.provider_dir).sessions(args.start, args.end))
+    path = args.qlib_dir / "calendars" / "day.txt"
+    try:
+        qlib_days = [pd.Timestamp(text) for text in path.read_text(encoding="utf-8").split()]
+    except (OSError, ValueError) as error:
+        raise InputError(f"cannot read the Qlib calendar {path}: {error}") from error
+    first, last = pd.Timestamp(args.start), pd.Timestamp(args.end)
+    qlib_days = sorted(day for day in qlib_days if first <= day <= last)
+    for position in range(max(len(parquet_days), len(qlib_days))):
+        in_prices = parquet_days[position] if position < len(parquet_days) else None
+        in_qlib = qlib_days[position] if position < len(qlib_days) else None
+        if in_prices == in_qlib:
+            continue
+        day = min(d for d in (in_prices, in_qlib) if d is not None)
+        where = "only in the price files" if day == in_prices else "only in the Qlib calendar"
+        raise InputError(
+            f"the Qlib calendar {path} and the price files in {args.provider_dir} disagree "
+            f"between {args.start} and {args.end}: first differing session {day.date()} ({where})"
+        )
+
+
 def check_inputs(args: argparse.Namespace) -> list[str]:
     """Raise InputError for the first unusable input; otherwise return the plan, one line each."""
     if args.start > args.end:
@@ -184,6 +213,7 @@ def check_inputs(args: argparse.Namespace) -> list[str]:
         raise InputError(f"market {args.market!r} has no price file in {args.provider_dir}")
     if not (args.qlib_dir / "calendars" / "day.txt").is_file():
         raise InputError(f"{args.qlib_dir} is not a Qlib provider (no calendars/day.txt)")
+    _check_calendars_agree(args)
     events_file = EventStore(args.events_dir).path_for(args.parser_version)
     if not events_file.is_file():
         raise InputError(
@@ -260,16 +290,12 @@ def run(
 ) -> int:
     plan = check_inputs(args)
     if args.dry_run:
-        print("dry run: nothing is read beyond file names and nothing is written")
+        print("dry run: inputs are checked (file names, calendars) and nothing is written")
         print("\n".join(plan))
         return 0
     # Research imports are deferred so --dry-run works on a core install.
-    from precedent.ripple.evaluate import (
-        evaluate_graph_ladder,
-        label_expr_for,
-        load_fold_ics,
-        render_report,
-    )
+    from precedent.ripple.evaluate import evaluate_graph_ladder, label_expr_for, load_fold_ics
+    from precedent.ripple.ladder_report import render_report
     from precedent.spine.ablation import code_commit
     from precedent.spine.purged_splits import purged_walk_forward_segments
     from precedent.spine.qlib_dataset import make_alpha158_price_loader
