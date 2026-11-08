@@ -1,13 +1,11 @@
 {
   "source": {
     "iso3166_alpha3": "https://github.com/datasets/country-codes (data/country-codes.csv, column ISO3166-1-Alpha-3, derived from ISO 3166-1)",
-    "developed_markets": "https://www.msci.com/our-solutions/indexes/market-classification (MSCI developed markets, 23 including USA)"
+    "developed_markets": "https://www.msci.com/documents/10199/178e6643-6ae6-47b9-82be-e1fc565ededb (MSCI World Index factsheet, data as of 2026-10-30, checked 2026-11-08; 23 developed markets including USA, matches this file exactly). The 2026 Annual Market Classification Review (released 2026-06-23) keeps Greece in EM until the May 2027 index review, when it moves to DM."
   },
   "checked_utc": "2026-11-08T01:05:21Z",
   "proposed": true,
-  "unverified": {
-    "developed_markets": "MSCI page returned a CAPTCHA to automated fetch; list taken from prior knowledge of MSCI classification, to be checked by the owner"
-  },
+  "unverified": {},
   "groups": {
     "US": [
       "USA"

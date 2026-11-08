@@ -147,7 +147,7 @@ Early close: on 2024-11-29 the cutoff is 13:00 New York (18:00 UTC), so news at 
 
 `references/nyse_holidays.json` covers 2010 to 2027. `calendar_cutoffs` refuses a session outside those years or on a holiday, so an unknown day never silently gets a 16:00 cutoff. Cutoffs are built per date in New York time and converted to UTC, so daylight-saving changes are handled. `resolve_sessions` prefers the price provider's sessions when there are any, and checks them against the calendar.
 
-**Gotcha:** the file itself says the 2010 to 2014 holidays were generated from NYSE rules and not compared with a published page, and the 2018 and 2025 national-mourning closures are unverified.
+**Gotcha:** the file itself says the 2010 and 2011 holidays are rule-derived and unverified against an NYSE source, and that the July 3 and December 24 early closes in 2012 and 2013 are secondary-sourced only. Everything else, including the 2012, 2018 and 2025 special closures, is verified (checked 2026-11-08; see the file's `sources`).
 
 ### 4.4 The event key — `event_key.py`
 
@@ -373,7 +373,7 @@ A model typer always needs an explicit `--max-calls`; `--dry-run` opens no socke
 - **The CAMEO mapping is a proposal.** Every row of `cameo_to_event_type.json` is marked proposed, and the triage contract lists coarse mappings (protest typed as political, force posture as armed conflict).
 - **Matching market questions is the hard part.** Question text is heterogeneous; the rules typer's held-out recall on the synthetic gold set is 0.667, and its direction precision there is 0.300.
 - **Selection bias.** Only reported events enter a library; the `library covers` line states it but does not remove it.
-- **The calendar for 2010 to 2014 is unverified,** as are two special closures. GDELT 2.0 starts in 2015, so this mainly affects EDGAR and prices.
+- **The calendar for 2010 and 2011 is unverified** (rule-derived), and the July 3 and December 24 early closes in 2012 and 2013 are secondary-sourced only. GDELT 2.0 starts in 2015, so this mainly affects EDGAR and prices.
 - **Model-API shapes are unconfirmed.** The Anthropic and Ollama request and reply shapes are tested against fakes only; `ANTHROPIC_VERSION` and the model id in `config.py` have not been exercised.
 - **EDGAR item rules and state codes are recalled,** not read from the SEC (`docs/STATUS.md`). The CIK-to-ticker map is current-only, so delisted names may stay unresolved.
 - **Data display rights.** Equity price licences such as Tiingo's low tiers are internal-use only (thesis section 2); the repository never ships or displays prices, and the asset layer stays local until a licence exists. Free price data is also survivorship-biased (design 4.3).
