@@ -1,0 +1,7 @@
+name: m3_ripple_placebo
+# Shipped for completeness and loaded by `load_rungs` and the rung-file test; the graph ladder does
+# not select it. The ladder evaluates a placebo as a graph of its own, named `<graph>_placebo`, and
+# builds that rung in memory as `m3_ripple_<graph>_placebo` (or picks the shipped `m3_ripple_<graph>`
+# when it can supply every prefix). The graph identity lives in the supplied ripple_ panel, never
+# in this file.
+panel_prefixes: ["news_", "ripple_"]
