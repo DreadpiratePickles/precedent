@@ -1,0 +1,196 @@
+{
+  "$defs": {
+    "Edge": {
+      "additionalProperties": false,
+      "description": "One signed, lagged cause-to-effect link, with where in a document it was read.",
+      "properties": {
+        "evidence_span": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Evidence Span"
+        },
+        "lag_band": {
+          "enum": [
+            "same_session",
+            "days",
+            "weeks"
+          ],
+          "title": "Lag Band",
+          "type": "string"
+        },
+        "sign": {
+          "enum": [
+            -1,
+            1
+          ],
+          "title": "Sign",
+          "type": "integer"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "source_doc_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Doc Id"
+        },
+        "support": {
+          "default": 1,
+          "title": "Support",
+          "type": "integer"
+        },
+        "target": {
+          "title": "Target",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "target",
+        "sign",
+        "lag_band",
+        "source_doc_id",
+        "evidence_span"
+      ],
+      "title": "Edge",
+      "type": "object"
+    },
+    "EventKey": {
+      "additionalProperties": false,
+      "description": "Seven discrete fields; the string form is stable and is what the store indexes.",
+      "properties": {
+        "actor_kind": {
+          "title": "Actor Kind",
+          "type": "string"
+        },
+        "country_group": {
+          "enum": [
+            "US",
+            "DM",
+            "EM",
+            "none"
+          ],
+          "title": "Country Group",
+          "type": "string"
+        },
+        "direction_sign": {
+          "title": "Direction Sign",
+          "type": "integer"
+        },
+        "event_type": {
+          "title": "Event Type",
+          "type": "string"
+        },
+        "impacted_kinds": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Impacted Kinds",
+          "type": "array"
+        },
+        "is_scheduled": {
+          "title": "Is Scheduled",
+          "type": "boolean"
+        },
+        "severity_band": {
+          "enum": [
+            "low",
+            "mid",
+            "high"
+          ],
+          "title": "Severity Band",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_type",
+        "actor_kind",
+        "impacted_kinds",
+        "country_group",
+        "severity_band",
+        "is_scheduled",
+        "direction_sign"
+      ],
+      "title": "EventKey",
+      "type": "object"
+    },
+    "Node": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/NodeKind"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "title": "Node",
+      "type": "object"
+    },
+    "NodeKind": {
+      "enum": [
+        "event",
+        "intermediate",
+        "asset"
+      ],
+      "title": "NodeKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A DAG from an event to the assets it may move, for one event key and graph version.",
+  "properties": {
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/Edge"
+      },
+      "title": "Edges",
+      "type": "array"
+    },
+    "event_key": {
+      "$ref": "#/$defs/EventKey"
+    },
+    "graph_id": {
+      "title": "Graph Id",
+      "type": "string"
+    },
+    "graph_version": {
+      "title": "Graph Version",
+      "type": "string"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/Node"
+      },
+      "title": "Nodes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "graph_id",
+    "graph_version",
+    "event_key",
+    "nodes",
+    "edges"
+  ],
+  "title": "CausalGraph",
+  "type": "object"
+}
