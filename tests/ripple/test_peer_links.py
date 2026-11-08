@@ -219,3 +219,98 @@ def test_embed_business_sections_rejects_empty_input_and_blank_text():
         embed_business_sections({}, FakeEmbedder())
     with pytest.raises(ValueError, match="B"):
         embed_business_sections({"A": "a", "B": "  "}, FakeEmbedder())
+
+
+# Point-in-time top-k (final review I1): the graph at t may only use filings accepted by t.
+FILINGS = {  # name: (vector, acceptance instant), top_k=1 and top_k=2 both used below
+    "R": (V1, utc("2020-01-10 21:30")),
+    "B": (np.array([0.8, 0.6, 0.0]), utc("2020-02-10 21:30")),
+    "C": (np.array([0.99, 0.1, 0.0]), utc("2020-03-10 21:30")),
+    "D": (np.array([0.5, 0.5, 0.7]), utc("2020-04-10 21:30")),
+    "E": (np.array([0.3, 0.1, 0.9]), utc("2020-05-10 21:30")),
+}
+
+
+def build(filings, top_k, **kwargs):
+    return peer_links_from_embeddings(
+        {name: vector for name, (vector, _) in filings.items()},
+        {name: stamp for name, (_, stamp) in filings.items()},
+        top_k=top_k,
+        **kwargs,
+    )
+
+
+def edges_at(links, instant, tmp_path):
+    store = LinkStore(tmp_path)
+    store.append(links)
+    frame = graph_asof(store, instant, Relation.PEER_OF)
+    return {
+        (row.source_node, row.receiver_node): row.weight for row in frame.itertuples(index=False)
+    }
+
+
+@pytest.mark.parametrize("top_k", [1, 2])
+def test_truncated_build_read_at_t_equals_the_full_build_read_at_t(tmp_path, top_k):
+    full = build(FILINGS, top_k)
+    cutoffs = [
+        utc("2020-02-10 21:30"),  # exactly at B's acceptance
+        utc("2020-03-01 00:00"),
+        utc("2020-03-10 21:30"),
+        utc("2020-04-20 00:00"),
+        utc("2020-06-01 00:00"),
+    ]
+    for position, instant in enumerate(cutoffs):
+        known = {n: f for n, f in FILINGS.items() if f[1] <= instant}
+        if len(known) < 2:
+            continue
+        truncated = build(known, top_k)
+        full_edges = edges_at(full, instant, tmp_path / f"full{top_k}-{position}")
+        truncated_edges = edges_at(truncated, instant, tmp_path / f"cut{top_k}-{position}")
+        assert truncated_edges == full_edges, (top_k, instant)
+
+
+def test_a_later_filer_displaces_a_link_and_ends_it_at_the_later_acceptance(tmp_path):
+    # R and B file first; B is R's peer. C files later and is more similar to R: with top_k=1
+    # the B->R link ends when C is accepted, and C->R starts then.
+    filings = {name: FILINGS[name] for name in ("R", "B", "C")}
+    links = build(filings, 1)
+    b_to_r = next(link for link in links if (link.source_node, link.receiver_node) == ("B", "R"))
+    c_to_r = next(link for link in links if (link.source_node, link.receiver_node) == ("C", "R"))
+    assert b_to_r.valid_from_utc == utc("2020-02-10 21:30")
+    assert b_to_r.valid_to_utc == utc("2020-03-10 21:30")  # displaced, before the 15-month expiry
+    assert c_to_r.valid_from_utc == utc("2020-03-10 21:30")
+    assert edges_at(links, utc("2020-03-01 00:00"), tmp_path / "before")[("B", "R")] > 0.0
+    after = edges_at(links, utc("2020-03-10 21:30"), tmp_path / "after")
+    assert ("B", "R") not in after and ("C", "R") in after
+    # R is the only receiver B->R touched: B's own top-1 is not R forever either.
+    assert all(link.valid_from_utc < link.valid_to_utc for link in links)
+
+
+def test_a_link_that_would_only_exist_in_the_full_universe_is_not_visible_earlier(tmp_path):
+    # The final review's reproduction: B filed before t, C (more similar to R) after t.
+    # The old static top-k gave R no link from B at t at all.
+    links = build({name: FILINGS[name] for name in ("R", "B", "C")}, 1)
+    at_t = edges_at(links, utc("2020-02-20 00:00"), tmp_path)
+    assert set(at_t) == {("B", "R"), ("R", "B")}
+
+
+def test_link_expires_after_the_expiry_months_when_never_displaced():
+    links = build({name: FILINGS[name] for name in ("R", "B")}, 1, expiry_months=6)
+    assert {link.valid_to_utc for link in links} == {utc("2020-08-10 21:30")}
+
+
+def test_a_displacement_after_expiry_does_not_extend_the_link():
+    late_c = (FILINGS["C"][0], utc("2020-05-10 21:30"))
+    links = build({"R": FILINGS["R"], "B": FILINGS["B"], "C": late_c}, 1, expiry_months=1)
+    b_to_r = next(link for link in links if (link.source_node, link.receiver_node) == ("B", "R"))
+    assert b_to_r.valid_to_utc == utc("2020-03-10 21:30")
+
+
+def test_filings_accepted_at_the_same_instant_do_not_displace_each_other():
+    stamps = {name: utc("2020-01-01 21:30") for name in ("A", "B", "C")}
+    links = peer_links_from_embeddings(
+        {"A": V1, "B": V1_CLOSE, "C": V1_CLOSE.copy()}, stamps, top_k=2
+    )
+    assert len(links) == 6
+    assert {link.valid_from_utc for link in links} == {utc("2020-01-01 21:30")}
+    assert all(link.valid_to_utc == utc("2021-04-01 21:30") for link in links)

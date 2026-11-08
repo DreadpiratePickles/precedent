@@ -1,9 +1,10 @@
 """Peer links from the text of 10-K business sections (graph G3, text similarity).
 
 Companies whose Item 1 text embeds close together are peers. Each link is dated: it starts when
-the later of the two filings was accepted and expires after a fixed number of months, so a
-caller reads it only through `graph_asof`. The embedding model itself is injected through
-`TextEmbedder`; nothing here downloads a model or fetches a filing.
+the later of the two filings was accepted, ends when a later filer displaces it from the
+receiver's top-k or after a fixed number of months, so a caller reads it only through
+`graph_asof` and the graph at any instant uses only filings accepted by then. The embedding
+model itself is injected through `TextEmbedder`; nothing here downloads a model or fetches a filing.
 
 Core dependencies only (numpy, pandas).
 """
@@ -93,52 +94,99 @@ def _validated(
     return names, np.vstack(vectors), stamps
 
 
+def _top_sources(
+    similarity: np.ndarray, receiver: int, pool: np.ndarray, top_k: int
+) -> list[int]:
+    """The receiver's `top_k` most similar sources in `pool` (positive similarity only).
+
+    Ordered by descending similarity, ties broken by position (positions follow sorted names).
+    """
+    candidates = pool[(pool != receiver) & (similarity[receiver, pool] > 0.0)]
+    order = np.lexsort((candidates, -similarity[receiver, candidates]))
+    return [int(position) for position in candidates[order[:top_k]]]
+
+
 def peer_links_from_embeddings(
     embeddings: Mapping[str, np.ndarray],
     accepted_utc: Mapping[str, pd.Timestamp],
     top_k: int = 10,
     expiry_months: int = 15,
 ) -> list[Link]:
-    """`peer_of` links from cosine similarity of business-section embeddings.
+    """`peer_of` links from cosine similarity of business-section embeddings, point in time.
 
-    For each company R (the receiver), its `top_k` most similar other companies S (the sources)
-    with positive similarity become `Link(source=S, receiver=R)`; a shock at a peer reaches the
-    receiver. The pair (A, B) can therefore appear in both directions. The weight is the cosine
-    similarity (at most 1.0); the factor stage normalises each receiver's incoming weights.
+    The links are built as events in acceptance order, so the graph visible at any instant uses
+    only filings accepted by then. At each distinct acceptance instant the pool is every filing
+    accepted at or before it; every receiver R in the pool whose candidates changed (R itself
+    just filed, or a new filer has positive similarity to R) has its `top_k` most similar other
+    companies S (positive cosine similarity) recomputed over the pool. `Link(source=S,
+    receiver=R)` is valid from the instant it enters R's top-k, which is the later of the two
+    filings' acceptance times (a later filer can only push a link out of the top-k, never in),
+    until the earlier of: S is displaced from R's top-k by a later filer, and `expiry_months`
+    after the link started. A link never restarts after it ends. A shock at a peer reaches the
+    receiver, and the pair (A, B) can appear in both directions. Filings accepted at the same
+    instant enter together and do not displace one another.
 
-    A link starts at the later of the two filings' acceptance times and expires `expiry_months`
-    later. Its `source_doc_id` is `10k-similarity:<source>|<receiver>`: the inputs carry no
-    accession number, so a document is identified by its company. Ties are broken by source name;
-    output is sorted by (receiver, descending weight, source) and is independent of input order.
-    The defaults match `top_k` and `annual_link_expiry_months` in `references/ripple_params.json`.
+    The weight is the cosine similarity (at most 1.0); the factor stage normalises each
+    receiver's incoming weights. Its `source_doc_id` is `10k-similarity:<source>|<receiver>`:
+    the inputs carry no accession number, so a document is identified by its company. Ties are
+    broken by source name; output is sorted by (receiver, valid_from, descending weight, source)
+    and is independent of input order. The defaults match `correlation_top_k` and
+    `annual_link_expiry_months` in `references/ripple_params.json` (the key shared with G2's
+    correlation graph; G3 has no key of its own). Reading the links with `graph_asof(t)` equals
+    building from only the filings accepted by t and reading at t.
     Raises ValueError naming the offending company for a missing, non-finite, zero-norm,
     wrong-length or non-1-D embedding, a missing or naive timestamp, or fewer than two companies.
     """
     names, matrix, stamps = _validated(embeddings, accepted_utc, top_k, expiry_months)
     unit = matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
     similarity = np.round(unit @ unit.T, _SIMILARITY_DECIMALS)
-    links: list[Link] = []
-    for receiver_position, receiver in enumerate(names):
-        candidates = [
-            (-float(similarity[receiver_position, source_position]), source)
-            for source_position, source in enumerate(names)
-            if source_position != receiver_position
-            and similarity[receiver_position, source_position] > 0.0
-        ]
-        for negative_weight, source in sorted(candidates)[:top_k]:
-            valid_from = max(stamps[source], stamps[receiver])
-            valid_to = valid_from + pd.DateOffset(months=expiry_months)
-            links.append(
-                Link(
-                    source_node=source,
-                    receiver_node=receiver,
-                    relation=Relation.PEER_OF,
-                    weight=min(1.0, -negative_weight),
-                    valid_from_utc=valid_from.to_pydatetime(),
-                    valid_to_utc=valid_to.to_pydatetime(),
-                    source_doc_id=f"10k-similarity:{source}|{receiver}",
-                    evidence_span=None,
-                    extractor_version=PEER_EXTRACTOR_VERSION,
-                )
-            )
+    stamp_of = [stamps[name] for name in names]
+    in_pool = np.zeros(len(names), dtype=bool)
+    # active[receiver][source] = the instant the link started
+    active: dict[int, dict[int, pd.Timestamp]] = {}
+    ended: list[tuple[int, int, pd.Timestamp, pd.Timestamp]] = []  # receiver, source, from, to
+
+    def end(receiver: int, source: int, started: pd.Timestamp, instant: pd.Timestamp) -> None:
+        expires = started + pd.DateOffset(months=expiry_months)
+        ended.append((receiver, source, started, min(instant, expires)))
+
+    for instant in sorted(set(stamp_of)):
+        arrivals = np.array([i for i, stamp in enumerate(stamp_of) if stamp == instant])
+        in_pool[arrivals] = True
+        pool = np.flatnonzero(in_pool)
+        for receiver in pool:
+            receiver = int(receiver)
+            if not (receiver in arrivals or (similarity[receiver, arrivals] > 0.0).any()):
+                continue  # no new candidate for this receiver: its top-k cannot change
+            top = _top_sources(similarity, receiver, pool, top_k)
+            current = active.setdefault(receiver, {})
+            for source in [s for s in current if s not in top]:
+                end(receiver, source, current.pop(source), instant)
+            for source in top:
+                current.setdefault(source, instant)
+    for receiver, current in active.items():
+        for source, started in current.items():
+            end(receiver, source, started, started + pd.DateOffset(months=expiry_months))
+    links = [
+        Link(
+            source_node=names[source],
+            receiver_node=names[receiver],
+            relation=Relation.PEER_OF,
+            weight=min(1.0, float(similarity[receiver, source])),
+            valid_from_utc=started.to_pydatetime(),
+            valid_to_utc=valid_to.to_pydatetime(),
+            source_doc_id=f"10k-similarity:{names[source]}|{names[receiver]}",
+            evidence_span=None,
+            extractor_version=PEER_EXTRACTOR_VERSION,
+        )
+        for receiver, source, started, valid_to in ended
+    ]
+    links.sort(
+        key=lambda link: (
+            link.receiver_node,
+            link.valid_from_utc,
+            -link.weight,
+            link.source_node,
+        )
+    )
     return links
