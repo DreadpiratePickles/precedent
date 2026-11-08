@@ -199,11 +199,11 @@ footer { padding-bottom: 28px; font-size: 13px; }
       out[a] = {};
       QUANTILES.forEach((q) => { out[a][String(q)] = quantile(sorted, q); });
     });
-    // No-data assets are simulated like every other node (their columns sit in the residual
-    // draw, so dropping them here keeps the counter-based PRNG draws identical) and dropped
-    // on read-out, exactly as build_result does for rollout_fan.
-    const noData = new Set(payload.no_data_assets || []);
-    Object.keys(out).forEach((a) => { if (noData.has(a)) delete out[a]; });
+    // No-data and refused-band assets are simulated like every other node (their columns sit
+    // in the residual draw, so dropping them here keeps the counter-based PRNG draws
+    // identical) and dropped on read-out, exactly as build_result does for rollout_fan.
+    const suppressed = new Set([...(payload.no_data_assets || []), ...(payload.refused_assets || [])]);
+    Object.keys(out).forEach((a) => { if (suppressed.has(a)) delete out[a]; });
     return out;
   }
 
@@ -358,9 +358,18 @@ footer { padding-bottom: 28px; font-size: 13px; }
     }
 
     function drawFans(fanTable) {
+      const noData = new Set(payload.no_data_assets || []);
+      const refused = new Set(payload.refused_assets || []);
+      const reasonFor = (a, b) => {
+        if (noData.has(a)) return "no data";
+        if (b && b.refused) {
+          return "band refused: n_eff=" + b.n_eff.toFixed(1) + " < min_neff=" + payload.min_neff.toFixed(1);
+        }
+        return null;
+      };
       let low = 0, high = 0;
       fitted.assets.forEach((a) => {
-        if (!has(fanTable, a)) return;  // a no-data asset: suppressed like Python's rollout_fan
+        if (!has(fanTable, a)) return;  // a suppressed row: no fan to range over
         low = Math.min(low, fanTable[a]["0.1"]); high = Math.max(high, fanTable[a]["0.9"]);
         const b = bands[a];
         if (b && !b.refused && b.p10 != null) { low = Math.min(low, b.p10); high = Math.max(high, b.p90); }
@@ -369,16 +378,23 @@ footer { padding-bottom: 28px; font-size: 13px; }
       const x = (v) => ((v - lo) / span) * 300;
       const host = document.getElementById("fans"); host.textContent = "";
       fitted.assets.forEach((a) => {
-        if (!has(fanTable, a)) return;  // a no-data asset: suppressed like Python's rollout_fan
-        const q = fanTable[a], b = bands[a], row = document.createElement("div"); row.className = "fanrow";
+        const b = bands[a], row = document.createElement("div"); row.className = "fanrow";
+        const name = document.createElement("strong");
+        name.textContent = a + (b && b.basis === "raw_return" ? " (raw)" : "");
+        const reason = reasonFor(a, b);
+        if (reason !== null) {  // a suppressed row: the reason, no fan and no band
+          const why = document.createElement("span"); why.className = "nums warn"; why.textContent = reason;
+          row.append(name, svgEl("svg", { viewBox: "0 0 300 22", preserveAspectRatio: "none" }), why);
+          host.appendChild(row);
+          return;
+        }
+        const q = fanTable[a];
         const svg = svgEl("svg", { viewBox: "0 0 300 22", preserveAspectRatio: "none" });
         if (b && !b.refused && b.p10 != null) svg.appendChild(svgEl("rect", { x: x(b.p10), y: 0, width: Math.max(1, x(b.p90) - x(b.p10)), height: 22, fill: "var(--band)" }));
         svg.appendChild(svgEl("line", { x1: x(0), y1: 0, x2: x(0), y2: 22, stroke: "var(--muted)", "stroke-width": 0.6 }));
         svg.appendChild(svgEl("rect", { x: x(q["0.1"]), y: 7, width: Math.max(1, x(q["0.9"]) - x(q["0.1"])), height: 8, fill: "var(--fan-outer)" }));
         svg.appendChild(svgEl("rect", { x: x(q["0.25"]), y: 4, width: Math.max(1, x(q["0.75"]) - x(q["0.25"])), height: 14, fill: "var(--fan-inner)" }));
         svg.appendChild(svgEl("line", { x1: x(q["0.5"]), y1: 1, x2: x(q["0.5"]), y2: 21, stroke: "var(--fg)", "stroke-width": 1.5 }));
-        const name = document.createElement("strong");
-        name.textContent = a + (b && b.basis === "raw_return" ? " (raw)" : "");
         const nums = document.createElement("span"); nums.className = "nums"; nums.textContent = triple(q["0.1"], q["0.5"], q["0.9"]);
         const verdict = document.createElement("span");
         const text = agreement(q, b);

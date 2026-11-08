@@ -301,22 +301,24 @@ def _fit_and_band(
     horizon: int,
     inputs: MechanismInputs,
     params: EngineParams,
-) -> tuple[FittedSEM, list[BandRow], list[str]]:
+) -> tuple[FittedSEM, list[BandRow], list[str], list[str]]:
     """Fit the graph on the guarded panel and read Precedent's band for the same key.
 
     Pure given its inputs. `asof_utc` is the query time: the fit and the band see only what was
     available at that instant. The fit's query leaves `direction_sign` free (`mechanism_query`,
     so the direction column varies); Precedent's band keeps the exact key. Below `min_neff` the
-    fit is refused (`MechanismRefused`). The band gates the command too (ruling I-2, recorded
-    in `docs/verification/2026-11-08-owner-rulings.md`): no exact-key precedent, or any
-    data-having asset's band below `min_neff`, refuses the whole command — a mechanism result
-    without its Precedent band is not reported.
+    fit is refused (`MechanismRefused`).
 
-    An asset the library holds no rows for (an all-NaN panel column) is not banded or
-    rendered; it is returned as `no_data_assets` and named in the JSON output. Its fitted
-    equation is all zeros, and the simulation still covers it — dropping it when the fan is
-    read out keeps the PRNG draws identical — but no band or row is shown for it. When no
-    asset survives, `NoDataAssets`.
+    The band gates per asset row, not the command (ruling I-2, addendum of
+    `docs/verification/mechanism-2026-11-08.md`): a row is suppressed — fan, band and sample
+    sizes not shown — when the asset has no observations (an all-NaN panel column) or its
+    exact-key band is refused; the renderers print the reason ("no data", or
+    "band refused: n_eff=X < min_neff=Y"). `no_data_assets` and `refused_assets` name the two
+    groups; every observed asset keeps its `BandRow` in `bands`, refused ones included, so the
+    reason can quote `n_eff`. The command refuses (exit 2) only when no row survives: every
+    asset with data has a refused band (`MechanismRefused`, band=True), or every asset lacks
+    rows (`NoDataAssets`). Suppressed assets are still simulated — dropping them when the fan
+    is read out keeps the counter-based PRNG draws identical.
     """
     from precedent.engine.aggregate import effective_sample_size
     from precedent.engine.retrieval import PrecedentQuery
@@ -350,21 +352,21 @@ def _fit_and_band(
         raise MechanismRefused(n_eff, params.min_neff)
     fitted = fit_sem(graph, panel)
     no_data_assets = [a for a in assets if panel.asset_returns[a].isna().all()]
-    surviving = [a for a in assets if a not in no_data_assets]
-    if not surviving:
+    observed = [a for a in assets if a not in no_data_assets]
+    if not observed:
         raise NoDataAssets(list(no_data_assets), horizon)
-    band_shared = {**shared, "assets": surviving}
+    band_shared = {**shared, "assets": observed}
     try:
         band_panel = build_guarded_panel(PrecedentQuery(key, available), **band_shared)
     except NoPrecedentError:
         raise MechanismRefused(0.0, params.min_neff, band=True) from None
-    bands = _band_rows(band_panel.asset_returns, positions, surviving, horizon, params)
-    refused = [b for b in bands if b.refused]
-    if refused:
+    bands = _band_rows(band_panel.asset_returns, positions, observed, horizon, params)
+    refused_assets = [b.asset for b in bands if b.refused]
+    if len(no_data_assets) + len(refused_assets) == len(assets):
         raise MechanismRefused(
-            max(b.n_eff for b in refused), params.min_neff, band=True
+            max(b.n_eff for b in bands), params.min_neff, band=True
         )  # fmt: skip
-    return fitted, bands, no_data_assets
+    return fitted, bands, no_data_assets, refused_assets
 
 
 def _code_commit() -> str | None:
@@ -413,9 +415,10 @@ def _result_for(args: argparse.Namespace, key: EventKey, graph: CausalGraph) -> 
     asof_utc = _parse_asof(args.asof)
     from precedent.engine.params import load_engine_params
 
+    params = load_engine_params()
     inputs = _load_inputs(args.data_dir or data_dir())
-    fitted, bands, no_data_assets = _fit_and_band(
-        key, graph, asof_utc, args.horizon, inputs, load_engine_params()
+    fitted, bands, no_data_assets, refused_assets = _fit_and_band(
+        key, graph, asof_utc, args.horizon, inputs, params
     )
     return build_result(
         graph=graph,
@@ -424,6 +427,8 @@ def _result_for(args: argparse.Namespace, key: EventKey, graph: CausalGraph) -> 
         interventions=interventions,
         precedent=bands,
         no_data_assets=tuple(no_data_assets),
+        refused_assets=tuple(refused_assets),
+        min_neff=params.min_neff,
         seed=args.seed,
         n_paths=load_params().n_paths if args.n_paths is None else args.n_paths,
         asof_utc=asof_utc,

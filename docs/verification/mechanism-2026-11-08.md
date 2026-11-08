@@ -110,3 +110,33 @@ Counts: see the last line of this file.
 - Precedent's own engine code (retrieval, aggregation, asset library) beyond what the Mechanism tests exercise.
 
 Counts: PASS 22, FAIL 3, BLOCKED 4 (29 requirement rows; Review Focus: PASS 4, BLOCKED 1).
+
+
+## Addendum 2026-11-08 — fix-wave ruling I-2 (implementation record)
+
+Source: "Opus final review, Mechanism hand-over note I-2; implemented by Kimi". This addendum
+records how finding V-1 (above) was resolved; it is not an owner ruling. The owner-rulings
+file stays owner-only.
+
+V-1 as first worded in the Opus review would over-refuse. Ruling I-2 (hand-over note,
+`predate-git/.superpowers/handoff-2026-11-08/notes/mechanism-handover-2026-11-08.md`): refuse
+per asset row instead. Implemented on `kimi/mechanism-fix-wave`:
+
+- A row survives only if its Precedent band is not refused (exact-key precedent exists,
+  `n_eff >= min_neff`) and the asset has observations. `min_neff` is the engine's, from
+  `references/precedent_params.json` via `load_engine_params`.
+- A non-surviving row shows no fan. It prints the reason — "no data" (zero observations), or
+  "band refused: n_eff=X < min_neff=Y" — in the text output and on the page, and the JSON
+  lists the assets: `no_data_assets` and `refused_assets`.
+- Exit 2 only when no row survives, with two distinct messages: every asset with data has a
+  refused band (`MechanismRefused`, band=True), or every asset lacks rows (`NoDataAssets`).
+  In particular, with no exact-key precedent at all every row is refused, so the command
+  still exits 2 — consistent with this ruling.
+- Suppressed assets are still simulated (simulate-then-drop), so the counter-based PRNG
+  draws stay identical for the surviving rows; the page's JavaScript twin suppresses the same
+  rows and a node test pins the parity.
+- The market row's band and fan are its own cumulative return, labelled `(raw)`; the JSON
+  band rows carry `basis` (`abnormal_return` by default, `raw_return` for the market).
+
+A mixed panel (one thin asset among good ones) succeeds: good rows show fans, the thin row
+prints the refusal with no fan and no fabricated "+0.0%".

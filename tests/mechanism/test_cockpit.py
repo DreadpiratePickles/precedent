@@ -166,24 +166,31 @@ def simulated_result(interventions=(), bands=(), n_paths=4000, seed=0) -> Mechan
 
 
 NO_DATA_ASSET = "XLE"
+REFUSED_ASSET = "GLD"
 
 
 def no_data_fixture() -> tuple[MechanismResult, FittedSEM, CausalGraph]:
-    """A result whose XLE node has no library data: a zero equation and zero residual
-    variance, so unsuppressed its fan prints exactly "+0.0% / +0.0% / +0.0%"."""
-    graph = make_graph(edges=EDGES + [(RISK, NO_DATA_ASSET, 1)])
+    """A result with one no-data asset (XLE: zero observations, a zero equation) and one
+    refused-band asset (GLD: observations, n_eff below min_neff): unsuppressed, XLE's fan
+    prints exactly "+0.0% / +0.0% / +0.0%"."""
+    graph = make_graph(edges=EDGES + [(RISK, NO_DATA_ASSET, 1), (RISK, REFUSED_ASSET, 1)])
     fitted = make_fitted(
         graph,
-        coefficients={**COEFFICIENTS, NO_DATA_ASSET: {RISK: 0.0}},
-        cov=np.diag([0.04, 0.09, 0.0625, 0.0]),
+        coefficients={**COEFFICIENTS, NO_DATA_ASSET: {RISK: 0.0}, REFUSED_ASSET: {RISK: 0.4}},
+        cov=np.diag([0.04, 0.09, 0.0625, 0.0, 0.01]),
     )
     result = build_result(
         graph=graph,
         fitted=fitted,
         event_values={SIGN: -1.0},
         interventions=(),
-        precedent=[],
+        precedent=[
+            BandRow(asset=REFUSED_ASSET, horizon=5, p10=None, median=None, p90=None,
+                    n=4, n_eff=3.24, refused=True),
+        ],
         no_data_assets=(NO_DATA_ASSET,),
+        refused_assets=(REFUSED_ASSET,),
+        min_neff=8.0,
         seed=0,
         n_paths=500,
         asof_utc=ASOF,
@@ -214,8 +221,10 @@ def test_text_agree_rule_yes_no_and_refused():
     lines = {line.split()[0]: line for line in render_text(hand_result()).splitlines()[2:6]}
     assert "yes" in lines["TLT"]
     assert "no (median outside the other's band)" in lines["SPY"]
-    assert "refused: n_eff=3.2" in lines["HYG"] and "n/a" in lines["HYG"]
-    assert lines["HYG"].endswith(" n=42/4")
+    # HYG's band is refused: a reason row — no fan, no band, no sample sizes
+    hyg = lines["HYG"]
+    assert hyg == "HYG     5        band refused: n_eff=3.2 < min_neff=8.0"
+    assert "n=42/4" not in hyg and "n/a" not in hyg
 
 
 def test_text_agree_is_symmetric_one_median_outside_is_a_no():
@@ -286,27 +295,34 @@ def test_json_round_trips_and_carries_interventions_and_manifest():
     assert payload["fitted"]["fitted_asof_utc"].startswith("2026-11-07")
 
 
-def test_a_no_data_asset_never_renders_a_zero_fan():
-    """XLE has no library data: unsuppressed its zero equation prints "+0.0% / +0.0% / +0.0%".
-    As a no-data asset it renders no row and no zero fan in the text, the JSON or the page
-    (ruling I-2); the JSON names it in `no_data_assets`."""
+def test_suppressed_rows_print_the_reason_and_never_a_zero_fan():
+    """XLE has no observations and GLD's band is refused: both print the reason with no fan
+    — XLE's zero equation would otherwise print "+0.0% / +0.0% / +0.0%" (ruling I-2). Text,
+    JSON and the page all suppress the fan and name the asset in the listing fields."""
     result, fitted, graph = no_data_fixture()
     unsuppressed = fan(simulate(fitted, graph, {SIGN: -1.0}, n_paths=500, seed=0))
     assert unsuppressed.loc[NO_DATA_ASSET].abs().max() == pytest.approx(0.0)
 
     text = render_text(result)
     assert "+0.0%" not in text
-    assert not any(line.startswith(NO_DATA_ASSET) for line in text.splitlines())
+    lines = {line.split()[0]: line for line in text.splitlines()}
+    assert lines[NO_DATA_ASSET] == "XLE     5        no data"
+    assert lines[REFUSED_ASSET] == "GLD     5        band refused: n_eff=3.2 < min_neff=8.0"
 
     payload = json.loads(render_json(result))
     assert payload["no_data_assets"] == [NO_DATA_ASSET]
+    assert payload["refused_assets"] == [REFUSED_ASSET]
+    assert payload["min_neff"] == 8.0
     assert NO_DATA_ASSET not in payload["rollout_fan"]
+    assert REFUSED_ASSET not in payload["rollout_fan"]
 
     html = render_html(result)
     assert "+0.0%" not in html
     embedded = json.loads(re.search(r'id="payload">(.*?)</script>', html, re.S).group(1))
     assert embedded["no_data_assets"] == [NO_DATA_ASSET]
+    assert embedded["refused_assets"] == [REFUSED_ASSET]
     assert NO_DATA_ASSET not in embedded["rollout_fan"]
+    assert REFUSED_ASSET not in embedded["rollout_fan"]
 
 
 def test_result_rejects_unknown_fields_and_naive_timestamps():
@@ -509,9 +525,9 @@ def test_js_falls_back_to_the_diagonal_like_python():
 
 
 @needs_node
-def test_js_twin_suppresses_no_data_assets_and_keeps_the_surviving_fan():
-    """Simulate-then-drop: XLE sits in the residual draw, so dropping it after the simulation
-    keeps the surviving fans bit-identical between the page and Python."""
+def test_js_twin_suppresses_the_same_rows_and_keeps_the_surviving_fan():
+    """Simulate-then-drop: XLE and GLD sit in the residual draw, so dropping them after the
+    simulation keeps the surviving fans bit-identical between the page and Python."""
     result, fitted, graph = no_data_fixture()
     html = render_html(result)
     program = """
@@ -521,7 +537,7 @@ def test_js_twin_suppresses_no_data_assets_and_keeps_the_surviving_fan():
     """
     got = run_node(html, program, render_json(result))
     assert got["keys"] == list(result.rollout_fan)
-    assert NO_DATA_ASSET not in got["out"]
+    assert NO_DATA_ASSET not in got["out"] and REFUSED_ASSET not in got["out"]
     table = fan(simulate(fitted, graph, {SIGN: -1.0}, n_paths=500, seed=0))
     for asset in result.rollout_fan:
         for q in ("0.1", "0.5", "0.9"):
@@ -567,7 +583,7 @@ def stubbed_data_step(monkeypatch):
             BandRow(asset="TLT", horizon=horizon, p10=-0.01, median=-0.002, p90=0.006,
                     n=12, n_eff=8.0, refused=False),
         ]  # fmt: skip
-        return template_fitted(graph), bands, []
+        return template_fitted(graph), bands, [], []
 
     monkeypatch.setattr(cli, "_load_inputs", fake_inputs)
     monkeypatch.setattr(cli, "_fit_and_band", fake)

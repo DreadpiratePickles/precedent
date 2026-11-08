@@ -59,12 +59,16 @@ class MechanismResult(BaseModel):
     """Everything one mechanism run reports; the three outputs are views of this value.
 
     `fitted` is `FittedSEM.to_json_dict()` and `rollout_fan` maps asset -> quantile (as the
-    string `fan()` columns print, e.g. "0.1") -> simulated value. `no_data_assets` names the
-    graph's assets the library holds no rows for: they are simulated like every other node
-    (dropping them after the simulation keeps the counter-based PRNG draws identical) but
-    their fitted equation is all zeros, so they carry no band and no row in any output; the
-    JSON field is the one place they are listed. `precedent[].basis` marks the market row's
-    band as computed on raw market returns (see `BandRow`).
+    string `fan()` columns print, e.g. "0.1") -> simulated value, one entry per row that
+    survived the band gate. `no_data_assets` and `refused_assets` name the suppressed rows
+    (ruling I-2, the addendum of `docs/verification/mechanism-2026-11-08.md`): assets with
+    zero observations, and assets whose exact-key band is refused. Suppressed assets are
+    simulated like every other node — dropping them when the fan is read out keeps the
+    counter-based PRNG draws identical — and the text and the page print the reason ("no
+    data", "band refused: n_eff=X < min_neff=Y") instead of a fan. `min_neff` is the
+    threshold the rows were gated on (the engine's, from `references/precedent_params.json`).
+    `precedent[].basis` marks the market row's band as computed on raw market returns (see
+    `BandRow`).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -76,6 +80,9 @@ class MechanismResult(BaseModel):
     rollout_fan: dict[str, dict[str, float]]
     precedent: list[BandRow]
     no_data_assets: list[str] = []
+    refused_assets: list[str] = []
+    # the engine's current value; the CLI passes load_engine_params().min_neff
+    min_neff: float = 8.0
     seed: int
     n_paths: int
     asof_utc: AwareDatetime
@@ -102,6 +109,8 @@ def build_result(
     interventions: tuple[Intervention, ...],
     precedent: list[BandRow],
     no_data_assets: tuple[str, ...] = (),
+    refused_assets: tuple[str, ...] = (),
+    min_neff: float = 8.0,
     seed: int,
     n_paths: int,
     asof_utc: Any,
@@ -109,16 +118,16 @@ def build_result(
 ) -> MechanismResult:
     """Simulate the fitted graph and bundle the fan with its inputs.
 
-    The simulation always covers every graph asset — dropping `no_data_assets` only when
-    the fan is read out keeps the counter-based PRNG draws identical for the assets that
-    have data, in Python and in the page's JavaScript twin.
+    The simulation always covers every graph asset — dropping `no_data_assets` and
+    `refused_assets` only when the fan is read out keeps the counter-based PRNG draws
+    identical for the rows that survived, in Python and in the page's JavaScript twin.
     """
     rollout = simulate(fitted, graph, event_values, interventions, n_paths=n_paths, seed=seed)
     table = fan(rollout, DEFAULT_QUANTILES)
-    suppressed = set(no_data_assets)
+    suppressed = set(no_data_assets) | set(refused_assets)
     unknown = suppressed - set(rollout.assets)
     if unknown:
-        raise ValueError(f"no_data_assets are not asset nodes with a fan: {sorted(unknown)}")
+        raise ValueError(f"suppressed assets are not asset nodes with a fan: {sorted(unknown)}")
     return MechanismResult(
         graph=graph,
         fitted=fitted.to_json_dict(),
@@ -130,7 +139,9 @@ def build_result(
             if asset not in suppressed
         },
         precedent=precedent,
-        no_data_assets=[asset for asset in rollout.assets if asset in suppressed],
+        no_data_assets=[asset for asset in rollout.assets if asset in no_data_assets],
+        refused_assets=[asset for asset in rollout.assets if asset in refused_assets],
+        min_neff=min_neff,
         seed=seed,
         n_paths=n_paths,
         asof_utc=asof_utc,
@@ -173,6 +184,17 @@ def _precedent_cell(band: BandRow | None) -> str:
     return cell + " (raw)" if band.basis == "raw_return" else cell
 
 
+def _suppressed_reason(
+    asset: str, result: MechanismResult, band: BandRow | None
+) -> str | None:
+    """Why a row shows no fan: "no data" (zero observations) or its refused band's numbers."""
+    if asset in result.no_data_assets:
+        return "no data"
+    if band is not None and band.refused:
+        return f"band refused: n_eff={band.n_eff:.1f} < min_neff={result.min_neff:.1f}"
+    return None
+
+
 def _row(asset: str, result: MechanismResult, band: BandRow | None) -> str:
     fan_row = result.rollout_fan[asset]
     mechanism = _triple(fan_row[_LOW], fan_row[_MEDIAN], fan_row[_HIGH])
@@ -182,6 +204,11 @@ def _row(asset: str, result: MechanismResult, band: BandRow | None) -> str:
         f"{mechanism:<{_MECHANISM_WIDTH}}{_precedent_cell(band):<{_PRECEDENT_WIDTH}}"
         f"{_agreement(fan_row, band)} n={result.fitted['n_obs']}/{band.n if band else 0}"
     )
+
+
+def _reason_row(asset: str, result: MechanismResult, reason: str) -> str:
+    window = result.fitted["horizon"]
+    return f"{asset:<{_ASSET_WIDTH}}{window:<{_WINDOW_WIDTH}}{reason}"
 
 
 def _disagreement_line(result: MechanismResult) -> str:
@@ -196,11 +223,12 @@ def _disagreement_line(result: MechanismResult) -> str:
 
 
 def render_text(result: MechanismResult) -> str:
-    """The plain-text block: header, one row per asset, disagreeing edges, disclaimer last.
+    """The plain-text block: header, one row per graph asset, disagreeing edges, disclaimer.
 
-    Rows cover the assets that have data (`rollout_fan`); `no_data_assets` carry no row —
-    naming them is the JSON output's job — but the market row, whose band and fan are raw
-    cumulative returns, is labelled `(raw)` and explained once.
+    A row shows its fan only when the asset has observations and its Precedent band is not
+    refused; a suppressed row prints the reason instead ("no data", or the refused band's
+    `n_eff` against `min_neff`) — never a fabricated fan. The market row, whose band and fan
+    are raw cumulative returns, is labelled `(raw)` and explained once.
     """
     fitted = result.fitted
     bands = {(b.asset, b.horizon): b for b in result.precedent}
@@ -214,10 +242,14 @@ def render_text(result: MechanismResult) -> str:
         f"{'mechanism p10/median/p90':<{_MECHANISM_WIDTH}}"
         f"{'precedent p10/median/p90':<{_PRECEDENT_WIDTH}}agree?",
     ]
-    lines += [
-        _row(asset, result, bands.get((asset, fitted["horizon"])))
-        for asset in result.rollout_fan
-    ]
+    for asset in fitted["assets"]:
+        band = bands.get((asset, fitted["horizon"]))
+        reason = _suppressed_reason(asset, result, band)
+        lines.append(
+            _reason_row(asset, result, reason)
+            if reason is not None
+            else _row(asset, result, band)
+        )
     raw = sorted(b.asset for b in result.precedent if b.basis == "raw_return")
     if raw:
         lines.append(

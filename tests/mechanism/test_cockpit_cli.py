@@ -116,6 +116,8 @@ def test_do_flag_is_applied_and_named(capsys, world, loaded):
     assert all(
         bands[a]["basis"] == "abnormal_return" for a in world.assets if a != "SPY"
     )
+    assert payload["refused_assets"] == []
+    assert payload["min_neff"] == load_engine_params().min_neff
     # a graph asset the library holds no rows for (the world has four assets) is suppressed
     # and named in no_data_assets, in graph order
     asset_ids = [n.id for n in graph_of(world).nodes if n.kind is NodeKind.ASSET]
@@ -171,7 +173,9 @@ def test_band_uses_the_exact_key_and_the_fit_uses_direction_zero(world):
     """The fit sees both signs (its n_obs is larger); the band sees only the queried sign."""
     key, graph, params = world.key(1), graph_of(world), load_engine_params()
     asof = pd.Timestamp(asof_at(world, 700), tz="UTC")
-    fitted, bands, no_data = cli._fit_and_band(key, graph, asof, HORIZON, inputs_of(world), params)
+    fitted, bands, no_data, refused = cli._fit_and_band(
+        key, graph, asof, HORIZON, inputs_of(world), params
+    )
     events = world.events
     cutoffs = world.session_cutoffs_utc
     finished = events["effective_position"].map(lambda p: cutoffs.iloc[p + 1 + HORIZON] <= asof)
@@ -198,11 +202,12 @@ def test_band_uses_the_exact_key_and_the_fit_uses_direction_zero(world):
 def test_a_zero_direction_key_gives_the_band_the_fits_precedents(world):
     graph, params = graph_of(world), load_engine_params()
     asof = pd.Timestamp(asof_at(world, 700), tz="UTC")
-    fitted, bands, no_data = cli._fit_and_band(
+    fitted, bands, no_data, refused = cli._fit_and_band(
         world.key(0), graph, asof, HORIZON, inputs_of(world), params
     )
     asset_ids = [n.id for n in graph.nodes if n.kind is NodeKind.ASSET]
     assert no_data == [a for a in asset_ids if a not in world.assets]
+    assert refused == []
     assert {b.asset for b in bands} == set(world.assets)
     assert all(b.n == fitted.n_obs for b in bands)
 
@@ -290,10 +295,10 @@ def test_an_exact_key_with_no_precedent_refuses_the_command(capsys, world, monke
     assert captured.err.strip() == str(excinfo.value)
 
 
-def test_the_command_refuses_when_the_exact_key_band_is_thin(capsys, world, loaded):
-    """The fit passes (it is direction-free) but every data-having asset's exact-key band is
-    below min_neff at this as-of: the whole command refuses (ruling I-2) rather than printing
-    fans beside refused bands."""
+def test_the_command_refuses_when_every_band_is_thin(capsys, world, loaded):
+    """At this as-of the fit passes (it is direction-free) but every observed asset's
+    exact-key band is below min_neff, so no row survives and the command refuses (ruling
+    I-2) — including the assets the library has no rows for, which cannot band either."""
     assert run(key_flags(world, position=430)) == 2
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -301,6 +306,49 @@ def test_the_command_refuses_when_the_exact_key_band_is_thin(capsys, world, load
     match = BAND_REFUSED_LINE.match(line)
     assert match, line
     assert 0.0 < float(match.group(1)) < load_engine_params().min_neff
+
+
+def test_mixed_panel_shows_good_rows_and_the_reason_for_thin_bands(capsys, world, monkeypatch):
+    """One thin asset (four rows: observations exist, n_eff below min_neff) among good ones:
+    the command succeeds; the good rows show fans, the thin row prints the refusal reason
+    with no fan and no fabricated "+0.0%"."""
+    # keep HYG rows only for four events that are inside the query's panels at this as-of
+    asof = pd.Timestamp(asof_at(world, 700), tz="UTC")
+    events = world.events
+    cutoffs = world.session_cutoffs_utc
+    finished = events["effective_position"].map(lambda p: cutoffs.iloc[p + 1 + HORIZON] <= asof)
+    signed = events["key"].map(lambda k: EventKey.from_string(k).direction_sign == 1)
+    in_panel = events[finished & signed & (events["available_utc"] <= asof)]
+    keep = set(in_panel.sort_values("effective_position")["event_id"].tail(4))
+    hyg = (world.rows["outcome_key"] == "HYG") & (world.rows["horizon"] == HORIZON)
+    rows = world.rows.loc[~hyg | world.rows["event_id"].isin(keep)]
+    inputs = MechanismInputs(
+        events=world.events,
+        rows=rows.reset_index(drop=True),
+        session_cutoffs_utc=world.session_cutoffs_utc,
+        returns=world.returns,
+    )
+    monkeypatch.setattr(cli, "_load_inputs", lambda directory: inputs)
+
+    assert run([*key_flags(world), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["refused_assets"] == ["HYG"]
+    assert "HYG" not in payload["rollout_fan"]
+    bands = {b["asset"]: b for b in payload["precedent"]}
+    assert bands["HYG"]["refused"] is True and bands["HYG"]["n"] == 4
+    assert bands["HYG"]["n_eff"] == pytest.approx(4.0)
+    assert all(not bands[a]["refused"] for a in ("SPY", "TLT", "UUP"))
+    assert "HYG" not in payload["no_data_assets"]  # HYG has observations: it is refused, not no-data
+
+    assert run(key_flags(world)) == 0
+    out = capsys.readouterr().out
+    lines = {line.split()[0]: line for line in out.splitlines()}
+    assert lines["HYG"] == "HYG     5        band refused: n_eff=4.0 < min_neff=8.0"
+    assert "%" not in lines["HYG"]  # no fan, no fabricated "+0.0%"
+    for asset in ("SPY", "TLT", "UUP"):
+        assert "/" in lines[asset]  # a real fan triple
+    # the template's other assets have no rows at all: "no data" reason rows
+    assert any(line.endswith(" no data") for line in out.splitlines())
 
 
 def test_every_asset_without_rows_refuses_with_its_own_message(world):
