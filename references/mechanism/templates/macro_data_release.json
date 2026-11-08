@@ -1,12 +1,12 @@
 {
   "event_type": "macro_data_release",
   "graph_version": "template-v1",
-  "rationale": "Textbook data-surprise channel. The direction sign is the typer's sign for the surprise (positive = stronger than expected growth or inflation). A stronger surprise raises rates_expectation (TLT -, IEF -, UUP +) and, through growth, risk_appetite (SPY +, IWM +, HYG +). Documentation, not data.",
+  "rationale": "direction_sign is the spine's sign: 1 favourable, -1 unfavourable for risk appetite or the named entity (references/typing_prompt_v1.txt rule 8). Textbook data-release channel. A favourable release is a softer-rates one: event -> rates_expectation (- edge, so a favourable sign lowers expected rates; TLT -, IEF -, UUP +) and, through growth, event -> risk_appetite (+; SPY +, IWM +, HYG +). Documentation, not data.",
   "edges": [
     {
       "source": "event:macro_data_release:direction_sign",
       "target": "rates_expectation",
-      "sign": 1,
+      "sign": -1,
       "lag_band": "same_session"
     },
     {

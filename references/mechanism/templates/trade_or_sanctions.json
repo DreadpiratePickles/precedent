@@ -1,7 +1,7 @@
 {
   "event_type": "trade_or_sanctions",
   "graph_version": "template-v1",
-  "rationale": "Textbook trade-restriction channel. The direction sign is the typer's sign for risk appetite (negative = escalation of restrictions). Escalation lowers risk_appetite (+ edge, so a negative sign lowers it) which hits global equities (SPY +, EEM +, EFA +), raises usd_demand as a funding and safe currency (- edge, so a negative sign raises it; UUP +) which in turn weighs on emerging-market equities (EEM -), and lowers industrial demand over days (sector_demand:XLI +, then XLI +). Documentation, not data.",
+  "rationale": "direction_sign is the spine's sign: 1 favourable, -1 unfavourable for risk appetite or the named entity (references/typing_prompt_v1.txt rule 8). Textbook trade-restriction channel. Escalation of restrictions is unfavourable (-1): it lowers risk_appetite (+ edge; SPY +, EEM +, EFA +), raises usd_demand as a funding and safe currency (- edge; UUP +) which in turn weighs on emerging-market equities (EEM -), and lowers industrial demand over days (sector_demand:XLI +, then XLI +). Documentation, not data.",
   "edges": [
     {
       "source": "event:trade_or_sanctions:direction_sign",

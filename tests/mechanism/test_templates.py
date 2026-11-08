@@ -72,7 +72,7 @@ def test_central_bank_template_has_the_plan_edges():
     got = {(e.source, e.target, e.sign) for e in graph.edges}
     event = "event:central_bank:direction_sign"
     assert got == {
-        (event, "rates_expectation", 1),
+        (event, "rates_expectation", -1),
         ("rates_expectation", "TLT", -1),
         ("rates_expectation", "risk_appetite", -1),
         ("risk_appetite", "SPY", 1),
@@ -107,3 +107,12 @@ def test_template_with_an_id_outside_the_vocabulary_is_refused_with_the_file_nam
         load_templates(tmp_path, VOCAB)
     assert "central_bank.json" in str(excinfo.value)
     assert "made_up_node" in str(excinfo.value)
+
+
+def test_every_rationale_states_the_spines_direction_sign_convention():
+    files = sorted(TEMPLATES_DIR.glob("*.json"))
+    assert {f.stem for f in files} == EXPECTED_TYPES
+    for file in files:
+        rationale = json.loads(file.read_text(encoding="utf-8"))["rationale"]
+        assert "1 favourable, -1 unfavourable" in rationale, file.name
+        assert "references/typing_prompt_v1.txt rule 8" in rationale, file.name

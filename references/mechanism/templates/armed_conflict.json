@@ -1,7 +1,7 @@
 {
   "event_type": "armed_conflict",
   "graph_version": "template-v1",
-  "rationale": "Textbook geopolitical-shock channel. The direction sign is the typer's sign for risk appetite (negative = escalation). Escalation lowers risk_appetite (+ edge; SPY +), cuts oil_supply (+ edge, so a negative sign cuts it; oil_supply -> USO -, oil_supply -> XLE -) and raises usd_demand (- edge; UUP +). Gold is routed through risk_appetite (GLD -, the safe-haven relation: gold rises when risk appetite falls), not through usd_demand. Documentation, not data.",
+  "rationale": "direction_sign is the spine's sign: 1 favourable, -1 unfavourable for risk appetite or the named entity (references/typing_prompt_v1.txt rule 8). Textbook geopolitical-shock channel. Escalation is unfavourable (-1): it lowers risk_appetite (+ edge; SPY +), cuts oil_supply (+ edge, so a negative sign cuts it; oil_supply -> USO -, oil_supply -> XLE -) and raises usd_demand (- edge; UUP +). Gold is routed through risk_appetite (GLD -, the safe-haven relation: gold rises when risk appetite falls), not through usd_demand. Documentation, not data.",
   "edges": [
     {
       "source": "event:armed_conflict:direction_sign",
