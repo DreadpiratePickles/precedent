@@ -6,9 +6,9 @@ Propagate each session's abnormal-return shocks along the link graph as it stood
 ## Inputs
 | Path or source | Layer | Authority | Required | Relevant section |
 |---|---:|---|---:|---|
-| `stages/30_ripple_links/output/links/links.jsonl`, read only through `graph_asof` | 4 | Authoritative for links and their validity windows | Yes | All links visible at each cutoff |
+| `<data_dir>/ripple/links/links.jsonl`, read only through `graph_asof` | 4 | Authoritative for links and their validity windows | Yes | All links visible at each cutoff |
 | `stages/04_align/output/aligned_events.parquet` | 4 | Authoritative for events and `effective_session` | Yes | Shock source events |
-| Abnormal returns (spine `abnormal_returns`, derived statistics) | 4 | Authoritative for realised shock sizes | Yes | Per (session, instrument) |
+| `<data_dir>/ripple/abnormal_returns.parquet` (spine `abnormal_returns`, derived statistics) | 4 | Authoritative for realised shock sizes | Yes | Per (session, instrument) |
 | `references/ripple_params.json` | 3 | Authoritative for alpha, hops, half-life and age cap | Yes | `ripple` section |
 
 ## Process
@@ -20,8 +20,10 @@ Propagate each session's abnormal-return shocks along the link graph as it stood
 ## Outputs
 | Path | Schema or format | Consumer |
 |---|---|---|
-| `stages/31_ripple_factors/output/ripple_factors.parquet` | Index `(datetime, instrument)`, one column per channel | `32_ripple_evaluate` |
-| `stages/31_ripple_factors/output/shocks.parquet` | Index `(datetime, instrument)`, propagated shock sizes | `32_ripple_evaluate`, `33_ripple_report` |
+| `<data_dir>/ripple/ripple_factors.parquet` | Index `(datetime, instrument)`, one column per channel; persistent store | `32_ripple_evaluate` |
+| `<data_dir>/ripple/shocks.parquet` | Index `(datetime, instrument)`, propagated shock sizes; persistent store | `32_ripple_evaluate`, `33_ripple_report` |
+| `<data_dir>/ripple/MANIFEST.json` | JSON: `evidence_label` (`SYNTHETIC`, `LIVE-DATA`, `LIVE-MODEL` or `NO LIVE RUN`) and input hashes; persistent | `33_ripple_report` |
+| `stages/31_ripple_factors/output/run_manifest.json` | JSON: code version, parameters, input hashes for this run | The owner |
 
 ## Verify
 - Every factor builder ships a truncation-invariance test (design 4.5), using `assert_truncation_invariant` from `tests/fakes.py`.

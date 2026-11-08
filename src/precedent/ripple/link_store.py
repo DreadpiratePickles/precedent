@@ -8,12 +8,20 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
 import pandas as pd
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from precedent.spine.jsonl_io import atomic_write_lines, read_models
 
@@ -46,8 +54,8 @@ class Link(BaseModel):
     """One dated link. Timestamps are tz-aware; a model-extracted link must quote its evidence."""
 
     model_config = ConfigDict(extra="forbid")
-    source_node: str
-    receiver_node: str
+    source_node: str = Field(min_length=1)
+    receiver_node: str = Field(min_length=1)
     relation: Relation
     weight: float = Field(ge=0.0, le=1.0)
     valid_from_utc: AwareDatetime
@@ -56,8 +64,15 @@ class Link(BaseModel):
     evidence_span: str | None
     extractor_version: str
 
+    @field_validator("valid_from_utc", "valid_to_utc")
+    @classmethod
+    def _normalise_to_utc(cls, value: datetime) -> datetime:
+        return value.astimezone(UTC)
+
     @model_validator(mode="after")
     def _check_window_and_evidence(self) -> Self:
+        if self.source_node == self.receiver_node:
+            raise ValueError("a link cannot join a node to itself")
         if self.valid_to_utc <= self.valid_from_utc:
             raise ValueError("valid_to_utc must be after valid_from_utc")
         needs_evidence = not self.extractor_version.startswith(RULES_EXTRACTOR_PREFIX)
@@ -84,7 +99,10 @@ class LinkStore:
         self.path = Path(root) / "links.jsonl"
 
     def read_all(self) -> list[Link]:
-        """Every stored link in file order; a store that does not exist yet reads as empty."""
+        """Every stored link in file order; a store that does not exist yet reads as empty.
+
+        Factor code must read links through `graph_asof` only, never through this method.
+        """
         return read_models(self.path, Link)
 
     def append(self, links: Iterable[Link]) -> AppendReport:

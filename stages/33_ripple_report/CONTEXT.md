@@ -12,7 +12,7 @@ Render the daily Ripple map: which names the dated graph says a shock reaches, s
 | `<data_dir>/ripple/MANIFEST.json` | 4 | Authoritative for what the data is, when and from where it was built | Yes | Evidence label |
 
 ## Process
-1. Deterministic: read the manifest and choose the evidence banner from it (`SYNTHETIC —`, `LIVE —` or `NO LIVE RUN —`).
+1. Deterministic: read the manifest and choose the evidence banner from its `evidence_label` (`SYNTHETIC —`, `LIVE —` or `NO LIVE RUN —`).
 2. Deterministic: read the graph with `graph_asof` at the map date's cutoff, and the shocks and abnormal returns for that date.
 3. Deterministic: render the Markdown map, including `country_exposure` links, which have no factor column.
 

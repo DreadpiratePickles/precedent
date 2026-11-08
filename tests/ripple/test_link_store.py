@@ -3,7 +3,7 @@ import pytest
 from pydantic import ValidationError
 
 from precedent.ripple.link_store import Link, LinkStore, Relation, graph_asof
-from precedent.ripple.params import load_ripple_params
+from precedent.ripple.params import RippleParams, RippleParamsFile, load_ripple_params
 
 GRAPH_COLUMNS = [
     "source_node",
@@ -215,3 +215,67 @@ def test_load_ripple_params_returns_the_proposed_values():
     assert params["annual_link_expiry_months"] == 15
     assert params["correlation_window_sessions"] == 250 and params["correlation_top_k"] == 10
     assert params["proposed"] is True
+
+
+def test_timestamps_are_normalised_to_utc_and_deduplicated(tmp_path):
+    offset = link("A", "B", "peer_of", "2020-03-02T21:30:00+05:00", "2021-03-02T21:30:00+05:00")
+    twin = link("A", "B", "peer_of", "2020-03-02T16:30:00Z", "2021-03-02T16:30:00Z")
+    assert offset == twin
+    assert offset.valid_from_utc.utcoffset().total_seconds() == 0
+    store = LinkStore(tmp_path)
+    report = store.append([offset, twin])
+    assert (report.appended, report.duplicates_skipped) == (1, 1)
+    assert store.read_all() == [twin]
+    graph = graph_asof(store, utc("2020-06-01"))
+    assert str(graph["valid_from_utc"].dt.tz) == "UTC"
+
+
+def test_mixed_offsets_give_one_datetime_column(tmp_path):
+    store = LinkStore(tmp_path)
+    store.append(
+        [
+            link("A", "B", "peer_of", "2020-03-02T21:30:00+05:00", "2021-03-02T21:30:00+05:00"),
+            link("C", "D", "peer_of", "2020-03-02T21:30:00-04:00", "2021-03-02T21:30:00-04:00"),
+        ]
+    )
+    graph = graph_asof(store, utc("2020-06-01"))
+    assert len(graph) == 2
+    assert str(graph["valid_to_utc"].dt.tz) == "UTC"
+
+
+@pytest.mark.parametrize("source, receiver", [("", "B"), ("A", "")])
+def test_empty_node_names_are_rejected(source, receiver):
+    with pytest.raises(ValidationError):
+        link(source, receiver, "peer_of")
+
+
+def test_self_link_is_rejected():
+    with pytest.raises(ValidationError, match="itself"):
+        link("A", "A", "peer_of")
+
+
+def test_ripple_params_reject_out_of_range_alpha_and_extra_keys():
+    good = load_ripple_params()
+    for alpha in (0.0, 1.5, -0.1):
+        with pytest.raises(ValidationError):
+            RippleParams.model_validate({**good, "alpha": alpha})
+    with pytest.raises(ValidationError):
+        RippleParams.model_validate({**good, "surprise": 1})
+    with pytest.raises(ValidationError):
+        RippleParamsFile.model_validate({"ripple": good, "extra_section": {}})
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("hops", 0),
+        ("half_life_sessions", 0.0),
+        ("max_age_sessions", -1),
+        ("annual_link_expiry_months", 0),
+        ("correlation_window_sessions", 1),
+        ("correlation_top_k", 0),
+    ],
+)
+def test_ripple_params_reject_out_of_range_values(field, value):
+    with pytest.raises(ValidationError):
+        RippleParams.model_validate({**load_ripple_params(), field: value})

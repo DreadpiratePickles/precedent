@@ -6,7 +6,7 @@ Measure whether each Ripple factor adds rank information beyond the rungs below 
 ## Inputs
 | Path or source | Layer | Authority | Required | Relevant section |
 |---|---:|---|---:|---|
-| `stages/31_ripple_factors/output/ripple_factors.parquet` and `shocks.parquet` | 4 | Authoritative for Ripple factor values | Yes | All columns |
+| `<data_dir>/ripple/ripple_factors.parquet` and `<data_dir>/ripple/shocks.parquet` | 4 | Authoritative for Ripple factor values | Yes | All columns |
 | Factor panels of the lower rungs (news and Precedent factors) | 4 | Authoritative for their own factors | Yes | Same sessions and instruments |
 | `references/rungs/m3_ripple_*.yaml` | 3 | Authoritative for which columns each rung adds | Yes | One file per rung |
 

@@ -18,7 +18,8 @@ Turn dated 10-K and 8-K documents into dated company links in the append-only li
 ## Outputs
 | Path | Schema or format | Consumer |
 |---|---|---|
-| `stages/30_ripple_links/output/links/links.jsonl` | JSON Lines of `Link` (`precedent.ripple.link_store`), append-only | `31_ripple_factors` through `graph_asof` |
+| `<data_dir>/ripple/links/links.jsonl` (the `LinkStore` root is `<data_dir>/ripple/links`) | JSON Lines of `Link` (`precedent.ripple.link_store`), append-only; a persistent store, not a per-run file | `31_ripple_factors` and `33_ripple_report` through `graph_asof` |
+| `stages/30_ripple_links/output/run_manifest.json` | JSON: document ids read, links appended and skipped, prompt version | The owner |
 
 ## Verify
 - `uv run pytest -q tests/ripple/test_link_store.py`: visibility is half-open at both ends, a restated link extends validity without duplicating, a model-extracted link needs evidence, naive timestamps are rejected.
@@ -44,7 +45,7 @@ Mutable / protected: `references/link_prompt_v*.txt` only / gold samples, scorer
 Isolation: a branch from the baseline commit.
 Worker / judge: standard-tier model worker, deterministic scorer, no model judge.
 Runner: a script that counts iterations.
-State: results table under `stages/30_ripple_links/output/`.
+State: results table under `stages/30_ripple_links/output/` (per-run artifact).
 Context: fresh per iteration with the results table as handoff.
 Stop: oracle at R1 on dev; budget 10 iterations, 4 hours wall, zero spend (local runtime); no progress after 3; same failure 3 times in a row; blocked.
 On stop: best-so-far prompt kept, run logged in `docs/STATUS.md`.
