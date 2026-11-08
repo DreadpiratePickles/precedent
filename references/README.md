@@ -13,3 +13,7 @@ This folder ships inside the wheel as `precedent/references/` (see `pyproject.to
 - `precedent_params.json`: tunable parameters, one section per user; the `gdelt` section holds the GDELT filter, severity and latency values, all proposed (decision B4).
 - Citation terms, from the GDELT Project's terms page (`gdeltproject.org/about.html`, read 2026-11-07): the data may be used without fee for academic, commercial or governmental use, and may be redistributed, rehosted or mirrored in any form, but any use or redistribution "must include a citation to the GDELT Project" and a link to `https://www.gdeltproject.org/`.
 - Citation wording used here, for any surface that shows GDELT-derived events or code descriptions: `Source: the GDELT Project, https://www.gdeltproject.org/`. No GDELT export row or article text is committed.
+
+## Ripple
+
+- `ripple_params.json`: the Ripple propagation, decay, link-expiry and correlation-peer parameters (design section 9.5), all proposed; read by `load_ripple_params` in `precedent.ripple.params`.
