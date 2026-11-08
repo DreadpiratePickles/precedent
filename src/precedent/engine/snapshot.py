@@ -14,6 +14,7 @@ import argparse
 import contextlib
 import importlib.metadata
 import io
+import lzma
 import os
 import re
 import shutil
@@ -48,6 +49,17 @@ _ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 _FILE_MODE = 0o100644
 _REQUEST_TIMEOUT_S = 60.0
 _COPY_CHUNK_BYTES = 1 << 20
+_ACCEPTED_COMPRESSION = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+"""`build_snapshot` writes stored entries; deflated ones are accepted, nothing else is."""
+_READ_ERRORS = (
+    zipfile.BadZipFile,
+    zlib.error,
+    lzma.LZMAError,
+    EOFError,
+    NotImplementedError,
+    RuntimeError,
+    OSError,
+)
 MAX_MANIFEST_BYTES = 1 << 20
 """Largest manifest download accepted."""
 MAX_SNAPSHOT_BYTES = 1 << 31
@@ -141,21 +153,38 @@ def _safe_member_path(raw_name: str) -> str:
     return PurePosixPath(name).as_posix()
 
 
-def _copy_entry(archive: zipfile.ZipFile, info: zipfile.ZipInfo, name: str, target: Path) -> int:
-    """Copy one entry in chunks, stopping at `MAX_ENTRY_BYTES`; return the bytes written."""
+def _copy_entry(
+    archive: zipfile.ZipFile, info: zipfile.ZipInfo, name: str, target: Path, budget_bytes: int
+) -> int:
+    """Copy one entry in chunks; return the bytes written.
+
+    Stops with `LibraryIntegrityError` past `MAX_ENTRY_BYTES` or past `budget_bytes` (what is
+    left of the total cap). Only reading the zip converts errors to integrity failures: a
+    failing write to disk propagates as the `OSError` it is.
+    """
     written = 0
     try:
-        with archive.open(info) as source, target.open("wb") as sink:
-            while chunk := source.read(_COPY_CHUNK_BYTES):
-                written += len(chunk)
-                if written > MAX_ENTRY_BYTES:
-                    raise LibraryIntegrityError(
-                        name, f"expands to more than {MAX_ENTRY_BYTES} bytes"
-                    )
-                sink.write(chunk)
-    except (zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError, RuntimeError) as error:
+        source = archive.open(info)
+    except _READ_ERRORS as error:
         raise LibraryIntegrityError(name, f"cannot be read from the zip: {error}") from error
-    return written
+    with source, target.open("wb") as sink:
+        while True:
+            try:
+                chunk = source.read(_COPY_CHUNK_BYTES)
+            except _READ_ERRORS as error:
+                raise LibraryIntegrityError(
+                    name, f"cannot be read from the zip: {error}"
+                ) from error
+            if not chunk:
+                return written
+            written += len(chunk)
+            if written > MAX_ENTRY_BYTES:
+                raise LibraryIntegrityError(name, f"expands to more than {MAX_ENTRY_BYTES} bytes")
+            if written > budget_bytes:
+                raise LibraryIntegrityError(
+                    "snapshot zip", f"total size exceeds {MAX_TOTAL_UNCOMPRESSED_BYTES} bytes"
+                )
+            sink.write(chunk)
 
 
 def _extract(archive_bytes: bytes, into: Path) -> None:
@@ -170,6 +199,10 @@ def _extract(archive_bytes: bytes, into: Path) -> None:
             raise LibraryIntegrityError("snapshot zip", "contains a repeated entry name")
         files = [(info, name) for info, name in zip(infos, names, strict=True) if not info.is_dir()]
         for info, name in files:
+            if info.compress_type not in _ACCEPTED_COMPRESSION:
+                raise LibraryIntegrityError(
+                    name, f"uses compression method {info.compress_type}; only stored or deflated"
+                )
             if info.file_size > MAX_ENTRY_BYTES:
                 raise LibraryIntegrityError(
                     name, f"is larger than {MAX_ENTRY_BYTES} bytes once extracted"
@@ -184,11 +217,9 @@ def _extract(archive_bytes: bytes, into: Path) -> None:
                 raise LibraryIntegrityError(name, "is a symbolic link in the zip")
             destination = into / name
             destination.parent.mkdir(parents=True, exist_ok=True)
-            total += _copy_entry(archive, info, name, destination)
-            if total > MAX_TOTAL_UNCOMPRESSED_BYTES:
-                raise LibraryIntegrityError(
-                    "snapshot zip", f"total size exceeds {MAX_TOTAL_UNCOMPRESSED_BYTES} bytes"
-                )
+            total += _copy_entry(
+                archive, info, name, destination, MAX_TOTAL_UNCOMPRESSED_BYTES - total
+            )
 
 
 def _swap_into_place(temp: Path, target: Path) -> None:

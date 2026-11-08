@@ -391,9 +391,12 @@ def test_a_snapshot_over_the_total_cap_is_refused(tmp_path, snapshot_server, mon
     _assert_nothing_left(tmp_path)
 
 
-def test_the_copy_stops_at_the_cap_even_when_the_header_understates(
-    tmp_path, snapshot_server, monkeypatch
-):
+pulled: list[int] = []
+
+
+def _lying_headers_and_endless_entries(server, monkeypatch, entry_bytes: int) -> None:
+    """Headers claim 1 byte per entry while every entry actually yields `entry_bytes` bytes."""
+    server.raw_zip = server._zip()  # build the served zip before `ZipFile.open` is replaced
     real_infolist = zipfile.ZipFile.infolist
 
     def understating(self):
@@ -403,9 +406,116 @@ def test_the_copy_stops_at_the_cap_even_when_the_header_understates(
         return infos
 
     monkeypatch.setattr(zipfile.ZipFile, "infolist", understating)
+    pulled.clear()
+
+    class CountingSource(io.BytesIO):
+        def read(self, size=-1):
+            chunk = super().read(size)
+            pulled.append(len(chunk))
+            return chunk
+
+    monkeypatch.setattr(
+        zipfile.ZipFile, "open", lambda self, info, *a, **k: CountingSource(b"x" * entry_bytes)
+    )
+
+
+def test_the_copy_stops_at_the_entry_cap_when_the_header_understates(
+    tmp_path, snapshot_server, monkeypatch
+):
+    _lying_headers_and_endless_entries(snapshot_server, monkeypatch, entry_bytes=500)
     monkeypatch.setattr(snapshot, "MAX_ENTRY_BYTES", 100)
-    with pytest.raises(LibraryIntegrityError):
+    with pytest.raises(LibraryIntegrityError, match="expands to more than 100 bytes"):
         fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    _assert_nothing_left(tmp_path)
+
+
+def test_one_entry_cannot_overshoot_the_total_cap_when_the_header_understates(
+    tmp_path, snapshot_server, monkeypatch
+):
+    _lying_headers_and_endless_entries(snapshot_server, monkeypatch, entry_bytes=500)
+    monkeypatch.setattr(snapshot, "MAX_ENTRY_BYTES", 1000)
+    monkeypatch.setattr(snapshot, "MAX_TOTAL_UNCOMPRESSED_BYTES", 300)
+    monkeypatch.setattr(snapshot, "_COPY_CHUNK_BYTES", 100)
+    with pytest.raises(LibraryIntegrityError, match="total size exceeds 300 bytes"):
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    assert sum(pulled) <= 400  # the budget plus the one chunk that crossed it
+    _assert_nothing_left(tmp_path)
+
+
+def _zip_with_method(entries: dict[str, bytes], method: int) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", method) as archive:
+        for name, data in entries.items():
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = method
+            archive.writestr(info, data)
+    return buffer.getvalue()
+
+
+def _flip_in_first_data(served: bytes) -> bytes:
+    with zipfile.ZipFile(io.BytesIO(served)) as archive:
+        info = archive.infolist()[0]
+    start = info.header_offset + 30 + len(info.filename.encode()) + len(info.extra)
+    flipped = bytearray(served)
+    flipped[start + info.compress_size // 2] ^= 0xFF
+    return bytes(flipped)
+
+
+@pytest.mark.parametrize("method", [zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA])
+def test_only_stored_and_deflated_entries_are_accepted(
+    tmp_path, snapshot_server, monkeypatch, method
+):
+    entries = dict(snapshot_server.entries)
+    snapshot_server.raw_zip = _flip_in_first_data(_zip_with_method(entries, method))
+    read: list[str] = []
+    real_open = zipfile.ZipFile.open
+    monkeypatch.setattr(
+        zipfile.ZipFile,
+        "open",
+        lambda self, info, *args, **kwargs: (read.append(info.filename), real_open(self, info))[1],
+    )
+    with pytest.raises(LibraryIntegrityError, match="compression"):
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    assert read == []
+    _assert_nothing_left(tmp_path)
+
+
+@pytest.mark.parametrize("method", [zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA])
+def test_run_exits_2_with_one_line_for_an_unaccepted_compression(
+    tmp_path, snapshot_server, capsys, monkeypatch, method
+):
+    monkeypatch.setattr(config, "release_base_url", lambda: BASE)
+    monkeypatch.setattr(snapshot.httpx, "HTTPTransport", lambda: snapshot_server.transport)
+    snapshot_server.raw_zip = _flip_in_first_data(
+        _zip_with_method(dict(snapshot_server.entries), method)
+    )
+    dest = tmp_path / "dd"
+    assert run(["--version", TAG, "--data-dir", str(dest)]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error:") and err.count("\n") == 1 and "Traceback" not in err
+    _assert_nothing_left(dest)
+
+
+def test_a_deflated_zip_installs(tmp_path, snapshot_server):
+    snapshot_server.raw_zip = _zip_with_method(dict(snapshot_server.entries), zipfile.ZIP_DEFLATED)
+    manifest = fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    assert load_bundle(tmp_path / "library").manifest == manifest
+
+
+def test_a_disk_error_while_writing_is_not_an_integrity_failure(
+    tmp_path, snapshot_server, monkeypatch
+):
+    real_open = snapshot.Path.open
+
+    def failing_write(self, mode="r", *args, **kwargs):
+        if "w" in mode and self.name.endswith(".parquet"):
+            raise OSError("disk full")
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(snapshot.Path, "open", failing_write)
+    with pytest.raises(OSError, match="disk full") as raised:
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    assert not isinstance(raised.value, LibraryIntegrityError)
     _assert_nothing_left(tmp_path)
 
 
