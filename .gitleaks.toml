@@ -1,0 +1,10 @@
+# Default gitleaks rules plus one narrow allowlist. The typing gold set's `expected_key`
+# values are event-key slugs (e.g. "earnings/company/company/none/mid/scheduled/1"), not
+# credentials; the generic-api-key rule flags them because of the field name.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "event-key slugs in the typing gold set"
+regexTarget = "line"
+regexes = ['''^\s*"expected_key": "[a-z_]+(/[a-z0-9_]+){6}",?$''']
