@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "source": "docs/superpowers/specs/2026-11-07-precedent-product-amendment.md section 8, checked against CAMEO.eventcodes.txt in stages/02_triage/CONTEXT.md",
+  "roots": {
+    "01": {
+      "event_type": "untyped",
+      "proposed": true
+    },
+    "02": {
+      "event_type": "untyped",
+      "proposed": true
+    },
+    "03": {
+      "event_type": "untyped",
+      "proposed": true
+    },
+    "04": {
+      "event_type": "untyped",
+      "proposed": true
+    },
+    "05": {
+      "event_type": "untyped",
+      "proposed": true
+    },
+    "06": {
+      "event_type": "untyped",
+      "proposed": true
+    },
+    "07": {
+      "event_type": "untyped",
+      "proposed": true
+    },
+    "08": {
+      "event_type": "untyped",
+      "proposed": true
+    },
+    "09": {
+      "event_type": "untyped",
+      "proposed": true
+    },
+    "10": {
+      "event_type": "untyped",
+      "proposed": true
+    },
+    "11": {
+      "event_type": "untyped",
+      "proposed": true
+    },
+    "12": {
+      "event_type": "untyped",
+      "proposed": true
+    },
+    "13": {
+      "event_type": "other",
+      "proposed": true
+    },
+    "14": {
+      "event_type": "election_or_political",
+      "proposed": true
+    },
+    "15": {
+      "event_type": "armed_conflict",
+      "proposed": true
+    },
+    "16": {
+      "event_type": "untyped",
+      "proposed": true
+    },
+    "17": {
+      "event_type": "untyped",
+      "proposed": true
+    },
+    "18": {
+      "event_type": "armed_conflict",
+      "proposed": true
+    },
+    "19": {
+      "event_type": "armed_conflict",
+      "proposed": true
+    },
+    "20": {
+      "event_type": "armed_conflict",
+      "proposed": true
+    }
+  },
+  "subcodes": {
+    "163": {
+      "event_type": "trade_or_sanctions",
+      "requires_actor1_type": [
+        "GOV"
+      ],
+      "proposed": true
+    }
+  }
+}

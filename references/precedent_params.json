@@ -1,0 +1,19 @@
+{
+  "notes": {
+    "gdelt": "Every value is proposed (decision B4); see stages/02_triage/CONTEXT.md."
+  },
+  "gdelt": {
+    "min_sources": 3,
+    "goldstein_cuts": [
+      3.3333333333333335,
+      6.666666666666667
+    ],
+    "sources_bump_at": 10,
+    "severity_by_band": {
+      "low": 2,
+      "mid": 5,
+      "high": 8
+    },
+    "latency_minutes": 30
+  }
+}
