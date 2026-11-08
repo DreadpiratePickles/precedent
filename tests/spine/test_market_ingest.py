@@ -131,3 +131,19 @@ def test_kalshi_ingest_runs_end_to_end(data_root, capsys):
     line = last_json_line(capsys)
     assert line["report"]["kept"] == 2 and line["report"]["skipped_unresolved"] == 1
     assert json.loads((data_root / "state" / "kalshi.json").read_text())["phase"] == "done"
+
+
+def test_a_budget_stop_is_stored_and_reported_in_the_summary_line(data_root, capsys):
+    # cutoff, live page, event, series: the live page completes, the historical page cannot start
+    code = kalshi.run(
+        ["--max-requests", "4"],
+        transport=kalshi_transport(KALSHI_FIXTURE),
+        clock=FakeClock(),
+        typer=TYPER,
+    )
+    assert code == 0
+    line = last_json_line(capsys)
+    assert line["report"]["stopped_by_budget"] is True
+    assert (line["report"]["seen"], line["report"]["kept"]) == (2, 1)
+    assert line["append"]["added"] == 1
+    assert len(MarketStore(data_root / "markets").read("kalshi", "fake-v1")) == 1

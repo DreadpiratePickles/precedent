@@ -58,6 +58,36 @@ def test_empty_category_is_null_and_a_missing_slug_falls_back_to_the_condition_i
     assert market is not None and market.category is None and market.source_ref == "0xzzz"
 
 
+def test_outcomes_and_prices_may_already_be_decoded_lists():
+    market = polymarket_market_from(
+        raw_market(outcomes=["Yes", "No"], outcomePrices=["0", "1"]), MarketIngestReport()
+    )
+    assert market is not None and market.resolution == "no"
+
+
+def test_a_non_dict_element_in_a_page_is_counted_as_malformed(tmp_path: Path):
+    body = {"markets": ["junk", raw_market("0x9")]}
+    report = MarketIngestReport()
+    markets = PolymarketClient(
+        FakeTransport([ok(body)]), FakeClock(), tmp_path / "s.json", max_requests=1
+    ).fetch_resolved(report)
+    assert [m.market_id for m in markets] == ["polymarket:0x9"]
+    assert report.skipped_malformed == 1 and report.seen == 2
+
+
+def test_stopping_at_the_request_budget_is_flagged(tmp_path: Path):
+    report = MarketIngestReport()
+    PolymarketClient(
+        FakeTransport([ok(page(1, "c1"))]), FakeClock(), tmp_path / "s.json", max_requests=1
+    ).fetch_resolved(report)
+    assert report.stopped_by_budget is True
+    done = MarketIngestReport()
+    PolymarketClient(
+        FakeTransport([ok(page(1))]), FakeClock(), tmp_path / "t.json", max_requests=1
+    ).fetch_resolved(done)
+    assert done.stopped_by_budget is False
+
+
 def test_the_winner_follows_the_label_not_the_position():
     market = polymarket_market_from(
         raw_market(outcomes='["no", " YES "]', outcomePrices='["0", "1"]'), MarketIngestReport()

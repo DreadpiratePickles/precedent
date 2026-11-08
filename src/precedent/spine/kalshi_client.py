@@ -34,9 +34,12 @@ class _BudgetSpent(Exception):
 
 
 def kalshi_market_from(
-    raw: dict, category: str | None, report: MarketIngestReport
+    raw: object, category: str | None, report: MarketIngestReport
 ) -> ResolvedMarket | None:
     """A market that resolved yes or no, or None with exactly one skip counter incremented."""
+    if not isinstance(raw, dict):
+        report.skipped_malformed += 1
+        return None
     ticker, event_ticker = raw.get("ticker"), raw.get("event_ticker")
     title, subtitle = raw.get("title"), raw.get("yes_sub_title")
     question = title if isinstance(title, str) and title else subtitle
@@ -78,8 +81,10 @@ class KalshiClient:
     """Reads settled markets: newer than the historical cutoff from `/markets`, older from
     `/historical/markets`; each market's category is joined through its event's series.
 
-    State is `{"cutoff", "phase", "cursor", "series_of_event", "category_of_series"}`; phase is
-    "live", "historical" or "done". It is saved after the caller has taken each page.
+    State is `{"cutoff", "phase", "cursor", "series_of_event", "category_of_series",
+    "page_done"}`; phase is "live", "historical" or "done", and `page_done` lists the tickers of
+    the current page already handed over, so a page cut short by the request budget is finished,
+    not recounted, on the next run. It is saved after the caller has taken each page.
     """
 
     def __init__(
@@ -111,13 +116,21 @@ class KalshiClient:
                 write_json_state(self._state_path, state)
             while state["phase"] != PHASE_DONE:
                 body = self._get_page(state, report)
-                yield self._resolve_page(body["markets"], state, taken, report)
+                page, handled, complete = self._resolve_page(body["markets"], state, taken, report)
+                yield page
+                state["page_done"] = [*state["page_done"], *handled]
+                if not complete:
+                    report.stopped_by_budget = True
+                    write_json_state(self._state_path, state)
+                    return
                 state["cursor"] = body.get("cursor") or None
+                state["page_done"] = []
                 if state["cursor"] is None:
                     live = state["phase"] == PHASE_LIVE
                     state["phase"] = PHASE_HISTORICAL if live else PHASE_DONE
                 write_json_state(self._state_path, state)
         except _BudgetSpent:
+            report.stopped_by_budget = True
             write_json_state(self._state_path, state)  # lookups cached so far are progress
 
     def _load_state(self) -> dict[str, Any]:
@@ -128,30 +141,49 @@ class KalshiClient:
             "cursor": saved.get("cursor"),
             "series_of_event": dict(saved.get("series_of_event", {})),
             "category_of_series": dict(saved.get("category_of_series", {})),
+            "page_done": list(saved.get("page_done", [])),
         }
 
     def _resolve_page(
         self,
-        raw_markets: list[dict],
+        raw_markets: list[Any],
         state: dict[str, Any],
         taken: set[str],
         report: MarketIngestReport,
-    ) -> list[ResolvedMarket]:
+    ) -> tuple[list[ResolvedMarket], list[str], bool]:
+        """(resolved markets, tickers handled, page complete).
+
+        An item is counted in `report` only once it is handled: resolved, or bucketed as a skip.
+        When the budget runs out part-way the markets resolved so far are returned with
+        `complete` False, and the cursor stays put so the next run finishes the page. (A
+        malformed item with no ticker cannot be remembered, so a resume counts it again.)
+        """
         cutoff = parse_utc_timestamp(state["cutoff"])
+        already = set(state["page_done"])
         page: list[ResolvedMarket] = []
+        handled: list[str] = []
         for raw in raw_markets:
-            ticker = raw.get("ticker")
-            if ticker in taken:
+            ticker = raw.get("ticker") if isinstance(raw, dict) else None
+            if isinstance(ticker, str) and (ticker in already or ticker in taken):
                 continue
-            if state["phase"] == PHASE_LIVE and _settled_before(raw, cutoff):
+            is_live = state["phase"] == PHASE_LIVE
+            if is_live and isinstance(raw, dict) and _settled_before(raw, cutoff):
                 continue  # the historical phase provides it
-            taken.add(ticker)
-            report.seen += 1
-            market = kalshi_market_from(raw, None, report)
+            item = MarketIngestReport()
+            market = kalshi_market_from(raw, None, item)
             if market is not None:
-                category = self._category_of(raw["event_ticker"], state, report)
-                page.append(market.model_copy(update={"category": category}))
-        return page
+                try:
+                    category = self._category_of(raw["event_ticker"], state, report)
+                except _BudgetSpent:
+                    return page, handled, False
+                market = market.model_copy(update={"category": category})
+                page.append(market)
+            report.seen += 1
+            report.absorb(item)
+            if isinstance(ticker, str):
+                taken.add(ticker)
+                handled.append(ticker)
+        return page, handled, True
 
     def _category_of(
         self, event_ticker: str, state: dict[str, Any], report: MarketIngestReport

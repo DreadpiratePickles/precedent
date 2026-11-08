@@ -1,5 +1,6 @@
 """Tests for the Kalshi market mapping and the two-phase client."""
 
+import copy
 import json
 from pathlib import Path
 
@@ -68,10 +69,18 @@ def test_the_state_file_holds_the_documented_keys_and_caches_lookups(tmp_path: P
         kalshi_transport(KALSHI_FIXTURE), FakeClock(), state, max_requests=10
     ).fetch_settled(MarketIngestReport())
     saved = json.loads(state.read_text())
-    assert set(saved) == {"cutoff", "phase", "cursor", "series_of_event", "category_of_series"}
+    assert set(saved) == {
+        "cutoff",
+        "phase",
+        "cursor",
+        "series_of_event",
+        "category_of_series",
+        "page_done",
+    }
     assert saved["cutoff"] == "2026-09-08T00:00:00Z" and saved["phase"] == "done"
     assert saved["series_of_event"] == {"FED-26OCT": "KXFED", "FED-25MAR": "KXFED"}
     assert saved["category_of_series"] == {"KXFED": "Economics"}
+    assert saved["page_done"] == []
 
 
 def test_a_second_run_resumes_without_repeating_finished_work(tmp_path: Path):
@@ -141,7 +150,6 @@ def test_another_http_error_surfaces(tmp_path: Path):
 def test_the_market_mapping_uses_the_full_title_and_a_composite_source_ref():
     market = kalshi_market_from(raw_market(), "Economics", MarketIngestReport())
     assert market is not None
-    assert market.question.startswith("Will the upper bound is" ) is False
     assert market.question == "Will the upper bound be above 4.25% after the October meeting?"
     assert market.source_ref == "FED-26OCT/FED-26OCT-T4.25"
     assert market.venue == "kalshi" and market.category == "Economics"
@@ -177,3 +185,60 @@ def test_a_missing_close_time_is_null_and_a_market_without_a_ticker_is_malformed
     assert kalshi_market_from(raw_market(ticker=None), None, report) is None
     assert kalshi_market_from(raw_market(title="", yes_sub_title=""), None, report) is None
     assert report.skipped_malformed == 2
+
+
+def _three_market_fixture() -> dict:
+    """One live page: an unresolved market, then three resolved ones in two events."""
+    fixture = copy.deepcopy(KALSHI_FIXTURE)
+    template = FIXTURE["live"]["markets"][0]
+    unresolved = {**template, "ticker": "E1-U", "event_ticker": "E1", "result": ""}
+    resolved = [
+        {**template, "ticker": f"{event}-{n}", "event_ticker": event, "title": f"Question {n}?"}
+        for n, event in enumerate(["E1", "E1", "E2"])
+    ]
+    fixture["response"]["live"] = {"markets": [unresolved, *resolved], "cursor": ""}
+    fixture["response"]["historical"] = {"markets": [], "cursor": ""}
+    for event in ("E1", "E2"):
+        body = {"event": {"event_ticker": event, "series_ticker": "KXFED"}, "markets": []}
+        fixture["response"]["events"][event] = body
+    return fixture
+
+
+def test_a_budget_stop_mid_page_keeps_the_partial_page_and_a_resume_finishes_it(tmp_path: Path):
+    fixture = _three_market_fixture()
+    state = tmp_path / "s.json"
+    # cutoff, page, event E1, series KXFED: then market E2-2 needs an event lookup and cannot run
+    first = MarketIngestReport()
+    pages = list(
+        KalshiClient(
+            kalshi_transport(fixture), FakeClock(), state, max_requests=4
+        ).iter_pages(first)
+    )
+    assert [[m.market_id for m in page] for page in pages] == [["kalshi:E1-0", "kalshi:E1-1"]]
+    assert first.requests == 4 and first.stopped_by_budget is True
+    # counted: the unresolved market and the two resolved ones; not the one that could not finish
+    assert (first.seen, first.skipped_unresolved) == (3, 1)
+    saved = json.loads(state.read_text())
+    assert saved["phase"] == "live" and saved["cursor"] is None
+    assert sorted(saved["page_done"]) == ["E1-0", "E1-1", "E1-U"]
+
+    second = MarketIngestReport()
+    resumed = KalshiClient(
+        kalshi_transport(fixture), FakeClock(), state, max_requests=10
+    ).fetch_settled(second)
+    assert [m.market_id for m in resumed] == ["kalshi:E2-2"]
+    assert (second.seen, second.skipped_unresolved, second.stopped_by_budget) == (1, 0, False)
+    assert json.loads(state.read_text())["phase"] == "done"
+    assert json.loads(state.read_text())["page_done"] == []
+
+
+def test_a_non_dict_element_and_a_tickerless_market_are_counted_as_malformed(tmp_path: Path):
+    fixture = copy.deepcopy(KALSHI_FIXTURE)
+    tickerless = {k: v for k, v in FIXTURE["live"]["markets"][0].items() if k != "ticker"}
+    fixture["response"]["live"] = {"markets": ["junk", tickerless], "cursor": ""}
+    fixture["response"]["historical"] = {"markets": [], "cursor": ""}
+    report = MarketIngestReport()
+    markets = KalshiClient(
+        kalshi_transport(fixture), FakeClock(), tmp_path / "s.json", max_requests=10
+    ).fetch_settled(report)
+    assert markets == [] and report.skipped_malformed == 2 and report.seen == 2

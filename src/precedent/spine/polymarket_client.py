@@ -26,7 +26,9 @@ _YES_NO = ("yes", "no")
 
 
 def _decode_list(raw_value: object) -> list[Any] | None:
-    """`outcomes` and `outcomePrices` arrive as JSON-encoded strings."""
+    """`outcomes` and `outcomePrices` arrive as JSON-encoded strings; a real list is accepted."""
+    if isinstance(raw_value, list):
+        return raw_value
     if not isinstance(raw_value, str):
         return None
     try:
@@ -58,12 +60,15 @@ def _labels_if_yes_no(raw_outcomes: object) -> list[str] | None:
     return labels if sorted(labels) == sorted(_YES_NO) else None
 
 
-def polymarket_market_from(raw: dict, report: MarketIngestReport) -> ResolvedMarket | None:
+def polymarket_market_from(raw: object, report: MarketIngestReport) -> ResolvedMarket | None:
     """A resolved Yes/No market, or None with exactly one skip counter incremented.
 
     A present `umaResolutionStatus` must be "resolved"; an old market with no such key counts as
     resolved on its prices alone (and is counted in `resolved_by_prices_only`).
     """
+    if not isinstance(raw, dict):
+        report.skipped_malformed += 1
+        return None
     condition_id, question = raw.get("conditionId"), raw.get("question")
     if not (isinstance(condition_id, str) and condition_id and isinstance(question, str)):
         report.skipped_malformed += 1
@@ -146,6 +151,8 @@ class PolymarketClient:
             cursor = None if exhausted else next_cursor
             state = {"cursor": cursor, "exhausted": exhausted}
             write_json_state(self._state_path, state)
+        if not state.get("exhausted", False):
+            report.stopped_by_budget = True
 
     def _get_page(self, cursor: str | None, report: MarketIngestReport) -> dict[str, Any]:
         params = {

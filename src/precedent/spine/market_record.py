@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -56,6 +56,14 @@ class MarketIngestReport:
     refused_invalid: int = 0
     max_calls_reached: int = 0
     resolved_by_prices_only: int = 0
+    stopped_by_budget: bool = False
+
+    def absorb(self, other: MarketIngestReport) -> None:
+        """Add another report's counters into this one (flags are left alone)."""
+        for field in fields(self):
+            value = getattr(other, field.name)
+            if type(value) is int:
+                setattr(self, field.name, getattr(self, field.name) + value)
 
 
 def parse_utc_timestamp(value: object) -> datetime | None:
