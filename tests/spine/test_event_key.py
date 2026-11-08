@@ -1,6 +1,7 @@
 """Tests for the event key: the discrete description used to find similar past events."""
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -130,9 +131,16 @@ def test_country_groups_by_actor_country() -> None:
     assert country_group_of(None) == "none"
 
 
-def test_an_unknown_code_is_an_error_not_a_default() -> None:
-    with pytest.raises(ValueError, match="ZZZ"):
-        country_group_of("ZZZ")
+@pytest.mark.parametrize("code", ["XKX", "ZZZ", "EUR", "", "usa"])
+def test_a_code_missing_from_the_table_is_group_none(code: str) -> None:
+    assert country_group_of(code) == "none"
+
+
+def test_a_malformed_groups_file_is_still_an_error(tmp_path: Path) -> None:
+    path = tmp_path / "groups.json"
+    path.write_text(json.dumps({"groups": {"DM": ["FRA"], "EM": ["FRA"]}}))
+    with pytest.raises(ValueError, match="FRA"):
+        load_country_groups(path)
 
 
 @pytest.mark.parametrize(

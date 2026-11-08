@@ -101,13 +101,10 @@ def load_country_groups(path: Path | None = None) -> dict[str, CountryGroup]:
 
 
 def country_group_of(iso3: str | None) -> CountryGroup:
-    """Group of a country code; `none` for no country; an unlisted code is an error."""
+    """Group of a country code; `none` for no country or a code not in the table."""
     if iso3 is None:
         return "none"
-    try:
-        return load_country_groups()[iso3]
-    except KeyError:
-        raise ValueError(f"country code {iso3!r} is not in country_groups.json") from None
+    return load_country_groups().get(iso3, "none")
 
 
 def _sign(value: float) -> int:
