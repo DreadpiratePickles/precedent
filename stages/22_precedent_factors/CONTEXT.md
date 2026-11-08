@@ -1,7 +1,7 @@
 # Stage: 22_precedent_factors
 
 ## Objective
-Build `prec_` factors from the libraries as Qlib features, so the precedent estimate can enter the spine's ablation ladder. This stage needs the `research` extra.
+Build `prec_` factors from the libraries as Qlib features, so the precedent estimate can enter the Qlib dataset (`06_dataset`) and the spine's ablation ladder (`08_evaluate`). This stage needs the `research` extra.
 
 ## Inputs
 | Path or source | Layer | Authority | Required | Relevant section |
@@ -19,7 +19,7 @@ Build `prec_` factors from the libraries as Qlib features, so the precedent esti
 ## Outputs
 | Path | Schema or format | Consumer |
 |---|---|---|
-| `stages/22_precedent_factors/output/prec_factors.parquet` | Index (session, instrument), one column per `prec_` factor | Spine `06_ablation` |
+| `stages/22_precedent_factors/output/prec_factors.parquet` | Index (session, instrument), one column per `prec_` factor | Qlib handler in `06_dataset`; the M2 rung scored by the ablation in `08_evaluate` |
 
 ## Verify
 - Truncation invariance: building on data cut at a session gives the same earlier rows (design 4.5).
@@ -27,7 +27,7 @@ Build `prec_` factors from the libraries as Qlib features, so the precedent esti
 - `uv run pytest -q` exits 0.
 
 ## Approval
-A human reviews the ablation result before any factor is used. No external action occurs in this stage.
+A human reviews the `08_evaluate` ablation result before any factor is used. No external action occurs in this stage.
 
 ## Failure Behavior
 A factor that depends on a row from the future stops the stage with the factor name and session. A missing library file stops the stage with its path. No retries. Output is written atomically.

@@ -48,10 +48,18 @@ def key_from_flags(
     _require_member("actor_kind", actor_kind, (member.value for member in ActorKind))
     _require_member("severity_band", severity_band, get_args(SeverityBand))
     _require_member("country_group", country_group, get_args(CountryGroup))
+    if isinstance(impacted_kinds, str):
+        raise ValueError(
+            f"impacted_kinds must be a collection of kinds, not a single string: {impacted_kinds!r}"
+        )
     kinds = tuple(impacted_kinds)
     for kind in kinds:
         _require_member("impacted_kinds", kind, (member.value for member in ImpactKind))
+    if isinstance(direction_sign, bool):
+        raise ValueError(f"unknown direction_sign: {direction_sign!r}; expected one of -1, 0, 1")
     _require_member("direction_sign", direction_sign, _DIRECTION_SIGNS)
+    if not isinstance(is_scheduled, bool):
+        raise ValueError(f"unknown is_scheduled: {is_scheduled!r}; expected a bool")
     return EventKey(
         event_type=event_type,
         actor_kind=actor_kind,

@@ -74,3 +74,19 @@ def test_typed_as_line():
 def test_match_fields_order():
     k = key_from_flags("central_bank", "central_bank", "high", False, country_group="US")
     assert match_fields(k) == ("central_bank", "central_bank", "US", "high", False)
+
+
+def test_key_from_flags_rejects_a_bool_direction_sign():
+    with pytest.raises(ValueError, match="unknown direction_sign"):
+        key_from_flags(**{**GOOD, "direction_sign": True})
+
+
+@pytest.mark.parametrize("value", [1, 0, "yes", None])
+def test_key_from_flags_rejects_a_non_bool_is_scheduled(value):
+    with pytest.raises(ValueError, match="unknown is_scheduled"):
+        key_from_flags(**{**GOOD, "is_scheduled": value})
+
+
+def test_key_from_flags_rejects_a_bare_string_for_impacted_kinds():
+    with pytest.raises(ValueError, match="not a single string"):
+        key_from_flags(**GOOD, impacted_kinds="sector")
