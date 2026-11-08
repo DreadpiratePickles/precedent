@@ -3,8 +3,9 @@ and writes what changed since the previous session as a note and a structured tw
 
 For session `t` the steps are: (1) build rule claims from the records and links visible at `t`'s
 cutoff and append the new ones; (2) expire the claims that have run past the dated rule;
-(3) run the tension and shift detectors as of the cutoff; (4) close the tensions whose claims no
-longer all hold; (5) write `dreams/dream_<t>.md` and `.jsonl`. The note is read back from the
+(3) run the tension and shift detectors as of the cutoff and store what they found (a tension is
+its group: new, restated members, or reopened; D72); (4) close the tensions that no longer hold,
+each by its kind's own test; (5) write `dreams/dream_<t>.md` and `.jsonl`. The note is read back from the
 stores, never from what this run appended, so a re-run, or a backfill of an old session, gives
 the same bytes. No wall-clock time reaches any output: stored times are session cutoffs.
 """
@@ -22,7 +23,7 @@ from typing import Any
 import pandas as pd
 
 from precedent import config
-from precedent.dream.claim_schema import Shift
+from precedent.dream.claim_schema import Shift, Tension, TensionKind
 from precedent.dream.claim_store import (
     ClaimStore,
     ConflictError,
@@ -30,6 +31,7 @@ from precedent.dream.claim_store import (
     ShiftStore,
     TensionStore,
     claims_asof,
+    tensions_asof,
 )
 from precedent.dream.detectors import abnormal_returns_panel, run_detectors
 from precedent.dream.inputs import DreamStores, load_detector_params
@@ -41,7 +43,7 @@ from precedent.dream.report_render import (
 )
 from precedent.dream.rule_claims import claims_from_events, claims_from_links
 from precedent.dream.shifts import run_shift_detectors
-from precedent.ripple.link_store import Link, LinkStore
+from precedent.ripple.link_store import GRAPH_COLUMNS, Link, LinkStore, graph_asof
 from precedent.spine.event_record import EventRecord
 from precedent.spine.event_store import EventStore
 from precedent.spine.gdelt_events import SOURCE_NAME as GDELT_SOURCE
@@ -149,13 +151,16 @@ def _load_events(root: Path, parser_version: str | None) -> list[EventRecord]:
 
 
 def _visible_at(records: list[EventRecord], cutoff: datetime) -> list[EventRecord]:
-    """The records a reader at `cutoff` had: available and ingested by then."""
+    """The records a reader at `cutoff` had: available by then (D69).
+
+    Knowledge time is the spine's `available_utc` (the later of published and first seen, plus
+    latency). `ingested_utc` is audit-only there, so it is no gate: a nightly that ingests after
+    the cutoff, or a bulk backfill, must still see the session's own documents.
+    """
     return [
         record
         for record in records
-        if record.available_utc is not None
-        and record.available_utc <= cutoff
-        and record.ingested_utc <= cutoff
+        if record.available_utc is not None and record.available_utc <= cutoff
     ]
 
 
@@ -239,10 +244,15 @@ def _write_dream(args: argparse.Namespace) -> dict[str, Any]:
         session_cutoffs_utc=axis,
     )
     tensions, detected = run_detectors(stores, session, axis, params, abnormal_returns=panel)
-    tension_store.append(tensions)
+    _record_tensions(tension_store, tensions, session, cutoff)
     shifts, shift_report = run_shift_detectors(stores, session, axis, params)
     _record_shifts(shift_store, shifts, session, cutoff)
-    _close_lapsed_tensions(claim_store, tension_store, session, cutoff)
+    graph = (
+        graph_asof(link_store, pd.Timestamp(cutoff))
+        if link_store is not None
+        else pd.DataFrame(columns=GRAPH_COLUMNS)
+    )
+    _close_lapsed_tensions(claim_store, tension_store, tensions, graph, session, cutoff)
 
     previous = axis.iloc[-2].to_pydatetime() if len(axis) > 1 else None
     sections = build_sections(
@@ -305,18 +315,58 @@ def _record_shifts(store: ShiftStore, shifts: list[Shift], session: date, cutoff
             store.refire(shift.shift_id, shift.statistic, session, cutoff)
 
 
-def _close_lapsed_tensions(
-    claims: ClaimStore, tensions: TensionStore, session: date, cutoff: datetime
+def _record_tensions(
+    store: TensionStore, found: list[Tension], session: date, cutoff: datetime
 ) -> None:
-    """Close each open tension, opened by this session or an earlier one, that has lapsed.
+    """Store what the detectors found: a new tension, a changed membership, or a recurrence.
 
-    A tension lapses when any of its claims is no longer visible at the cutoff.
+    A tension is its group (D72). A group already open as of the cutoff keeps its record and, when
+    its claims changed, gets a `restate_members` line; one closed as of the cutoff is reopened.
+    The comparison is with the store as of this cutoff, so a replay adds nothing.
+    """
+    stored = {t.tension_id: t for t in tensions_asof(store, cutoff)}
+    unseen: list[Tension] = []
+    for tension in sorted(found, key=lambda t: t.tension_id):
+        known = stored.get(tension.tension_id)
+        if known is None:
+            unseen.append(tension)
+        elif known.status == "closed":
+            store.reopen(tension.tension_id, session, tension.claim_ids, cutoff)
+        elif sorted(known.claim_ids) != sorted(tension.claim_ids):
+            store.restate_members(tension.tension_id, tension.claim_ids, cutoff)
+    store.append(unseen)
+
+
+def _close_lapsed_tensions(
+    claims: ClaimStore,
+    tensions: TensionStore,
+    found: list[Tension],
+    graph: pd.DataFrame,
+    session: date,
+    cutoff: datetime,
+) -> None:
+    """Close each open tension, opened by this session or an earlier one, that no longer holds.
+
+    The test is the kind's own (D72). A value_conflict holds while the visible claims of its
+    group still conflict across two documents (it is among `found`); an asymmetric_link holds
+    while a customer claim of its pair is visible and no supplier_of link back exists; a
+    text_vs_price or stale_reliance tension holds while its claims are all visible.
     """
     visible = set(claims_asof(claims, cutoff)["claim_id"])
-    for tension in sorted(tensions.latest(), key=lambda t: t.tension_id):
-        if (
-            tension.status != "closed"
-            and tension.opened_session <= session
-            and not set(tension.claim_ids) <= visible
-        ):
+    conflicting = {t.tension_id for t in found if t.kind is TensionKind.value_conflict}
+    supplied_back = {
+        (row.source_node, row.receiver_node)
+        for row in graph[graph["relation"] == "supplier_of"].itertuples()
+    }
+    for tension in sorted(tensions_asof(tensions, cutoff), key=lambda t: t.tension_id):
+        if tension.status == "closed" or tension.opened_session > session:
+            continue
+        if tension.kind is TensionKind.value_conflict:
+            holds = tension.tension_id in conflicting
+        elif tension.kind is TensionKind.asymmetric_link:
+            source, receiver = tension.group_key.split("|customer_of|")
+            holds = set(tension.claim_ids) <= visible and (receiver, source) not in supplied_back
+        else:
+            holds = set(tension.claim_ids) <= visible
+        if not holds:
             tensions.close(tension.tension_id, session, cutoff)

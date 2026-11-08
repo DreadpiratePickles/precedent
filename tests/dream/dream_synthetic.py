@@ -85,6 +85,42 @@ def edgar_record(
     )
 
 
+def plant_capex_conflict(
+    out: Path,
+    first: str = "2024-06-03T14:30:00Z",
+    second: str = "2024-06-03T15:00:00Z",
+    valid_to: str | None = "2024-06-06T20:00:00Z",
+) -> None:
+    """Two documents that disagree about ACME's capex, stored as claims under `out`.
+
+    Dream's rules parser builds no typed conflict (event_direction is excluded from
+    value_conflict, D72), so a value_conflict test plants the claims a model parser would.
+    """
+    from precedent.dream.claim_schema import Claim
+    from precedent.dream.claim_store import ClaimStore
+
+    def claim(value: str, doc: str, when: str, span: str) -> Claim:
+        return Claim(
+            subject="ACME",
+            attribute="capex_direction",
+            period="current_quarter",
+            value=value,
+            valid_from_utc=at(when),
+            valid_to_utc=at(valid_to) if valid_to else None,
+            recorded_utc=at(when),
+            source_doc_id=doc,
+            evidence_span=span,
+            extractor_version="rules-test-v1",
+        )
+
+    ClaimStore(out / "claims").append(
+        [
+            claim("up", "8K-ACME-A", first, "Acme will raise capex"),
+            claim("down", "8K-ACME-B", second, "Acme will cut capex"),
+        ]
+    )
+
+
 def write_events(root: Path, records: list[EventRecord]) -> None:
     root.mkdir(parents=True, exist_ok=True)
     EventStore(root).append(records)

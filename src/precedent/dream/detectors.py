@@ -3,8 +3,8 @@
 No model runs here. Each detector reads frames the stores already produce (`claims_asof`,
 `graph_asof`, an abnormal-returns panel) and returns tensions for one session; `run_detectors`
 stamps them with the session and its cutoff but appends nothing to any store. A tension's id is
-a content hash, so the same tension found on two sessions is one record, first opened by the
-earlier session.
+a hash of its kind and the group it is about (D72), so the same tension found on two sessions is
+one record, first opened by the earlier session, whichever claims make it up on each.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ ASYMMETRIC_LINK_NOTE = (
 )
 _MIN_MARKET_VARIANCE = 1e-18  # the floor `abnormal_returns` applies to the market's variance
 _DIRECTION_SIGN = {"positive": 1.0, "negative": -1.0}
+_EXCLUDED_FROM_CONFLICT = "event_direction"
 _LINK_CLAIM_ATTRIBUTE = {
     "supplier_of": "supplier_relationship",
     "customer_of": "customer_relationship",
@@ -79,6 +80,7 @@ def _standalone_recorded_utc(session: date) -> datetime:
 
 def _tension(
     kind: TensionKind,
+    group_key: str,
     claim_ids: list[str],
     subject: str,
     session: date,
@@ -87,6 +89,7 @@ def _tension(
 ) -> Tension:
     return Tension(
         kind=kind,
+        group_key=group_key,
         claim_ids=sorted(claim_ids),
         subject=subject,
         opened_session=session,
@@ -98,14 +101,29 @@ def _tension(
     )
 
 
+def conflict_group_key(subject: str, attribute: str, period: str) -> str:
+    return f"{subject}|{attribute}|{period}"
+
+
+def asymmetric_group_key(source_node: str, receiver_node: str) -> str:
+    return f"{source_node}|customer_of|{receiver_node}"
+
+
 def detect_value_conflicts(
     claims: pd.DataFrame, session: date, *, recorded_utc: datetime | None = None
 ) -> list[Tension]:
     """One tension per (subject, attribute, period) holding claims from different documents
     whose values form a conflicting pair. A document never conflicts with itself, and a claim
-    in another period or about another subject is not compared."""
+    in another period or about another subject is not compared.
+
+    `event_direction` takes no part (D72): the sign of a story is compared with the price by
+    `text_vs_price` and followed over time by `direction_drift`, and opposite-sign news of
+    unrelated event types about one name is not a conflict. The tension is identified by its
+    group, so a later document joining the group changes its members, not its identity.
+    """
     pairs = _conflicting_pairs()
     tensions: list[Tension] = []
+    claims = claims[claims["attribute"] != _EXCLUDED_FROM_CONFLICT]
     for (subject, attribute, period), group in claims.groupby(
         ["subject", "attribute", "period"], sort=True
     ):
@@ -131,6 +149,7 @@ def detect_value_conflicts(
             tensions.append(
                 _tension(
                     TensionKind.value_conflict,
+                    conflict_group_key(str(subject), str(attribute), str(period)),
                     list(involved),
                     str(subject),
                     session,
@@ -189,6 +208,7 @@ def detect_text_vs_price(
             tensions.append(
                 _tension(
                     TensionKind.text_vs_price,
+                    claim_id,
                     [claim_id],
                     str(subject),
                     session,
@@ -267,8 +287,10 @@ def detect_asymmetric_links(
 ) -> tuple[list[Tension], int]:
     """A `customer_of` link A to B with no `supplier_of` link B to A in the graph.
 
-    The tension's claim is the link's own relationship claim; a link whose claim is not in
-    `claims` is skipped, and the count of those skipped is returned beside the tensions.
+    One tension per ordered pair (D72); its claim is the relationship claim of the link now in
+    the graph for the pair, so a restating filing changes the members, not the tension. A link
+    whose claim is not in `claims` is skipped, and the count of those skipped is returned beside
+    the tensions.
     """
     reciprocal = {
         (row.source_node, row.receiver_node)
@@ -280,9 +302,11 @@ def detect_asymmetric_links(
     for row in graph[graph["relation"] == "customer_of"].itertuples():
         if (row.receiver_node, row.source_node) in reciprocal:
             continue
-        subject = link_id_for(row.source_node, row.receiver_node, "customer_of", row.source_doc_id)
+        link_subject = link_id_for(
+            row.source_node, row.receiver_node, "customer_of", row.source_doc_id
+        )
         claim_id = claim_id_for(
-            subject, "customer_relationship", "unspecified", "ongoing", row.source_doc_id
+            link_subject, "customer_relationship", "unspecified", "ongoing", row.source_doc_id
         )
         if claim_id not in known_claims:
             skipped_without_claim += 1
@@ -292,9 +316,10 @@ def detect_asymmetric_links(
             "receiver_node": row.receiver_node,
             "note": ASYMMETRIC_LINK_NOTE,
         }
+        pair = asymmetric_group_key(row.source_node, row.receiver_node)
         tensions.append(
             _tension(
-                TensionKind.asymmetric_link, [claim_id], subject, session, recorded_utc, details
+                TensionKind.asymmetric_link, pair, [claim_id], pair, session, recorded_utc, details
             )
         )
     return tensions, skipped_without_claim
@@ -345,7 +370,13 @@ def detect_stale_reliance(
         }
         tensions.append(
             _tension(
-                TensionKind.stale_reliance, [claim_id], subject, session, recorded_utc, details
+                TensionKind.stale_reliance,
+                subject,
+                [claim_id],
+                subject,
+                session,
+                recorded_utc,
+                details,
             )
         )
     return tensions

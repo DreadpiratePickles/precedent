@@ -140,7 +140,7 @@ def _event_claim(
         value=value,
         valid_from_utc=valid_from,
         valid_to_utc=valid_to_utc,
-        recorded_utc=max(valid_from, record.ingested_utc),
+        recorded_utc=valid_from,  # D69: knowledge time is available_utc, not the ingest clock
         source_doc_id=record.article_id,
         evidence_span=record.event.evidence_span,
         extractor_version=EVENTS_EXTRACTOR_VERSION,

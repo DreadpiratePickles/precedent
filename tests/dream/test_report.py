@@ -9,6 +9,7 @@ from dream_synthetic import (
     edgar_record,
     gdelt_record,
     hash_tree,
+    plant_capex_conflict,
     session_cutoffs,
     write_events,
     write_prices,
@@ -58,13 +59,49 @@ def test_dream_is_idempotent(tmp_path, populated_stores):
 
 
 def test_backfilled_dream_equals_live_dream(tmp_path, populated_stores_with_late_backfill):
-    # a document about 2024-06-03 was only ingested in September; the June dream must not see it
+    # a document about 2024-06-03 first reached the feed in September (D69: late through its
+    # first_seen/available time); the June dream must not see it
     assert dream(tmp_path) == 0
     june = markdown(tmp_path)
     assert "LATE-DOC" not in june
-    # the late record is not counted as a document of the session either (it was not ingested yet)
+    # the late record is not counted as a document of the session either (not yet available)
     assert "documents ingested: 3;" in june.splitlines()[0]
     assert "LATE-DOC" not in (tmp_path / "claims" / "claims.jsonl").read_text()
+
+
+@pytest.mark.parametrize(
+    "ingested",
+    ["2024-06-04T08:30:00Z", "2026-11-08T09:00:00Z"],
+    ids=["nightly_next_morning", "bulk_backfill_long_after"],
+)
+def test_documents_ingested_after_the_cutoff_are_still_seen_by_their_session(
+    tmp_path, monkeypatch, ingested
+):
+    # D69: knowledge time is available_utc; ingest wall-clock time is no gate (C1)
+    monkeypatch.setenv("PRECEDENT_DATA_DIR", str(tmp_path / "data"))
+    write_events(
+        tmp_path / "data" / "events",
+        [
+            gdelt_record(100, "2024-05-31T15:00:00Z", instrument="BETA", ingested=ingested),
+            gdelt_record(
+                101, "2024-06-03T14:00:00Z", span="Acme raised its outlook", ingested=ingested
+            ),
+            gdelt_record(
+                102,
+                "2024-06-03T15:30:00Z",
+                event_type="labor",
+                direction=-1.0,
+                span="Acme announced layoffs",
+                ingested=ingested,
+            ),
+        ],
+    )
+    out = tmp_path / "out"
+    assert dream(out) == 0
+    text = markdown(out)
+    assert "documents ingested: 2; feed gap: no" in text.splitlines()[0]
+    assert "feed gap: yes" not in text
+    assert text.count("- [claim]") >= 2
 
 
 def test_a_september_run_that_stores_the_late_claim_leaves_the_june_dream_unchanged(
@@ -81,15 +118,14 @@ def test_a_september_run_that_stores_the_late_claim_leaves_the_june_dream_unchan
     assert (tmp_path / "dreams" / "dream_2024-06-03.jsonl").read_bytes() == june_jsonl
 
 
-def test_every_tension_line_names_its_documents(tmp_path, populated_stores):
+def test_every_tension_line_names_its_documents(tmp_path, conflicted_stores):
     dream(tmp_path)
     lines = item_lines(markdown(tmp_path))
     assert lines and all("(" in line and ")" in line for line in lines)
     conflict = next(line for line in lines if line.startswith("- [value_conflict]"))
     assert conflict == (
-        "- [value_conflict] ACME event_direction unspecified: "
-        'negative (gdelt:102, "Acme announced a round of layoffs") vs '
-        'positive (gdelt:101, "Acme raised its full-year outlook")'
+        "- [value_conflict] ACME capex_direction current_quarter: "
+        'down (8K-ACME-B, "Acme will cut capex") vs up (8K-ACME-A, "Acme will raise capex")'
     )
     link = next(line for line in lines if line.startswith("- [asymmetric_link]"))
     assert "ACME -> BIGCO" in link and '(10K-ACME-2023, "Customer A accounted' in link
@@ -113,11 +149,12 @@ def test_feed_gap_session_says_so(tmp_path, stores_with_gap):
 # --- layout and the structured twin ------------------------------------------------------------
 
 
-def test_markdown_layout_and_counts(tmp_path, populated_stores):
+def test_markdown_layout_and_counts(tmp_path, conflicted_stores):
     dream(tmp_path)
     lines = markdown(tmp_path).splitlines()
     assert lines[0] == "# Dream for 2024-06-03   (documents ingested: 3; feed gap: no)"
-    counts = {"Opened tensions": 2, "New claims": 4}  # a value conflict and an asymmetric link
+    # a value conflict and an asymmetric link; four rule-built claims and the two planted ones
+    counts = {"Opened tensions": 2, "New claims": 6}
     assert [h for h in lines if h.startswith("## ")] == [
         f"## {name} ({counts.get(name, 0)})" for name in SECTIONS
     ]
@@ -137,7 +174,7 @@ def test_new_claims_are_those_recorded_in_the_session_window(tmp_path, populated
     assert "ACME event_direction unspecified: positive (gdelt:101" in claims
 
 
-def test_jsonl_has_header_items_in_markdown_order_and_footer(tmp_path, populated_stores):
+def test_jsonl_has_header_items_in_markdown_order_and_footer(tmp_path, conflicted_stores):
     dream(tmp_path)
     rows = [
         json.loads(line)
@@ -147,10 +184,10 @@ def test_jsonl_has_header_items_in_markdown_order_and_footer(tmp_path, populated
     assert header["type"] == "header" and header["session"] == SESSION
     assert header["documents_ingested"] == 3 and header["feed_gap"] is False
     assert header["cutoff_utc"] == "2024-06-03T20:00:00+00:00"
-    assert header["counts"]["opened_tensions"] == 2 and header["counts"]["new_claims"] == 4
+    assert header["counts"]["opened_tensions"] == 2 and header["counts"]["new_claims"] == 6
     assert footer == {"type": "footer", "disclaimer": DISCLAIMER}
     assert [r["text"] for r in items] == item_lines(markdown(tmp_path))  # same items, same order
-    assert [r["type"] for r in items] == ["opened_tension"] * 2 + ["new_claim"] * 4
+    assert [r["type"] for r in items] == ["opened_tension"] * 2 + ["new_claim"] * 6
     tension = next(r for r in items if r["type"] == "opened_tension")
     assert tension["tension_id"] and tension["claim_ids"]
 
@@ -227,20 +264,23 @@ def test_an_annual_claim_expires_after_fifteen_months_and_its_tension_closes(tmp
     assert lines >= 2
 
 
-def test_a_tension_closes_when_its_story_window_claim_expires(tmp_path, populated_stores):
-    dream(tmp_path)  # opens the ACME positive-versus-negative conflict on 2024-06-03
-    dream(tmp_path, "2024-06-06")  # three sessions later both event claims have ended
+def test_a_tension_closes_when_its_claims_expire(tmp_path, conflicted_stores):
+    dream(tmp_path)  # opens the ACME capex up-versus-down conflict on 2024-06-03
+    dream(tmp_path, "2024-06-06")  # three sessions later both claims have ended
     closed = markdown(tmp_path, "2024-06-06").split("## Closed tensions")[1].split("## Silent")[0]
-    assert "[value_conflict] ACME event_direction" in closed
+    assert "[value_conflict] ACME capex_direction" in closed
     statuses = {t.kind.value: t.status for t in TensionStore(tmp_path / "tensions").latest()}
     assert statuses["value_conflict"] == "closed" and statuses["asymmetric_link"] == "open"
 
 
 def test_re_running_an_earlier_session_does_not_close_a_later_tension(tmp_path, stores_with_gap):
-    assert dream(tmp_path, "2024-06-05") == 0  # 200 positive and 201 negative conflict on 06-05
+    plant_capex_conflict(
+        tmp_path, "2024-06-05T14:00:00Z", "2024-06-05T15:00:00Z", valid_to=None
+    )  # two documents disagree from 06-05
+    assert dream(tmp_path, "2024-06-05") == 0
     [opened] = TensionStore(tmp_path / "tensions").latest()
     assert opened.opened_session == date(2024, 6, 5) and opened.status == "open"
-    assert dream(tmp_path, "2024-06-03") == 0  # claim 201 is not yet visible at that cutoff
+    assert dream(tmp_path, "2024-06-03") == 0  # the planted claims are not yet visible
     [again] = TensionStore(tmp_path / "tensions").latest()
     assert again.status == "open"
 
@@ -445,7 +485,7 @@ def test_a_malformed_store_line_exits_one_and_names_the_file(tmp_path, populated
     assert not (tmp_path / "dreams").exists()
 
 
-def test_json_flag_prints_one_machine_readable_summary(tmp_path, populated_stores, capsys):
+def test_json_flag_prints_one_machine_readable_summary(tmp_path, conflicted_stores, capsys):
     assert dream(tmp_path, SESSION, "--json") == 0
     summary = json.loads(capsys.readouterr().out)
     assert summary["session"] == SESSION and summary["counts"]["opened_tensions"] == 2
@@ -455,7 +495,7 @@ def test_json_flag_prints_one_machine_readable_summary(tmp_path, populated_store
 # --- the morning view -----------------------------------------------------------------------------------------
 
 
-def test_diff_between_shows_what_changed_across_sessions(tmp_path, populated_stores):
+def test_diff_between_shows_what_changed_across_sessions(tmp_path, conflicted_stores):
     dream(tmp_path)
     dream(tmp_path, "2024-06-06")
     a = tmp_path / "dreams" / "dream_2024-06-03.md"
@@ -543,7 +583,7 @@ def test_replaying_a_session_after_its_shift_was_re_fired_later_gives_the_same_b
 
 
 def test_replaying_sessions_after_a_tension_was_closed_later_gives_the_same_bytes(
-    tmp_path, populated_stores
+    tmp_path, conflicted_stores
 ):
     assert dream(tmp_path) == 0
     opened_on = dream_bytes(tmp_path, SESSION)
@@ -557,7 +597,7 @@ def test_replaying_sessions_after_a_tension_was_closed_later_gives_the_same_byte
 
 
 def test_replaying_a_session_after_its_resolution_was_decided_later_gives_the_same_bytes(
-    tmp_path, populated_stores
+    tmp_path, conflicted_stores
 ):
     from precedent.dream.claim_schema import Resolution
     from precedent.dream.claim_store import ResolutionStore
@@ -589,7 +629,7 @@ def test_replaying_a_session_after_its_resolution_was_decided_later_gives_the_sa
 
 
 def test_replaying_a_session_after_a_proposal_was_appended_later_gives_the_same_bytes(
-    tmp_path, populated_stores
+    tmp_path, conflicted_stores
 ):
     """D61: a resolution is visible by when it was recorded, not by its business-time stamp."""
     from precedent.dream.claim_schema import Resolution

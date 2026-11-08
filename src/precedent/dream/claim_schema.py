@@ -112,9 +112,15 @@ def link_id_for(
     return _digest(source_node, receiver_node, _text(relation), source_doc_id)
 
 
-def tension_id_for(kind: TensionKind | str, claim_ids: list[str], subject: str) -> str:
-    """The tension id; the claim ids are sorted first so their order does not matter."""
-    return _digest(_text(kind), *sorted(claim_ids), subject)
+def tension_id_for(kind: TensionKind | str, group_key: str) -> str:
+    """The tension id (D72): the kind and the group the tension is about, never its members.
+
+    The group key is `subject|attribute|period` for a value_conflict, `A|customer_of|B` for an
+    asymmetric_link, the claim id for a text_vs_price tension and the link id for a
+    stale_reliance one. Which claims make the group up is lifecycle (`restate_members`), so a
+    third document joining a conflict, or a restated link, is the same tension.
+    """
+    return _digest(_text(kind), group_key)
 
 
 def shift_id_for(kind: ShiftKind | str, subject: str) -> str:
@@ -170,7 +176,8 @@ class Tension(BaseModel):
     model_config = ConfigDict(extra="forbid")
     tension_id: str = ""
     kind: TensionKind
-    claim_ids: list[str] = Field(min_length=1)
+    group_key: str = Field(min_length=1)  # what the tension is about; see `tension_id_for`
+    claim_ids: list[str] = Field(min_length=1)  # the members now; changes by `restate_members`
     subject: str
     opened_session: date
     detector_version: str
@@ -186,7 +193,7 @@ class Tension(BaseModel):
         if (self.status == "closed") != (self.closed_session is not None):
             raise ValueError("closed_session is set exactly when status is 'closed'")
         _check_or_fill_id(
-            self, "tension_id", tension_id_for(self.kind, self.claim_ids, self.subject)
+            self, "tension_id", tension_id_for(self.kind, self.group_key)
         )
         return self
 

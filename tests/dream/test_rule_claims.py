@@ -190,14 +190,17 @@ def test_reports_further_apart_than_the_window_emit_two_claims():
     assert report.repeat_reports_skipped == 0
 
 
-def test_recorded_utc_is_the_ingest_time_when_ingestion_is_later():
-    late = record_with_impact("AAPL", 1.0, "2024-02-01T21:35:00Z", ingested="2024-03-01T10:00:00Z")
-    [c] = claims_from_events([late])
-    assert c.recorded_utc == utc("2024-03-01T10:00:00Z")
-    early = record_with_impact(
+def test_recorded_utc_is_valid_from_whatever_the_ingest_time():
+    # D69: ingest wall-clock time (audit-only in the spine) is no knowledge time
+    late_ingest = record_with_impact(
+        "AAPL", 1.0, "2024-02-01T21:35:00Z", ingested="2024-03-01T10:00:00Z"
+    )
+    [c] = claims_from_events([late_ingest])
+    assert c.recorded_utc == c.valid_from_utc == utc("2024-02-01T21:35:00Z")
+    early_ingest = record_with_impact(
         "AAPL", 1.0, "2024-02-01T21:35:00Z", article_id="gdelt:2", ingested="2024-01-01T00:00:00Z"
     )
-    [d] = claims_from_events([early])
+    [d] = claims_from_events([early_ingest])
     assert d.recorded_utc == d.valid_from_utc
 
 

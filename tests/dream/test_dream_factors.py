@@ -36,6 +36,7 @@ def make_tension(
     details = {} if claim_value is None else {"claim_value": claim_value}
     return Tension(
         kind=kind,
+        group_key=f"{subject}|{claim_id}",
         claim_ids=[claim_id, claim_id + "b"] if kind == "value_conflict" else [claim_id],
         subject=subject,
         opened_session=session_date(position),
@@ -286,6 +287,7 @@ def test_a_session_off_the_calendar_moves_to_the_next_session_and_one_past_the_e
     saturday = dt.date(2024, 1, 6)
     on_weekend = Tension(
         kind="stale_reliance",
+        group_key="w",
         claim_ids=["w"],
         subject="ACME",
         opened_session=saturday,
@@ -294,6 +296,7 @@ def test_a_session_off_the_calendar_moves_to_the_next_session_and_one_past_the_e
     )
     after_end = Tension(
         kind="stale_reliance",
+        group_key="z",
         claim_ids=["z"],
         subject="BOLT",
         opened_session=session_date(39) + timedelta(days=3),

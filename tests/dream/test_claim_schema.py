@@ -54,6 +54,7 @@ def make_claim(
 def make_tension(claim_ids=("a", "b"), kind="value_conflict", **overrides) -> Tension:
     fields = {
         "kind": kind,
+        "group_key": "ACME|capex_direction|unspecified",
         "claim_ids": list(claim_ids),
         "subject": "ACME",
         "opened_session": date(2024, 3, 4),
@@ -131,10 +132,16 @@ def test_claim_rejects_values_outside_the_vocabulary():
         make_claim(period="someday")
 
 
-def test_tension_id_ignores_claim_order_and_is_validated():
+def test_tension_id_is_the_group_and_not_its_members_and_is_validated():
+    # D72: the id is the kind and the group key; the members are lifecycle
+    group = "ACME|capex_direction|unspecified"
     tension = make_tension(claim_ids=("b", "a"))
-    assert tension.tension_id == tension_id_for(TensionKind.value_conflict, ["a", "b"], "ACME")
-    assert tension.tension_id == make_tension(claim_ids=("a", "b")).tension_id
+    assert tension.tension_id == tension_id_for(TensionKind.value_conflict, group)
+    assert tension.tension_id == make_tension(claim_ids=("a", "b", "c")).tension_id
+    assert (
+        tension.tension_id != make_tension(group_key="ACME|capex_direction|fiscal_year").tension_id
+    )
+    assert tension.tension_id != make_tension(kind="stale_reliance").tension_id
     with pytest.raises(ValidationError):
         make_tension(tension_id="wrong")
 

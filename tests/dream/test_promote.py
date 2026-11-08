@@ -63,6 +63,7 @@ def make_world(root: Path, hypothesis: str = "one_is_stale", names: str | None =
     newer = claim("down", NEWER_FROM, "doc-new", "capex will fall")
     tension = Tension(
         kind="value_conflict",
+        group_key="ACME|capex_direction|current_quarter",
         claim_ids=[older.claim_id, newer.claim_id],
         subject="ACME",
         opened_session=date(2024, 5, 2),

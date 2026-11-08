@@ -29,7 +29,7 @@ CLAIM_IDENTITY_FIELDS = (
     "evidence_span",
     "extractor_version",
 )
-TENSION_IDENTITY_FIELDS = ("kind", "claim_ids", "subject")
+TENSION_IDENTITY_FIELDS = ("kind", "group_key", "subject")  # members are lifecycle (D72)
 SHIFT_IDENTITY_FIELDS = ("kind", "subject")
 RESOLUTION_IDENTITY_FIELDS = ("tension_id", "hypothesis", "evidence_span", "proposer_version")
 
@@ -173,6 +173,41 @@ class TensionStore(_AppendOnlyStore[Tension]):
 
         return self._append_update(tension_id, change)
 
+    def restate_members(
+        self, tension_id: str, claim_ids: list[str], recorded_utc: datetime
+    ) -> Tension:
+        """Record that the claims behind a tension are now `claim_ids` (D72).
+
+        The status and the opening session stay as they are. A closed tension cannot change.
+        """
+
+        def change(latest: Tension) -> dict[str, Any]:
+            self._refuse_if_closed(latest)
+            return {"claim_ids": sorted(claim_ids), "recorded_utc": recorded_utc}
+
+        return self._append_update(tension_id, change)
+
+    def reopen(
+        self, tension_id: str, session: date, claim_ids: list[str], recorded_utc: datetime
+    ) -> Tension:
+        """Open a closed tension again when its group recurs: opened as of `session`.
+
+        Only a closed tension reopens; the earlier opening and closing stay in the store.
+        """
+
+        def change(latest: Tension) -> dict[str, Any]:
+            if latest.status != "closed":
+                raise ConflictError(f"tension {latest.tension_id!r} is not closed")
+            return {
+                "status": "open",
+                "closed_session": None,
+                "opened_session": session,
+                "claim_ids": sorted(claim_ids),
+                "recorded_utc": recorded_utc,
+            }
+
+        return self._append_update(tension_id, change)
+
     def acknowledge(self, tension_id: str, recorded_utc: datetime) -> Tension:
         """Mark a tension as seen by the owner, without closing it."""
 
@@ -243,6 +278,15 @@ def supersede(
 ) -> Claim:
     """Expire `old_claim_id` in `store`; see `ClaimStore.supersede`."""
     return store.supersede(old_claim_id, new_claim_id, at_utc, reason)
+
+
+def tensions_asof(store: TensionStore, cutoff_utc: datetime) -> list[Tension]:
+    """One record per tension id: the last one recorded by the cutoff (D13), first-seen order."""
+    known: dict[str, Tension] = {}
+    for tension in store.read_all():
+        if tension.recorded_utc <= cutoff_utc:
+            known[tension.tension_id] = tension
+    return list(known.values())
 
 
 _DATETIME_COLUMNS = ("valid_from_utc", "valid_to_utc", "recorded_utc")

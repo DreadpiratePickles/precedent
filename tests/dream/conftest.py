@@ -9,6 +9,7 @@ import pytest
 from dream_synthetic import (
     customer_link,
     gdelt_record,
+    plant_capex_conflict,
     write_events,
     write_links,
 )
@@ -62,17 +63,27 @@ def populated_stores(tmp_path, monkeypatch) -> DreamInputs:
 
 
 @pytest.fixture
+def conflicted_stores(tmp_path, populated_stores) -> DreamInputs:
+    """`populated_stores` plus two ACME capex claims that disagree, stored under `tmp_path`
+    (the `--out` the tests use), valid until the 2024-06-06 cutoff."""
+    plant_capex_conflict(tmp_path)
+    return populated_stores
+
+
+@pytest.fixture
 def populated_stores_with_late_backfill(tmp_path, monkeypatch) -> DreamInputs:
-    """`populated_stores` plus a June document that was only ingested in September."""
+    """`populated_stores` plus a document about June 3 that only reached the feed in September.
+
+    It is late through its `first_seen_utc`, so its `available_utc` is in September (D69).
+    """
     inputs = _inputs(tmp_path, monkeypatch)
     late = gdelt_record(
         9001,
-        "2024-06-03T13:00:00Z",
+        "2024-09-02T10:00:00Z",
         instrument="ACME",
         event_type="legal_regulatory",
         direction=-1.0,
         span="LATE-DOC says Acme faces a new probe",
-        ingested="2024-09-02T10:00:00Z",
     )
     write_events(inputs.event_root, [*_june_records(), late])
     write_links(inputs.link_root, [customer_link()])

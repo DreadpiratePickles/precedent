@@ -183,7 +183,9 @@ def test_a_group_with_several_conflicting_claims_opens_one_tension_with_all_of_t
     assert set(t.claim_ids) == expected and len(t.claim_ids) == 3
 
 
-def test_started_ended_and_positive_negative_also_conflict():
+def test_started_ended_conflict_but_event_direction_takes_no_part():
+    # D72: positive/negative news about one name is not a value conflict (text_vs_price and
+    # direction_drift own event_direction)
     claims = frame(
         [
             claim("ACME", "supplier_relationship", "started", doc="A", period="unspecified"),
@@ -193,10 +195,7 @@ def test_started_ended_and_positive_negative_also_conflict():
         ]
     )
     tensions = detect_value_conflicts(claims, SESSION)
-    assert sorted(t.details["attribute"] for t in tensions) == [
-        "event_direction",
-        "supplier_relationship",
-    ]
+    assert [t.details["attribute"] for t in tensions] == ["supplier_relationship"]
 
 
 def test_tension_id_is_stable_across_sessions():
@@ -391,7 +390,7 @@ def test_asymmetric_link_fires_on_a_one_sided_customer_link(tmp_path):
     claims = frame([link_claim("ACME", "BIGCO", "customer_of", "10K-ACME")])
     [t], skipped = detect_asymmetric_links(graph, claims, SESSION)
     assert skipped == 0 and t.kind == "asymmetric_link"
-    assert t.subject == link_id_for("ACME", "BIGCO", "customer_of", "10K-ACME")
+    assert t.subject == t.group_key == "ACME|customer_of|BIGCO"  # the ordered pair (D72)
     assert t.claim_ids == [claims.claim_id.iloc[0]]
     assert t.details["source_node"] == "ACME" and t.details["receiver_node"] == "BIGCO"
     assert "ASC 280" in str(t.details["note"])

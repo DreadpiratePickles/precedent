@@ -46,6 +46,7 @@ def claim(
 def tension(claim_ids=("a", "b"), kind="value_conflict", detector="dream-detect-v1") -> Tension:
     return Tension(
         kind=kind,
+        group_key="ACME|capex_direction|unspecified",
         claim_ids=list(claim_ids),
         subject="ACME",
         opened_session=date(2024, 3, 4),
