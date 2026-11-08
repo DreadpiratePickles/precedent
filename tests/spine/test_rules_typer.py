@@ -87,6 +87,20 @@ def test_comment_keys_are_ignored_and_unknown_event_types_are_a_config_error(tmp
         RulesTyper(_write(tmp_path, _rules({"not_a_type": {"include": ["x"]}})), None)
 
 
+def test_the_pronoun_us_is_not_a_country_but_the_abbreviation_is():
+    pronoun = RULES.type_text("Will Tesla beat earnings estimates this quarter? Tell us")
+    assert pronoun.status == "typed" and pronoun.key.country_group == "none"
+    for text in ("U.S. tariffs on steel hit exports", "Will the US cut rates?", "USA tariffs"):
+        typed = RULES.type_text(text)
+        assert typed.status == "typed" and typed.key.country_group == "US", text
+
+
+def test_a_missing_rules_file_is_a_config_error_naming_the_path(tmp_path):
+    missing = tmp_path / "nope.json"
+    with pytest.raises(ConfigError, match="nope.json"):
+        RulesTyper(missing, None)
+
+
 def _rules(event_types):
     full = {
         t: {"include": [], "exclude": [], "actor_kind": "company", "impacted_kinds": ["company"],

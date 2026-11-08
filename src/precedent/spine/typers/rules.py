@@ -58,6 +58,7 @@ class _RulesFile(BaseModel):
     severity: _SeverityRule
     scheduled: _ScheduleRule
     countries: dict[str, str] = Field(default_factory=dict)
+    countries_case_sensitive: dict[str, str] = Field(default_factory=dict)
     event_type_countries: dict[EventType, dict[str, str]] = Field(default_factory=dict)
 
 
@@ -68,13 +69,14 @@ def _strip_comments(value: object) -> object:
     return value
 
 
-def compile_phrase(phrase: str) -> re.Pattern[str]:
-    """Whole-word, case-insensitive pattern. Spaces match any whitespace run; a trailing `*`
-    lets the last word continue (`recall*` matches recalls and recalled)."""
+def compile_phrase(phrase: str, *, case_sensitive: bool = False) -> re.Pattern[str]:
+    """Whole-word pattern, case-insensitive unless asked. Spaces match any whitespace run; a
+    trailing `*` lets the last word continue (`recall*` matches recalls and recalled)."""
     stem = phrase[:-1] if phrase.endswith("*") else phrase
     body = r"\s+".join(re.escape(word) for word in stem.split())
     tail = r"\w*" if phrase.endswith("*") else ""
-    return re.compile(rf"(?<!\w){body}{tail}(?!\w)", re.IGNORECASE)
+    flags = 0 if case_sensitive else re.IGNORECASE
+    return re.compile(rf"(?<!\w){body}{tail}(?!\w)", flags)
 
 
 def _first_match(patterns: list[re.Pattern[str]], text: str) -> re.Match[str] | None:
@@ -96,8 +98,12 @@ class _CompiledType:
     countries: list[tuple[re.Pattern[str], str]]
 
 
-def _compile_countries(table: dict[str, str]) -> list[tuple[re.Pattern[str], str]]:
-    return [(compile_phrase(name), iso3) for name, iso3 in table.items()]
+def _compile_countries(
+    table: dict[str, str], *, case_sensitive: bool = False
+) -> list[tuple[re.Pattern[str], str]]:
+    return [
+        (compile_phrase(name, case_sensitive=case_sensitive), iso3) for name, iso3 in table.items()
+    ]
 
 
 class RulesTyper:
@@ -105,7 +111,10 @@ class RulesTyper:
         self, rules_path: Path | None = None, country_groups_path: Path | None = None
     ) -> None:
         path = rules_path or references_dir() / "typing_rules.json"
-        raw = path.read_bytes()
+        try:
+            raw = path.read_bytes()
+        except OSError as error:
+            raise ConfigError(f"cannot read typing rules at {path}: {error}") from error
         try:
             rules = _RulesFile.model_validate(_strip_comments(json.loads(raw)))
         except (ValueError, ValidationError) as error:
@@ -124,7 +133,10 @@ class RulesTyper:
             )
             for event_type, rule in rules.event_types.items()
         }
-        self._countries = _compile_countries(rules.countries)
+        self._countries = [
+            *_compile_countries(rules.countries),
+            *_compile_countries(rules.countries_case_sensitive, case_sensitive=True),
+        ]
         self._high = [compile_phrase(p) for p in rules.severity.high]
         self._low = [compile_phrase(p) for p in rules.severity.low]
         self._scheduled = [compile_phrase(p) for p in rules.scheduled.scheduled]

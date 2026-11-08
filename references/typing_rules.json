@@ -563,7 +563,6 @@
   "default": "unscheduled"
  },
  "countries": {
-  "us": "USA",
   "usa": "USA",
   "u.s.": "USA",
   "united states": "USA",
@@ -613,7 +612,12 @@
   "eurozone": "DEU",
   "euro area": "DEU",
   "ecb": "DEU",
-  "european central bank": "DEU"
+  "european central bank": "DEU",
+  "u.s": "USA"
+ },
+ "countries_case_sensitive": {
+  "_comment": "matched exactly as written, so the all-caps abbreviation US is the country and the pronoun 'us' is not",
+  "US": "USA"
  },
  "event_type_countries": {
   "central_bank": {

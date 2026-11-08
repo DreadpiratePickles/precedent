@@ -16,6 +16,9 @@ def test_typed_text_requires_a_key_exactly_when_typed():
         TypedText(status="typed", key=KEY, reason="", evidence_span=None, typer_version="v")
     with pytest.raises(ValidationError):
         TypedText(status="untyped", key=KEY, reason="", evidence_span=None, typer_version="v")
+    for status in ("untyped", "refused_invalid"):
+        with pytest.raises(ValidationError):
+            TypedText(status=status, key=None, reason="", evidence_span="x", typer_version="v")
     typed = TypedText(status="typed", key=KEY, reason="r", evidence_span="cuts", typer_version="v")
     assert typed.key == KEY
 

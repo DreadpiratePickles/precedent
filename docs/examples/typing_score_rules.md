@@ -1,4 +1,4 @@
-SYNTHETIC — typer rules-typing-v1:c3810867e3aa scored on the committed synthetic gold set, no external call
+SYNTHETIC — typer rules-typing-v1:e32b55c01c10 scored on the committed synthetic gold set, no external call
 
 ## Typing score
 

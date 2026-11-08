@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 from precedent.config import references_dir
 from precedent.spine.event_key import EventKey
-from precedent.spine.typers.base import TYPING_FIELDS, Typer
+from precedent.spine.typers.base import TYPING_FIELDS, TypedText, Typer
 
 Banner = Literal["SYNTHETIC", "LIVE", "NO LIVE RUN"]
 
@@ -69,13 +69,17 @@ def _field_score(correct: int, n_predicted: int, n_expected: int) -> FieldScore:
     )
 
 
-def score_typer(typer: Typer, cases: list[GoldCase]) -> TypingScore:
+def score_results(
+    cases: list[GoldCase], results: list[TypedText], typer_version: str
+) -> TypingScore:
+    """Score already-typed results; `results[i]` is the typer's answer for `cases[i]`."""
+    if len(cases) != len(results):
+        raise ValueError(f"{len(cases)} cases but {len(results)} results")
     n_expected = sum(c.expected_status == "typed" for c in cases)
     n_predicted = 0
     status_correct = 0
     field_correct = dict.fromkeys(TYPING_FIELDS, 0)
-    for case in cases:
-        result = typer.type_text(case.text)
+    for case, result in zip(cases, results, strict=True):
         if result.status != "typed" or result.key is None:
             continue
         n_predicted += 1
@@ -87,7 +91,7 @@ def score_typer(typer: Typer, cases: list[GoldCase]) -> TypingScore:
             if getattr(result.key, name) == getattr(expected, name):
                 field_correct[name] += 1
     return TypingScore(
-        typer_version=typer.version,
+        typer_version=typer_version,
         n_cases=len(cases),
         status=_field_score(status_correct, n_predicted, n_expected),
         fields={
@@ -95,6 +99,11 @@ def score_typer(typer: Typer, cases: list[GoldCase]) -> TypingScore:
             for name, correct in field_correct.items()
         },
     )
+
+
+def score_typer(typer: Typer, cases: list[GoldCase]) -> TypingScore:
+    """Type every case exactly once, then score."""
+    return score_results(cases, [typer.type_text(c.text) for c in cases], typer.version)
 
 
 def _table(name: str, score: TypingScore) -> list[str]:
