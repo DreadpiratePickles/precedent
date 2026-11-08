@@ -22,12 +22,12 @@ def test_the_report_word_and_the_bare_flags_reach_the_same_command(tmp_path, pop
     assert dream_run([]) == 2  # no argument at all: report, which needs --date
 
 
-@pytest.mark.parametrize("word", ["brief", "promote", "review"])
+@pytest.mark.parametrize("word", ["promote", "review"])
 def test_a_subcommand_that_is_not_built_yet_says_so_and_returns_two(word, monkeypatch, capsys):
     real = importlib.import_module
 
     def missing(name, *args, **kwargs):
-        if name in ("precedent.dream.brief", "precedent.dream.promote"):
+        if name == "precedent.dream.promote":
             raise ModuleNotFoundError(f"No module named {name!r}", name=name)
         return real(name, *args, **kwargs)
 
