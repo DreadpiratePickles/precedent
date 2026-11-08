@@ -36,6 +36,11 @@ def data_dir() -> Path:
     return Path(os.environ.get("PRECEDENT_DATA_DIR") or DEFAULT_DATA_DIR).expanduser()
 
 
+def release_base_url() -> str | None:
+    """Where library snapshots are published, or None until the owner sets it."""
+    return SNAPSHOT_RELEASES_URL
+
+
 def references_dir() -> Path:
     packaged = _PACKAGE_DIR / "references"
     return packaged if packaged.is_dir() else _REPOSITORY_ROOT / "references"
