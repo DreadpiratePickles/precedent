@@ -48,6 +48,21 @@ def _only_categories(
     return kept
 
 
+TRANSIENT_STOP_MESSAGE = (
+    "ingest stopped: {n} market(s) could not be typed (transient: budget or transport); "
+    "nothing past this page was fetched; re-run to continue"
+)
+
+
+def _drop_already_stored(
+    markets: list[ResolvedMarket], stored_ids: set[str], report: MarketIngestReport
+) -> list[ResolvedMarket]:
+    """Leave out markets the store already holds for this typer version; count them."""
+    fresh = [m for m in markets if m.market_id not in stored_ids]
+    report.already_stored += len(markets) - len(fresh)
+    return fresh
+
+
 def _print_plan(venue: str, args: argparse.Namespace, typer: Typer) -> int:
     """`--dry-run`: say what would happen, with an all-zero report. No request, no write."""
     categories = ", ".join(args.category) if args.category else "all"
@@ -76,7 +91,11 @@ def run_market_ingest(
     clock: Clock | None = None,
     typer: Typer | None = None,
 ) -> int:
-    """Run one venue's ingest. Exit 0 ok, 1 partial failure (kept pages stay), 2 usage or config."""
+    """Run one venue's ingest. Exit 0 ok, 1 partial failure (kept pages stay), 2 usage or config.
+
+    A transient typing stop (`stopped_by_transient`) is a partial failure too: exit 1 with one
+    stderr line. A paging budget stop (`stopped_by_budget`) stays exit 0.
+    """
     try:
         args = _parser(venue).parse_args(argv)
     except SystemExit as exit_request:
@@ -103,12 +122,15 @@ def run_market_ingest(
         report,
     )
     wanted = {name.lower() for name in args.category}
+    stored_ids = {r.market_id for r in store.read(venue, typer.version)}
     added = skipped = 0
     error: Exception | None = None
     try:
         for page in pages:
             transient_before = report.not_stored_transient
-            records = type_markets(_only_categories(page, wanted, report), typer, report)
+            wanted_markets = _only_categories(page, wanted, report)
+            candidates = _drop_already_stored(wanted_markets, stored_ids, report)
+            records = type_markets(candidates, typer, report)
             appended = store.append(records)
             added, skipped = added + appended.added, skipped + appended.identical_skipped
             if report.not_stored_transient > transient_before:
@@ -129,5 +151,8 @@ def run_market_ingest(
     print(json.dumps(summary))
     if error is not None:
         print(f"ingest stopped: {type(error).__name__}: {error}", file=sys.stderr)
+        return EXIT_PARTIAL_FAILURE
+    if report.stopped_by_transient:
+        print(TRANSIENT_STOP_MESSAGE.format(n=report.not_stored_transient), file=sys.stderr)
         return EXIT_PARTIAL_FAILURE
     return EXIT_OK
