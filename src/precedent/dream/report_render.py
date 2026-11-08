@@ -49,12 +49,31 @@ def build_sections(
     cutoff: datetime,
     previous: datetime | None,
 ) -> dict[str, list[Item]]:
-    """The note's items by section type from every stored claim record (file order) and the
-    latest tension, shift and resolution records; `previous` is the previous session's cutoff."""
+    """The note's items by section type, from every record of each store in file order.
+
+    Everything is read as of `cutoff` (a record recorded later is invisible), so a replay of an
+    earlier session after later re-fires, closings or decisions gives the same items.
+    `previous` is the previous session's cutoff.
+    """
+    stored = [c for c in stored if c.recorded_utc <= cutoff]
     latest_claim = {c.claim_id: c for c in stored}
     first_claim: dict[str, Claim] = {}
     for claim in stored:
         first_claim.setdefault(claim.claim_id, claim)
+    tensions = list({t.tension_id: t for t in tensions if t.recorded_utc <= cutoff}.values())
+    # A shift is listed when any record visible now was detected this session; that record shows.
+    changed_here: dict[str, Shift] = {}
+    for shift in shifts:
+        if shift.recorded_utc <= cutoff and shift.detected_session == session:
+            changed_here[shift.shift_id] = shift
+    # A resolution decided after the cutoff is still proposed as of it.
+    resolutions = list(
+        {
+            r.resolution_id: r
+            for r in resolutions
+            if r.proposed_utc <= cutoff and (r.decided_utc is None or r.decided_utc <= cutoff)
+        }.values()
+    )
     names = Names(
         latest_claim,
         {
@@ -80,7 +99,7 @@ def build_sections(
         key=lambda t: (t.kind.value, t.subject, t.tension_id),
     )
     changed = sorted(
-        (s for s in shifts if s.detected_session == session),
+        changed_here.values(),
         key=lambda s: (s.kind.value, s.subject),
     )
     expired = sorted(
@@ -89,7 +108,7 @@ def build_sections(
     )
     new = sorted((c for c in first_claim.values() if in_window(c.recorded_utc)), key=claim_order)
     proposed = sorted(
-        (r for r in resolutions if r.status == "proposed" and r.proposed_utc <= cutoff),
+        (r for r in resolutions if r.status == "proposed"),
         key=lambda r: (r.tension_id, r.resolution_id),
     )
     return {

@@ -508,3 +508,80 @@ def test_an_unknown_parser_version_is_a_usage_error(tmp_path, populated_stores, 
 def test_a_single_events_file_is_used_without_a_flag(tmp_path, populated_stores):
     assert dream(tmp_path) == 0
     assert dream(tmp_path, SESSION, "--parser-version", "v1") == 0
+
+
+# --- replay: an earlier session stays reproducible after later state changes (D60) -----------------
+
+
+def dream_bytes(out, day):
+    return (
+        (out / "dreams" / f"dream_{day}.md").read_bytes(),
+        (out / "dreams" / f"dream_{day}.jsonl").read_bytes(),
+    )
+
+
+def test_replaying_a_session_after_its_shift_was_re_fired_later_gives_the_same_bytes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PRECEDENT_DATA_DIR", str(tmp_path / "data"))
+    day = planted_history(tmp_path / "data")
+    assert dream(tmp_path, day) == 0
+    first = dream_bytes(tmp_path, day)
+    assert b"## Silent shifts (1)" in first[0]
+    sessions = session_cutoffs("2023-03-01", "2024-12-31")
+    later = sessions.index.get_loc(pd.Timestamp(day)) + 1
+    [shift] = ShiftStore(tmp_path / "shifts").latest()
+    ShiftStore(tmp_path / "shifts").refire(
+        shift.shift_id,
+        shift.statistic * 2,
+        sessions.index[later].date(),
+        sessions.iloc[later].to_pydatetime(),
+    )
+    assert ShiftStore(tmp_path / "shifts").latest()[0].detected_session != date.fromisoformat(day)
+    assert dream(tmp_path, day) == 0
+    assert dream_bytes(tmp_path, day) == first
+
+
+def test_replaying_sessions_after_a_tension_was_closed_later_gives_the_same_bytes(
+    tmp_path, populated_stores
+):
+    assert dream(tmp_path) == 0
+    opened_on = dream_bytes(tmp_path, SESSION)
+    assert dream(tmp_path, "2024-06-06") == 0  # the story-window claims end; the conflict closes
+    closed_on = dream_bytes(tmp_path, "2024-06-06")
+    assert b"## Closed tensions (1)" in closed_on[0]
+    assert dream(tmp_path) == 0
+    assert dream(tmp_path, "2024-06-06") == 0
+    assert dream_bytes(tmp_path, SESSION) == opened_on
+    assert dream_bytes(tmp_path, "2024-06-06") == closed_on
+
+
+def test_replaying_a_session_after_its_resolution_was_decided_later_gives_the_same_bytes(
+    tmp_path, populated_stores
+):
+    from precedent.dream.claim_schema import Resolution
+    from precedent.dream.claim_store import ResolutionStore
+
+    assert dream(tmp_path) == 0
+    conflict = next(
+        t for t in TensionStore(tmp_path / "tensions").latest() if t.kind == "value_conflict"
+    )
+    proposal = Resolution(
+        resolution_id="r-1",
+        tension_id=conflict.tension_id,
+        hypothesis="different_scope",
+        evidence_span="Acme labor news is about a subsidiary",
+        proposer_version="resolve-test-v1",
+        status="proposed",
+        proposed_utc=at("2024-06-03T19:00:00Z"),
+    )
+    store = ResolutionStore(tmp_path / "resolutions")
+    store.append([proposal])
+    assert dream(tmp_path) == 0
+    first = dream_bytes(tmp_path, SESSION)
+    assert b"## Proposed resolutions awaiting review (1)" in first[0]
+    store.decide("r-1", "accepted", at("2024-06-06T20:00:00Z"))  # decided three sessions later
+    assert dream(tmp_path, "2024-06-06") == 0
+    assert b"## Proposed resolutions awaiting review (0)" in dream_bytes(tmp_path, "2024-06-06")[0]
+    assert dream(tmp_path) == 0
+    assert dream_bytes(tmp_path, SESSION) == first

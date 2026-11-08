@@ -247,9 +247,9 @@ def _write_dream(args: argparse.Namespace) -> dict[str, Any]:
     previous = axis.iloc[-2].to_pydatetime() if len(axis) > 1 else None
     sections = build_sections(
         claim_store.read_all(),
-        tension_store.latest(),
-        shift_store.latest(),
-        resolution_store.latest(),
+        tension_store.read_all(),
+        shift_store.read_all(),
+        resolution_store.read_all(),
         links,
         session,
         cutoff,
