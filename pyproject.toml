@@ -19,7 +19,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-research = ["pyqlib==0.9.7", "lightgbm", "scipy", "pyyaml", "networkx"]
+# lightgbm>=4.7: ablation.py fits with eval_X/eval_y, which replace the deprecated eval_set
+research = ["pyqlib==0.9.7", "lightgbm>=4.7", "scipy", "pyyaml", "networkx"]
 dev = ["pytest", "pytest-cov", "ruff"]
 
 [project.scripts]
