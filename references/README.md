@@ -19,3 +19,6 @@ This folder ships inside the wheel as `precedent/references/` (see `pyproject.to
 - `dream/claim_vocabulary.json`: the claim attribute, period and value lists, the conflicting value pairs and the proposed 8-K item map (all proposed until the owner approves).
 - `dream/detector_params.json`: detector windows and thresholds, review sample size and the precision a detector must keep, all proposed.
 - `dream/claim_schema_v1.json`: the JSON Schema of a stored claim, generated from `claim_json_schema()`; a test keeps the two equal.
+## Ripple
+
+- `ripple_params.json`: the Ripple propagation, decay, link-expiry and correlation-peer parameters (design section 9.5), all proposed; read by `load_ripple_params` in `precedent.ripple.params`.
