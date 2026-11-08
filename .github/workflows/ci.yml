@@ -1,0 +1,22 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          python-version: "3.11"
+      - run: uv sync --frozen --all-extras
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+      - run: uv run python scripts/ci_ask_lifecycle.py
+      - run: test -z "$(git status --porcelain)"
