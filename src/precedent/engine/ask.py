@@ -482,12 +482,17 @@ def _is_under_docs_examples(path: Path) -> bool:
     return any(parts[i : i + 2] == _EXAMPLES_PARTS for i in range(len(parts) - 1))
 
 
-def _is_synthetic_library(data_dir: Path, dry_run: bool) -> bool:
-    """A sample or fixture library: the dry run, the sample dir, or a build report that says so."""
-    if dry_run or data_dir.resolve() == config.sample_dir().resolve():
-        return True
-    report = json.loads((data_dir / LIBRARY_DIR_NAME / "build_report.json").read_text("utf-8"))
-    return report.get("synthetic") is True
+def _evidence_banner(data_dir: Path, library_loaded: bool) -> str:
+    """`NO LIVE RUN` with no library loaded; else `SYNTHETIC` exactly when the loaded bundle's
+    build report says `"synthetic": true`, and `LIVE` otherwise (Ruling P-36)."""
+    if not library_loaded:
+        return "NO LIVE RUN"
+    try:
+        report = json.loads((data_dir / LIBRARY_DIR_NAME / "build_report.json").read_text("utf-8"))
+    except ValueError:  # not JSON: not a synthetic marker
+        return "LIVE"
+    synthetic = isinstance(report, dict) and report.get("synthetic") is True
+    return "SYNTHETIC" if synthetic else "LIVE"
 
 
 def _display_path(path: Path) -> str:
@@ -499,8 +504,8 @@ def _display_path(path: Path) -> str:
         return str(path)
 
 
-def _write_sidecar(png: Path, card: CardModel, data_dir: Path, dry_run: bool) -> None:
-    banner = "SYNTHETIC" if _is_synthetic_library(data_dir, dry_run) else "LIVE"
+def _write_sidecar(png: Path, card: CardModel, data_dir: Path, library_loaded: bool) -> None:
+    banner = _evidence_banner(data_dir, library_loaded)
     text = (
         f"{banner} — precedent ask card\n"
         f"query: {card.headline}; data dir: {_display_path(data_dir)}\n"
@@ -508,7 +513,9 @@ def _write_sidecar(png: Path, card: CardModel, data_dir: Path, dry_run: bool) ->
     png.with_suffix(".md").write_text(text, encoding="utf-8")
 
 
-def _output(card: CardModel, args: argparse.Namespace, data_dir: Path) -> int:
+def _output(
+    card: CardModel, args: argparse.Namespace, data_dir: Path, library_loaded: bool
+) -> int:
     print(render_json(card) if args.json else render_text(card))
     if card.typed_as == UNTYPED:
         print(KEY_FLAGS_HINT, file=sys.stderr)
@@ -520,7 +527,7 @@ def _output(card: CardModel, args: argparse.Namespace, data_dir: Path) -> int:
         print(f"config error: {error}", file=sys.stderr)
         return USAGE_ERROR
     if _is_under_docs_examples(args.card):
-        _write_sidecar(args.card, card, data_dir, args.dry_run)
+        _write_sidecar(args.card, card, data_dir, library_loaded)
     return 0
 
 
@@ -565,6 +572,7 @@ def run(argv: list[str]) -> int:
         data_dir = args.data_dir
     else:
         data_dir = config.sample_dir() if args.dry_run else config.data_dir()
+    library_loaded = True
     try:
         card = run_card(query, args.horizon, args.outcome_type, data_dir, typer, asof_utc=asof)
     except LibraryMissingError as error:
@@ -576,6 +584,7 @@ def run(argv: list[str]) -> int:
                 file=sys.stderr,
             )
             return USAGE_ERROR
+        library_loaded = False
         card = refused_card_without_library(
             query, args.horizon, args.outcome_type, typer, asof_utc=asof
         )
@@ -585,4 +594,4 @@ def run(argv: list[str]) -> int:
     except ConfigError as error:
         print(f"config error: {error}\n{KEY_FLAGS_HINT}", file=sys.stderr)
         return USAGE_ERROR
-    return _output(card, args, data_dir)
+    return _output(card, args, data_dir, library_loaded)
