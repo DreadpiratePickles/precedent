@@ -20,7 +20,7 @@ from precedent.spine.pit_alignment import build_session_cutoffs  # noqa: E402
 
 SESSIONS = pd.bdate_range("2021-01-04", periods=320)
 CUTOFFS = build_session_cutoffs(SESSIONS, dt.time(16, 0))
-CUT_SESSIONS = [SESSIONS[302], SESSIONS[310], SESSIONS[319]]
+CUT_SESSIONS = [SESSIONS[302], SESSIONS[310], SESSIONS[315]]
 END_OF_TIME = pd.Timestamp("2030-01-01", tz="UTC")
 
 
@@ -80,8 +80,12 @@ def panel_inputs(tmp_path):
         make_link("A", "B", Relation.CUSTOMER_OF, valid_from),
         make_link("B", "C", Relation.SUPPLIER_OF, valid_from),
         make_link("A", "C", Relation.PEER_OF, valid_from),
+        # visible only after the first two shock sessions, inside the cut range
+        make_link("A", "D", Relation.CUSTOMER_OF, CUTOFFS.iloc[306]),
     ]
-    shocks = shock_series([(300, "A", 0.04), (300, "B", -0.02), (305, "A", 0.03), (305, "B", 0.01)])
+    shocks = shock_series(
+        [(300, "A", 0.04), (300, "B", -0.02), (305, "A", 0.03), (305, "B", 0.01), (308, "A", 0.02)]
+    )
     return inputs_for(links, shocks, tmp_path)
 
 
@@ -126,6 +130,23 @@ def test_ripple_panel_passes_truncation_invariance(panel_inputs):
         full = build_ripple_factor_panel(**panel_inputs).loc[:cut]
         truncated = build_ripple_factor_panel(**truncate_inputs(panel_inputs, cut)).loc[:cut]
         assert not full.empty
+        pd.testing.assert_frame_equal(full, truncated)
+
+
+def test_truncation_test_has_teeth_against_a_later_graph_lookup(panel_inputs):
+    """Negative control: a builder reading the graph at the last cutoff must fail the comparison."""
+    cut = CUT_SESSIONS[0]
+
+    def wrong_panel(inputs):
+        graph_of = inputs["graph_for_cutoff"]
+        last_cutoff = CUTOFFS.iloc[-1]
+        return build_ripple_factor_panel(
+            **{**inputs, "graph_for_cutoff": lambda _: graph_of(last_cutoff)}
+        )
+
+    full = wrong_panel(panel_inputs).loc[:cut]
+    truncated = wrong_panel(truncate_inputs(panel_inputs, cut)).loc[:cut]
+    with pytest.raises(AssertionError):
         pd.testing.assert_frame_equal(full, truncated)
 
 
@@ -180,8 +201,13 @@ def test_shocks_on_different_sessions_overlap_by_summing(tmp_path):
     valid_from = CUTOFFS.iloc[100] - pd.Timedelta(days=1)
     links = [make_link("A", "B", Relation.PEER_OF, valid_from)]
     shocks = shock_series([(200, "A", 0.04), (203, "A", 0.04)])
-    panel = build_ripple_factor_panel(**inputs_for(links, shocks, tmp_path))
+    abnormal = abnormal_frame(list("AB"))
+    panel = build_ripple_factor_panel(**inputs_for(links, shocks, tmp_path, abnormal))
     assert panel.loc[(SESSIONS[203], "B"), "ripple_peer"] == pytest.approx(0.02 + 0.01)
+    # the receiver's own CAR is subtracted once per shock, each from its own t + 1:
+    # (0.02 - CAR(201..203)) from the first shock, (0.02 - 0) from the second
+    expected = 0.04 - abnormal["B"].iloc[201:204].sum()
+    assert panel.loc[(SESSIONS[203], "B"), "ripple_unabsorbed"] == pytest.approx(expected)
 
 
 def test_commodity_relations_share_one_channel(tmp_path):
@@ -191,7 +217,9 @@ def test_commodity_relations_share_one_channel(tmp_path):
         make_link("OIL", "B", Relation.OUTPUT_COMMODITY, valid_from),
     ]
     abnormal = abnormal_frame(["A", "B", "OIL"])
-    panel = build_ripple_factor_panel(**inputs_for(links, shock_series([(200, "OIL", 0.1)]), tmp_path, abnormal))
+    panel = build_ripple_factor_panel(
+        **inputs_for(links, shock_series([(200, "OIL", 0.1)]), tmp_path, abnormal)
+    )
     at_t = panel.loc[SESSIONS[200]]
     assert at_t["ripple_commodity"].tolist() == [pytest.approx(0.05)] * 2
     assert (at_t.drop(columns=["ripple_commodity", "ripple_unabsorbed"]) == 0.0).all().all()
@@ -200,7 +228,9 @@ def test_commodity_relations_share_one_channel(tmp_path):
 def test_country_exposure_links_give_no_rows(tmp_path):
     valid_from = CUTOFFS.iloc[100] - pd.Timedelta(days=1)
     links = [make_link("TW", "A", Relation.COUNTRY_EXPOSURE, valid_from)]
-    panel = build_ripple_factor_panel(**inputs_for(links, shock_series([(200, "TW", 0.1)]), tmp_path))
+    panel = build_ripple_factor_panel(
+        **inputs_for(links, shock_series([(200, "TW", 0.1)]), tmp_path)
+    )
     assert panel.empty and list(panel.columns) == PANEL_COLUMNS
     assert Relation.COUNTRY_EXPOSURE.value not in CHANNEL_OF_RELATION
 
@@ -208,7 +238,9 @@ def test_country_exposure_links_give_no_rows(tmp_path):
 def test_panel_never_reaches_past_the_last_session(tmp_path):
     valid_from = CUTOFFS.iloc[100] - pd.Timedelta(days=1)
     links = [make_link("A", "B", Relation.PEER_OF, valid_from)]
-    panel = build_ripple_factor_panel(**inputs_for(links, shock_series([(318, "A", 0.04)]), tmp_path))
+    panel = build_ripple_factor_panel(
+        **inputs_for(links, shock_series([(318, "A", 0.04)]), tmp_path)
+    )
     dates = panel.index.get_level_values("datetime")
     assert dates.max() == SESSIONS[-1] and len(panel) == 2
 
@@ -246,11 +278,45 @@ def test_panel_passes_the_qlib_factor_panel_check(panel_inputs):
         {"session_cutoffs_utc": CUTOFFS.dt.tz_localize(None)},
         {"session_cutoffs_utc": CUTOFFS.iloc[:-1]},
     ],
-    ids=["half_life", "max_age", "tz_sessions", "unsorted", "short_returns", "naive_cutoffs", "short_cutoffs"],
+    ids=[
+        "half_life",
+        "max_age",
+        "tz_sessions",
+        "unsorted",
+        "short_returns",
+        "naive_cutoffs",
+        "short_cutoffs",
+    ],
 )
 def test_bad_inputs_are_rejected(panel_inputs, change):
     with pytest.raises(ValueError):
         build_ripple_factor_panel(**{**panel_inputs, **change})
+
+
+def test_infinite_abnormal_returns_are_rejected(panel_inputs):
+    abnormal = panel_inputs["abnormal_returns"].copy()
+    abnormal.iloc[5, 0] = np.inf
+    with pytest.raises(ValueError, match="finite"):
+        build_ripple_factor_panel(**{**panel_inputs, "abnormal_returns": abnormal})
+
+
+def test_an_unknown_relation_is_rejected(panel_inputs):
+    base = panel_inputs["graph_for_cutoff"]
+
+    def graph_with_bogus_relation(cutoff):
+        graph = base(cutoff).copy()
+        graph.loc[0, "relation"] = "bogus_relation"
+        return graph
+
+    with pytest.raises(ValueError, match="bogus_relation"):
+        build_ripple_factor_panel(**{**panel_inputs, "graph_for_cutoff": graph_with_bogus_relation})
+
+
+def test_a_tz_aware_shock_datetime_is_rejected(panel_inputs):
+    shocks = panel_inputs["shocks"].copy()
+    shocks.index = shocks.index.set_levels(shocks.index.levels[0].tz_localize("UTC"), level=0)
+    with pytest.raises(ValueError, match="naive"):
+        build_ripple_factor_panel(**{**panel_inputs, "shocks": shocks})
 
 
 def test_a_shock_outside_the_calendar_is_rejected(panel_inputs):

@@ -29,6 +29,7 @@ CHANNEL_OF_RELATION = {
     Relation.INPUT_COMMODITY.value: "ripple_commodity",
     Relation.OUTPUT_COMMODITY.value: "ripple_commodity",
 }
+_SKIPPED_RELATIONS = {Relation.COUNTRY_EXPOSURE.value}  # no factor column in this milestone
 _CHANNEL_COLUMNS = ["ripple_customer", "ripple_supplier", "ripple_peer", "ripple_commodity"]
 _DECAYED_COLUMNS = [*_CHANNEL_COLUMNS, "ripple_hop2"]
 _INDEX_NAMES = ["datetime", "instrument"]
@@ -55,10 +56,14 @@ def _validate_inputs(
         raise ValueError("session_cutoffs_utc must hold tz-aware timestamps")
     if not abnormal_returns.index.equals(sessions):
         raise ValueError("abnormal_returns.index must equal sessions exactly")
+    if np.isinf(abnormal_returns.to_numpy(dtype=np.float64)).any():
+        raise ValueError("abnormal_returns must be finite or NaN (NaN counts as zero)")
     if list(shocks.index.names) != _INDEX_NAMES:
         raise ValueError(
             f"shocks index must be named {_INDEX_NAMES}, got {list(shocks.index.names)}"
         )
+    if getattr(shocks.index.get_level_values("datetime"), "tz", None) is not None:
+        raise ValueError("shocks datetime level must be naive")
     if shocks.index.has_duplicates:
         raise ValueError("shocks has duplicate (datetime, instrument) rows")
     positions = sessions.as_unit("ns").get_indexer(
@@ -97,6 +102,9 @@ def _session_terms(
     for instrument, value in zip(instruments, shock_values, strict=True):
         shock[position[instrument]] = value
     terms = np.zeros((len(nodes), len(_DECAYED_COLUMNS)))
+    unknown = sorted(set(graph["relation"]) - set(CHANNEL_OF_RELATION) - _SKIPPED_RELATIONS)
+    if unknown:
+        raise ValueError(f"graph has unknown relation values: {unknown}")
     channel_of_link = graph["relation"].map(CHANNEL_OF_RELATION)
     for column_index, channel in enumerate(_CHANNEL_COLUMNS):
         rows = graph[channel_of_link == channel]
@@ -131,8 +139,11 @@ def build_ripple_factor_panel(
     the receiver's propagated total minus its own cumulative abnormal return over sessions
     after `t` up to and including `s`. A NaN abnormal return, or an instrument with no column in
     `abnormal_returns`, counts as zero in that cumulative sum. Shocks reaching the same
-    (session, receiver) are summed column by column. A receiver whose terms are all zero gets no
-    row, and the shocked source itself appears only if it also receives something.
+    (session, receiver) are summed column by column, so `ripple_unabsorbed` then subtracts the
+    receiver's cumulative abnormal return once per shock, each measured from its own `t + 1`.
+    `abnormal_returns` may hold NaN but not infinity (ValueError). A receiver whose terms are
+    all zero gets no row, and the shocked source itself appears only if it also receives
+    something.
     """
     positions = _validate_inputs(
         shocks,
