@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<style>
+:root { --bg:#fbfaf7; --fg:#1f2328; --muted:#656d76; --line:#d0d7de; --card:#ffffff;
+  --accent:#0969da; --pos:#1a7f37; --neg:#cf222e; --band:#c9ced6; --fan-outer:#9ec1f0; --fan-inner:#4b8fe0; }
+@media (prefers-color-scheme: dark) { :root { --bg:#14171a; --fg:#e6e8ea; --muted:#9aa4ae;
+  --line:#30363d; --card:#1b1f24; --accent:#58a6ff; --pos:#3fb950; --neg:#f85149;
+  --band:#4a525c; --fan-outer:#2c5a94; --fan-inner:#58a6ff; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg);
+  font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header, main, footer { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+header { padding-top: 20px; }
+h1 { font-size: 20px; margin: 0 0 4px; } h2 { font-size: 16px; margin: 24px 0 8px; }
+.muted { color: var(--muted); font-size: 13px; }
+section { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px 16px; margin-bottom: 16px; }
+#dag { width: 100%; height: auto; display: block; }
+#dag text { fill: var(--fg); font-size: 11px; }
+#dag rect.node { fill: var(--card); stroke: var(--line); stroke-width: 1.5; }
+#dag rect.event { stroke: var(--accent); } #dag rect.asset { stroke: var(--muted); }
+#dag rect.forced { stroke: var(--neg); stroke-width: 3; }
+#dag line.pos { stroke: var(--pos); } #dag line.neg { stroke: var(--neg); }
+#dag line.off { stroke-dasharray: 4 3; }
+.control { display: grid; grid-template-columns: minmax(150px, 1.2fr) auto 2fr 70px; gap: 8px;
+  align-items: center; padding: 3px 0; }
+.control input[type=range] { width: 100%; }
+.control .value { text-align: right; font-variant-numeric: tabular-nums; }
+button { font: inherit; padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--card); color: var(--fg); cursor: pointer; margin-top: 8px; }
+.fanrow { display: grid; grid-template-columns: 56px minmax(180px, 1fr) 190px minmax(120px, 190px);
+  gap: 8px; align-items: center; padding: 2px 0; font-size: 13px; }
+.fanrow svg { width: 100%; height: 22px; display: block; }
+.fanrow .nums { font-variant-numeric: tabular-nums; }
+.legend span { display:inline-block; margin-right:14px; }
+.swatch { display:inline-block; width:14px; height:10px; margin-right:4px; vertical-align:middle; }
+.warn { color: var(--neg); }
+footer { padding-bottom: 28px; font-size: 13px; }
+@media (max-width: 640px) { .control, .fanrow { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="heading">Mechanism cockpit</h1>
+  <p class="muted" id="subtitle"></p>
+</header>
+<main>
+  <section><h2>Assumed structure</h2>
+    <svg id="dag" role="img" aria-label="Causal graph from the event to assets"></svg>
+    <p class="muted">Signs are the template's; a dashed edge is one the fit disagrees with.</p></section>
+  <section><h2>What if</h2>
+    <div id="controls"></div><button id="reset" type="button">Reset to the query</button>
+    <p class="muted" id="notes"></p></section>
+  <section><h2 id="fanheading">Simulated outcomes</h2>
+    <p class="legend muted"><span><i class="swatch" style="background:var(--band)"></i>Precedent p10 to p90</span>
+      <span><i class="swatch" style="background:var(--fan-outer)"></i>mechanism p10 to p90</span>
+      <span><i class="swatch" style="background:var(--fan-inner)"></i>p25 to p75</span>
+      <span>tick: median</span></p>
+    <div id="fans"></div></section>
+</main>
+<footer>
+  <p><strong>A fitted model of past co-movement under an assumed structure, not a forecast.</strong></p>
+  <p class="muted" id="manifest"></p>
+</footer>
+<script type="application/json" id="payload">{{PAYLOAD_JSON}}</script>
+<script>
+"use strict";
+(function () {
+  const QUANTILES = [0.1, 0.25, 0.5, 0.75, 0.9];
+  const COUNTER_LIMIT = 4294967296;
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+
+  // ---- the counter-based PRNG: the integer steps mirror simulate.py bit for bit ----------
+  function fmix32(x) {
+    x ^= x >>> 16; x = Math.imul(x, 0x85EBCA6B);
+    x ^= x >>> 13; x = Math.imul(x, 0xC2B2AE35);
+    x ^= x >>> 16;
+    return x >>> 0;
+  }
+  function hashUniform(seed, index) {
+    const base = Math.imul(seed >>> 0, 0x9E3779B1) >>> 0;
+    const hashed = fmix32((fmix32((index + base) >>> 0) ^ 0x6A09E667) >>> 0);
+    return (hashed + 0.5) / COUNTER_LIMIT;
+  }
+  function hashNormals(seed, nPaths, nAssets) {
+    const count = nPaths * nAssets;
+    if (2 * count > COUNTER_LIMIT) throw new Error("paths x assets overflows the 32-bit counter");
+    const z = new Float64Array(count);
+    for (let k = 0; k < count; k++) {
+      const u1 = hashUniform(seed, 2 * k), u2 = hashUniform(seed, 2 * k + 1);
+      z[k] = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    }
+    return z;
+  }
+
+  // Lower Cholesky factor; a pivot <= 0 means numpy raises, so use the clamped diagonal.
+  function choleskyFactor(cov) {
+    const n = cov.length, factor = cov.map(() => new Float64Array(n));
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j <= i; j++) {
+        let sum = cov[i][j];
+        for (let k = 0; k < j; k++) sum -= factor[i][k] * factor[j][k];
+        if (i === j) {
+          if (!(sum > 0)) return { factor: diagonalFactor(cov), fallback: true };
+          factor[i][i] = Math.sqrt(sum);
+        } else {
+          factor[i][j] = sum / factor[j][j];
+        }
+      }
+    }
+    return { factor, fallback: false };
+  }
+  function diagonalFactor(cov) {
+    return cov.map((row, i) => Float64Array.from(row, (_, j) => (i === j ? Math.sqrt(Math.max(row[i], 0)) : 0)));
+  }
+
+  let drawCache = { key: null, noise: null };
+  function residualDraws(cov, nPaths, seed) {
+    const key = [seed, nPaths, JSON.stringify(cov)].join("|");
+    if (drawCache.key === key) return drawCache.noise;
+    const n = cov.length, factor = choleskyFactor(cov).factor, z = hashNormals(seed, nPaths, n);
+    const noise = new Float64Array(nPaths * n);
+    for (let p = 0; p < nPaths; p++) {
+      for (let j = 0; j < n; j++) {
+        let sum = 0;
+        for (let k = 0; k <= j; k++) sum += z[p * n + k] * factor[j][k];
+        noise[p * n + j] = sum;
+      }
+    }
+    drawCache = { key, noise };
+    return noise;
+  }
+
+  // Kahn's algorithm with ties broken by node order, as graph_schema._kahn_order.
+  function topologicalOrder(nodes, edges) {
+    const degree = {}, children = {};
+    nodes.forEach((n) => { degree[n.id] = 0; children[n.id] = []; });
+    edges.forEach((e) => { degree[e.target] += 1; children[e.source].push(e.target); });
+    const ready = nodes.filter((n) => degree[n.id] === 0).map((n) => n.id), order = [];
+    while (ready.length) {
+      const current = ready.shift();
+      order.push(current);
+      children[current].forEach((child) => { if (--degree[child] === 0) ready.push(child); });
+    }
+    return order;
+  }
+
+  // numpy.quantile, method "linear": index q*(n-1), lerp between the two neighbours.
+  function quantile(sorted, q) {
+    const position = q * (sorted.length - 1), below = Math.floor(position);
+    const a = sorted[below], b = sorted[Math.min(below + 1, sorted.length - 1)], t = position - below;
+    const diff = b - a;
+    return t >= 0.5 ? b - diff * (1 - t) : a + diff * t;
+  }
+
+  function mechanismSimulate(payload, eventValues, interventions, nPaths, seed) {
+    if (!(nPaths >= 1)) throw new Error("n_paths must be at least 1; got " + nPaths);
+    const graph = payload.graph, fitted = payload.fitted, assets = fitted.assets;
+    const kinds = {}, forced = {};
+    graph.nodes.forEach((n) => { kinds[n.id] = n.kind; });
+    interventions.forEach((i) => {
+      if (!has(kinds, i.node)) throw new Error("intervention on " + i.node + ": not a node of the graph");
+      forced[i.node] = i.value;
+    });
+    graph.nodes.forEach((n) => {
+      if (n.kind === "event" && !has(eventValues, n.id) && !has(forced, n.id)) {
+        throw new Error("event_values has no value for event node " + n.id);
+      }
+    });
+    const nAssets = assets.length, column = {};
+    assets.forEach((a, j) => { column[a] = j; });
+    const noise = residualDraws(fitted.residual_cov, nPaths, seed);
+    const order = topologicalOrder(graph.nodes, graph.edges);
+    const outcomes = assets.map(() => new Float64Array(nPaths)), values = {};
+    for (let p = 0; p < nPaths; p++) {
+      for (const node of order) {
+        let value;
+        if (has(forced, node)) value = forced[node];
+        else if (kinds[node] === "event") value = eventValues[node];
+        else {
+          if (!has(fitted.coefficients, node)) throw new Error("fit has no equation for node " + node);
+          value = fitted.intercepts[node];
+          const coefficients = fitted.coefficients[node];
+          for (const parent of Object.keys(coefficients)) value += coefficients[parent] * values[parent];
+          if (kinds[node] === "asset") value += noise[p * nAssets + column[node]];
+        }
+        values[node] = value;
+      }
+      assets.forEach((a, j) => { outcomes[j][p] = values[a]; });
+    }
+    const out = {};
+    assets.forEach((a, j) => {
+      const sorted = outcomes[j].slice().sort();
+      out[a] = {};
+      QUANTILES.forEach((q) => { out[a][String(q)] = quantile(sorted, q); });
+    });
+    return out;
+  }
+
+  const EVENT_RANGES = { direction_sign: [-1, 1, 1], severity_band: [0, 2, 1], is_scheduled: [0, 1, 1] };
+  function mechanismControls(payload) {
+    const forced = {};
+    payload.interventions.forEach((i) => { forced[i.node] = i.value; });
+    return payload.graph.nodes.filter((n) => n.kind !== "asset").map((n) => {
+      if (n.kind === "event") {
+        const [min, max, step] = EVENT_RANGES[n.id.split(":").pop()] || [-1, 1, 1];
+        return { node: n.id, kind: "event", min, max, step, value: payload.event_values[n.id] ?? 0, free: false };
+      }
+      const set = has(forced, n.id);
+      return { node: n.id, kind: "intermediate", min: -3, max: 3, step: 0.1, value: set ? forced[n.id] : 0, free: !set };
+    });
+  }
+
+  window.mechanismPrng = { fmix32, hashUniform, hashNormals };
+  window.mechanismSimulate = mechanismSimulate;
+  window.mechanismControls = mechanismControls;
+
+  // ---- the page -------------------------------------------------------------------------
+  const pct = (x) => (x >= 0 ? "+" : "-") + Math.abs(x * 100).toFixed(1) + "%";
+  const triple = (a, b, c) => pct(a) + " / " + pct(b) + " / " + pct(c);
+  const inside = (x, low, high) => x >= low && x <= high;
+  function agreement(mech, band) {
+    if (!band || band.refused || band.p10 == null || band.median == null || band.p90 == null) return "n/a";
+    const both = inside(mech["0.5"], band.p10, band.p90) && inside(band.median, mech["0.1"], mech["0.9"]);
+    return both ? "yes" : "no (median outside the other's band)";
+  }
+  function svgEl(name, attrs, text) {
+    const el = document.createElementNS(SVG_NS, name);
+    Object.keys(attrs).forEach((k) => el.setAttribute(k, attrs[k]));
+    if (text !== undefined) el.textContent = text;
+    return el;
+  }
+  const shortId = (id) => id.replace(/^event:/, "");
+
+  function drawDag(payload) {
+    const svg = document.getElementById("dag"), graph = payload.graph;
+    const used = new Set(graph.nodes.filter((n) => n.kind === "event").map((n) => n.id));
+    graph.edges.forEach((e) => { used.add(e.source); used.add(e.target); });
+    const depth = {};
+    topologicalOrder(graph.nodes, graph.edges).forEach((id) => {
+      depth[id] = Math.max(0, ...graph.edges.filter((e) => e.target === id).map((e) => depth[e.source] + 1));
+    });
+    const layers = {}, position = {};
+    graph.nodes.filter((n) => used.has(n.id)).forEach((n) => {
+      (layers[depth[n.id]] = layers[depth[n.id]] || []).push(n.id);
+    });
+    const width = 170, gapX = 80, height = 26, gapY = 14;
+    let tallest = 0;
+    Object.keys(layers).forEach((d) => {
+      layers[d].forEach((id, i) => { position[id] = { x: 10 + d * (width + gapX), y: 10 + i * (height + gapY) }; });
+      tallest = Math.max(tallest, layers[d].length);
+    });
+    const totalW = 20 + Object.keys(layers).length * (width + gapX) - gapX, totalH = 20 + tallest * (height + gapY);
+    svg.setAttribute("viewBox", "0 0 " + totalW + " " + totalH);
+    const disagreeing = new Set(payload.fitted.sign_disagreements.map((p) => p.join(">")));
+    graph.edges.forEach((e) => {
+      const a = position[e.source], b = position[e.target];
+      const cls = (e.sign > 0 ? "pos" : "neg") + (disagreeing.has(e.source + ">" + e.target) ? " off" : "");
+      svg.appendChild(svgEl("line", { x1: a.x + width, y1: a.y + height / 2, x2: b.x, y2: b.y + height / 2, class: cls, "stroke-width": 1.5 }));
+      svg.appendChild(svgEl("text", { x: (a.x + width + b.x) / 2, y: (a.y + b.y + height) / 2 - 3, "text-anchor": "middle" }, e.sign > 0 ? "+" : "-"));
+    });
+    graph.nodes.filter((n) => used.has(n.id)).forEach((n) => {
+      const p = position[n.id];
+      svg.appendChild(svgEl("rect", { x: p.x, y: p.y, width, height, rx: 5, class: "node " + n.kind, "data-node": n.id }));
+      svg.appendChild(svgEl("text", { x: p.x + width / 2, y: p.y + height / 2 + 4, "text-anchor": "middle" }, shortId(n.id)));
+    });
+  }
+
+  function reachesAsset(payload, start) {
+    const kinds = {}, children = {};
+    payload.graph.nodes.forEach((n) => { kinds[n.id] = n.kind; });
+    payload.graph.edges.forEach((e) => { (children[e.source] = children[e.source] || []).push(e.target); });
+    const seen = new Set([start]), stack = [start];
+    while (stack.length) { (children[stack.pop()] || []).forEach((c) => { if (!seen.has(c)) { seen.add(c); stack.push(c); } }); }
+    return [...seen].some((id) => kinds[id] === "asset");
+  }
+
+  function init() {
+    const payload = JSON.parse(document.getElementById("payload").textContent);
+    const fitted = payload.fitted, horizon = fitted.horizon;
+    const bands = {};
+    payload.precedent.filter((b) => b.horizon === horizon).forEach((b) => { bands[b.asset] = b; });
+    document.getElementById("heading").textContent = "Mechanism cockpit: " + payload.graph.event_key.event_type + " (" + fitted.graph_version + ")";
+    document.getElementById("subtitle").textContent = "Fitted on " + fitted.n_obs + " precedents as of " + payload.asof_utc.slice(0, 10) + "; window " + horizon + " sessions; " + fitted.underdetermined.length + " equations underdetermined.";
+    document.getElementById("fanheading").textContent = "Simulated outcomes over " + horizon + " sessions";
+    document.getElementById("manifest").textContent = ["graph " + fitted.graph_version, "fitted as of " + fitted.fitted_asof_utc.slice(0, 10), "seed " + payload.seed, payload.n_paths + " paths", "commit " + (payload.code_commit || "unknown")].join(" | ");
+    drawDag(payload);
+
+    const state = { events: Object.assign({}, payload.event_values), forced: {} };
+    const rows = mechanismControls(payload), inputs = {};
+    const controlsEl = document.getElementById("controls");
+    rows.forEach((c) => {
+      const row = document.createElement("div"); row.className = "control";
+      const label = document.createElement("label"); label.textContent = shortId(c.node);
+      const toggle = document.createElement("span"); toggle.className = "muted";
+      const slider = document.createElement("input");
+      slider.type = "range"; slider.min = c.min; slider.max = c.max; slider.step = c.step; slider.value = c.value;
+      const value = document.createElement("span"); value.className = "value";
+      let box = null;
+      if (c.kind === "intermediate") {
+        box = document.createElement("input"); box.type = "checkbox"; box.checked = !c.free;
+        const tag = document.createElement("label"); tag.append(box, " do()"); toggle.appendChild(tag);
+        slider.disabled = c.free;
+      }
+      const sync = () => {
+        const number = Number(slider.value);
+        if (c.kind === "event") state.events[c.node] = number;
+        else if (box.checked) state.forced[c.node] = number; else delete state.forced[c.node];
+        slider.disabled = box ? !box.checked : false;
+        value.textContent = box && !box.checked ? "free" : String(Math.round(number * 100) / 100);
+      };
+      slider.addEventListener("input", () => { sync(); render(); });
+      if (box) box.addEventListener("change", () => { sync(); render(); });
+      inputs[c.node] = { c, slider, box, sync };
+      row.append(label, toggle, slider, value); controlsEl.appendChild(row); sync();
+    });
+    document.getElementById("reset").addEventListener("click", () => {
+      mechanismControls(payload).forEach((c) => {
+        const input = inputs[c.node]; input.slider.value = c.value;
+        if (input.box) input.box.checked = !c.free;
+        input.sync();
+      });
+      render();
+    });
+
+    function render() {
+      const forced = Object.keys(state.forced).map((node) => ({ node, value: state.forced[node] }));
+      const fanTable = mechanismSimulate(payload, state.events, forced, payload.n_paths, payload.seed);
+      document.querySelectorAll("#dag rect.node").forEach((r) => r.classList.toggle("forced", has(state.forced, r.getAttribute("data-node"))));
+      const notes = forced.filter((f) => !reachesAsset(payload, f.node)).map((f) => "intervention on " + f.node + " reaches no asset; the fan equals the no-intervention fan.");
+      document.getElementById("notes").textContent = notes.join(" ") || (forced.length ? "do(): " + forced.map((f) => f.node + " = " + f.value).join(", ") : "Move a slider to re-run the simulation in this page; nothing leaves it.");
+      drawFans(fanTable);
+    }
+
+    function drawFans(fanTable) {
+      let low = 0, high = 0;
+      fitted.assets.forEach((a) => {
+        low = Math.min(low, fanTable[a]["0.1"]); high = Math.max(high, fanTable[a]["0.9"]);
+        const b = bands[a];
+        if (b && !b.refused && b.p10 != null) { low = Math.min(low, b.p10); high = Math.max(high, b.p90); }
+      });
+      const pad = (high - low) * 0.05 || 0.01, lo = low - pad, span = high - low + 2 * pad;
+      const x = (v) => ((v - lo) / span) * 300;
+      const host = document.getElementById("fans"); host.textContent = "";
+      fitted.assets.forEach((a) => {
+        const q = fanTable[a], b = bands[a], row = document.createElement("div"); row.className = "fanrow";
+        const svg = svgEl("svg", { viewBox: "0 0 300 22", preserveAspectRatio: "none" });
+        if (b && !b.refused && b.p10 != null) svg.appendChild(svgEl("rect", { x: x(b.p10), y: 0, width: Math.max(1, x(b.p90) - x(b.p10)), height: 22, fill: "var(--band)" }));
+        svg.appendChild(svgEl("line", { x1: x(0), y1: 0, x2: x(0), y2: 22, stroke: "var(--muted)", "stroke-width": 0.6 }));
+        svg.appendChild(svgEl("rect", { x: x(q["0.1"]), y: 7, width: Math.max(1, x(q["0.9"]) - x(q["0.1"])), height: 8, fill: "var(--fan-outer)" }));
+        svg.appendChild(svgEl("rect", { x: x(q["0.25"]), y: 4, width: Math.max(1, x(q["0.75"]) - x(q["0.25"])), height: 14, fill: "var(--fan-inner)" }));
+        svg.appendChild(svgEl("line", { x1: x(q["0.5"]), y1: 1, x2: x(q["0.5"]), y2: 21, stroke: "var(--fg)", "stroke-width": 1.5 }));
+        const name = document.createElement("strong"); name.textContent = a;
+        const nums = document.createElement("span"); nums.className = "nums"; nums.textContent = triple(q["0.1"], q["0.5"], q["0.9"]);
+        const verdict = document.createElement("span");
+        const text = agreement(q, b);
+        verdict.textContent = b && b.refused ? "refused: n_eff=" + b.n_eff.toFixed(1) : text;
+        if (text.startsWith("no")) verdict.className = "warn";
+        row.append(name, svg, nums, verdict); host.appendChild(row);
+      });
+    }
+    render();
+  }
+
+  if (typeof document !== "undefined" && document.getElementById) init();
+})();
+</script>
+</body>
+</html>
