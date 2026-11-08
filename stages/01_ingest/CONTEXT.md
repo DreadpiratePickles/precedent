@@ -35,3 +35,9 @@ Review the manifest counts and failures. A live fetch against a real source, and
 Retry only transient failures (429, 5xx) with exponential backoff and jitter, at most 3 times. A partial failure is recorded per item in the manifest; a failed read never becomes an empty store. After the retry budget, stop, keep what was appended, and escalate with the manifest.
 
 Loop: single pass. The work is a deterministic transform decided by tests, so there is no oracle-driven iteration to run (design 10.2).
+
+### Source: S&P 500 membership
+- Source: `fja05680/sp500`, file `S&P 500 Historical Components & Changes.csv` (read 2026-11-07 from the raw file; its README gives no column layout). Not committed; `tests/fixtures/membership_sample.csv` is a synthetic file with the same layout.
+- Layout: header `date,tickers`; one row per change date (ISO `YYYY-MM-DD`); `tickers` is one quoted, comma-separated list holding every member after that date.
+- Delisted symbols may carry a `-YYYYMM` suffix (for example `AAL-199702`). `load_membership` keeps symbols exactly as written; `members_asof` uses only rows dated on or before the asked date and raises for a date before the first row.
+- Limit: the free CIK-to-ticker map is current-only, so a CIK of a company that has since changed ticker or delisted may be unresolved. `resolve_instrument` returns None rather than guess.

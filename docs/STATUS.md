@@ -9,3 +9,4 @@ Every result in this repository carries one label:
 
 | Date | Result | Label | Evidence | Notes |
 |---|---|---|---|---|
+| 2026-11-07 | CIK-to-ticker map is current-only (free source); historical constituents with changed or delisted tickers may stay unresolved | NO LIVE RUN | `src/precedent/spine/universe.py`, `tests/spine/test_universe.py` | `resolve_instrument` returns None for unmapped CIKs instead of guessing |
