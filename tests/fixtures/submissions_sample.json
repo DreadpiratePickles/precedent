@@ -1,0 +1,63 @@
+{
+  "_label": "SYNTHETIC: hand-made in the shape of a data.sec.gov submissions document (field names checked 2026-11-07, amendment spec section 12); every identifier (CIK, name, ticker, accession number, SIC, city) and every timestamp is invented; the state, country and exchange codes are real codes.",
+  "cik": "1234567",
+  "entityType": "operating",
+  "sic": "9999",
+  "name": "Synthetic Devices Inc.",
+  "tickers": [
+    "ACME"
+  ],
+  "exchanges": [
+    "Nasdaq"
+  ],
+  "addresses": {
+    "mailing": {
+      "stateOrCountry": "CA"
+    },
+    "business": {
+      "city": "SPRINGFIELD",
+      "stateOrCountry": "CA"
+    }
+  },
+  "filings": {
+    "recent": {
+      "accessionNumber": [
+        "0001234567-24-000004",
+        "0001234567-24-000003",
+        "0001234567-24-000002",
+        "0001234567-24-000001"
+      ],
+      "filingDate": [
+        "2024-02-12",
+        "2024-02-09",
+        "2024-02-08",
+        "2024-02-01"
+      ],
+      "acceptanceDateTime": [
+        "2024-02-12T13:05:00.000Z",
+        "2024-02-09T21:10:00.000Z",
+        "2024-02-08T14:00:00.000Z",
+        "2024-02-01T21:30:05.000Z"
+      ],
+      "form": [
+        "8-K",
+        "10-Q",
+        "8-K/A",
+        "8-K"
+      ],
+      "items": [
+        "7.01",
+        "",
+        "5.02",
+        "2.02,5.02,9.01"
+      ],
+      "primaryDocument": [
+        "doc0.htm",
+        "doc1.htm",
+        "doc2.htm",
+        "doc3.htm"
+      ]
+    },
+    "files": []
+  }
+}
