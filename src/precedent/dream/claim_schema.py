@@ -7,7 +7,7 @@ content hashes, so the same claim read twice has the same id.
 import hashlib
 from datetime import UTC, date, datetime
 from enum import Enum, StrEnum
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import (
     AfterValidator,
@@ -18,6 +18,9 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+if TYPE_CHECKING:
+    from precedent.ripple.link_store import Relation
 
 
 def _to_utc(moment: datetime) -> datetime:
@@ -100,6 +103,13 @@ def claim_id_for(
 ) -> str:
     """The claim id: sha256 of the five identifying parts joined with `|`."""
     return _digest(subject, _text(attribute), _text(period), _text(value), source_doc_id)
+
+
+def link_id_for(
+    source_node: str, receiver_node: str, relation: "Relation | str", source_doc_id: str
+) -> str:
+    """The id of a link used as a claim subject: sha256 of its four parts joined with `|`."""
+    return _digest(source_node, receiver_node, _text(relation), source_doc_id)
 
 
 def tension_id_for(kind: TensionKind | str, claim_ids: list[str], subject: str) -> str:
