@@ -27,7 +27,7 @@ uv run python scripts/ci_ask_lifecycle.py
 uv run precedent --help
 ```
 
-None of these touches the network or a model.
+The first command downloads packages; the rest touch neither the network nor a model.
 
 ## Honest caveats
 
