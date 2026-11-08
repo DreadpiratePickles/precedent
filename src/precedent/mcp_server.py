@@ -6,37 +6,52 @@
 
 from __future__ import annotations
 
+import functools
 import json
-from typing import Any
+from collections.abc import Callable
+from typing import Any, ParamSpec, TypeVar
 
 import pandas as pd
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from precedent import config
+from precedent.config import ConfigError
 from precedent.engine.ask import UNTYPED, run_card
 from precedent.engine.card import KEY_FLAGS_HINT, CardModel, render_json, render_text
 from precedent.engine.keys import key_from_dict
 from precedent.engine.retrieval import PrecedentQuery
+from precedent.libraries.bundle import LibraryMissingError
+from precedent.libraries.manifest import LibraryIntegrityError
 from precedent.spine.typers.select import typer_from_env
 
 server = MCPServer("precedent")
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+MISSING_LIBRARY_HINT = (
+    "run `precedent fetch` to install a snapshot or `precedent build` to make one"
+)
 
-def _build_card(text: str | None, key: dict | None, horizon: int, outcome_type: str) -> CardModel:
+
+def _build_card(
+    text: str | None, key: dict[str, Any] | None, horizon: int, outcome_type: str
+) -> CardModel:
     if (text is None) == (key is None):
         raise ValueError("give exactly one of `text` and `key`")
     query: PrecedentQuery | str
     if key is not None:
         query = PrecedentQuery(key_from_dict(key), available_utc=pd.Timestamp.now(tz="UTC"))
-    else:
-        assert text is not None
+    elif text is not None:
         query = text
+    else:  # unreachable: exactly one of the two is given
+        raise ValueError("give exactly one of `text` and `key`")
     return run_card(query, horizon, outcome_type, config.data_dir(), typer_from_env())
 
 
 def precedents(
     text: str | None = None,
-    key: dict | None = None,
+    key: dict[str, Any] | None = None,
     horizon: int = 5,
     outcome_type: str = "all",
 ) -> dict:
@@ -51,7 +66,7 @@ def precedents(
     return result
 
 
-def card(text: str | None = None, key: dict | None = None, horizon: int = 5) -> str:
+def card(text: str | None = None, key: dict[str, Any] | None = None, horizon: int = 5) -> str:
     """The precedent card as text. Give either `text` or a full event `key`."""
     model = _build_card(text, key, horizon, "all")
     rendered = render_text(model)
@@ -60,8 +75,29 @@ def card(text: str | None = None, key: dict | None = None, horizon: int = 5) -> 
     return rendered
 
 
-server.tool()(precedents)
-server.tool()(card)
+def _tool_errors(function: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Re-raise the expected failures as `ToolError`, the only error text MCP sends to a client.
+
+    The wrapped module function keeps raising its own exception; only the registered tool
+    changes. Anything else is a crash and stays one.
+    """
+
+    @functools.wraps(function)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        try:
+            return function(*args, **kwargs)
+        except LibraryMissingError as error:
+            raise ToolError(f"{error}; {MISSING_LIBRARY_HINT}") from error
+        except ConfigError as error:
+            raise ToolError(f"{error}\n{KEY_FLAGS_HINT}") from error
+        except (ValueError, LibraryIntegrityError) as error:
+            raise ToolError(str(error)) from error
+
+    return wrapper
+
+
+server.tool(name="precedents")(_tool_errors(precedents))
+server.tool(name="card")(_tool_errors(card))
 
 
 def main() -> None:
