@@ -13,7 +13,7 @@ Build dated, evidenced claims from the event and link stores and expire them whe
 | `references/dream/detector_params.json` | 3 | Authoritative for expiry windows (`annual_claim_expiry_months`) | Yes | Expiry |
 | `references/dream/claims_prompt_v*.txt` | 3 | Authoritative for the model claims prompt; versioned in `extractor_version` | For model claims | Latest version |
 | Development and held-out claim labels | 3 | Authoritative for scoring; read-only to the worker | For scoring | Label splits |
-| `stages/50_dream_claims/output/` (`claims.jsonl`) | 4 | This stage's own store | Yes | Existing lines |
+| `<out>/claims/claims.jsonl` (the `ClaimStore` root is `<out>/claims`) | 4 | This stage's own store; `<out>` is the `dream` command's `--out` directory (default `stages/52_dream_report/output`), which holds all four Dream stores | Yes | Existing lines |
 
 ## Process
 1. Deterministic: read events and links; skip any record without `first_seen_utc`.
@@ -26,8 +26,8 @@ Build dated, evidenced claims from the event and link stores and expire them whe
 ## Outputs
 | Path | Schema or format | Consumer |
 |---|---|---|
-| `stages/50_dream_claims/output/claims.jsonl` | Claim records (`claim_schema_v1.json`), append-only, latest record per `claim_id` wins | `51_dream_detect` |
-| `stages/50_dream_claims/output/claim_failures.jsonl` | Source id, error line, raw output hash | Human review |
+| `<out>/claims/claims.jsonl` | Claim records (`claim_schema_v1.json`), append-only, latest record per `claim_id` wins | `51_dream_detect` |
+| `<out>/claim_failures.jsonl` | Source id, error line, raw output hash | Human review |
 
 Tensions and shifts are observations about documents and prices, not forecasts. Claims state what a document said and when it became known.
 

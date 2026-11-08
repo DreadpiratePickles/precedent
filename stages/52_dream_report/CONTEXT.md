@@ -6,9 +6,9 @@ Run the nightly dream for one session: build claims, expire and detect as of the
 ## Inputs
 | Path or source | Layer | Authority | Required | Relevant section |
 |---|---:|---|---:|---|
-| `--events DIR` (default `<data_dir>/events`): the spine `EventStore` root, every `events_*.jsonl` file in it | 4 | Authoritative for events; read-only; GDELT records pass through `dedupe_gdelt_records` | Yes | Records available and ingested by the session cutoff |
+| `--events DIR` (default `<data_dir>/events`): the spine `EventStore` root; one `events_<version>.jsonl` file, chosen with `--parser-version` when several exist | 4 | Authoritative for events; read-only; GDELT records pass through `dedupe_gdelt_records` | Yes | Records available and ingested by the session cutoff |
 | `--links DIR` (default `<data_dir>/ripple/links` when it holds `links.jsonl`): the Ripple `LinkStore` root | 4 | Authoritative for links; read-only | No | Links valid from by the cutoff |
-| `--prices DIR` with `--market SYM`: Parquet prices written by `precedent prices import` | 4 | Authoritative for prices; read-only | No | Close-to-close returns up to the session; absent means the text-versus-price detector is skipped and counted |
+| `--prices DIR` with `--market SYM`: Parquet prices written by `precedent prices import` | 4 | Authoritative for prices; read-only | No | Close-to-close returns up to the session; absent, or no row for the session, means the text-versus-price detector is skipped and counted (the note's title line then says `prices: none for <session>`) |
 | `--out DIR` (default `stages/52_dream_report/output`): `claims/`, `tensions/`, `shifts/`, `resolutions/` | 4 | Authoritative for Dream's own records; append-only | Yes | Existing lines |
 | `references/dream/detector_params.json` | 3 | Authoritative for expiry, windows, thresholds and `shift_rereport_growth` | Yes | All sections |
 | `references/dream/claim_vocabulary.json` | 3 | Authoritative for the 8-K item map and conflicting value pairs | Yes | Claims, value conflicts |
@@ -41,7 +41,7 @@ Tensions and shifts are observations about documents and prices, not forecasts. 
 The owner reads the note; no action follows from it automatically. Inputs are read-only. Nothing is sent, posted or published by this stage.
 
 ## Failure Behavior
-Exit 2 for a usage error: `--date` missing or not a session, an events directory that is missing or holds no record, `--prices` without `--market` or a market with no file, a bad flag. Exit 1 for a store conflict (a stored id with different content) or an invalid input such as returns with no session in common with the axis, with the file and id on stderr. Nothing is written to `dreams/` on a non-zero exit; stores may already have appended, which is safe because the next run skips them. No retries. Output is written atomically.
+Exit 2 for a usage error: `--date` missing or not a session, an events directory that is missing or holds no record, several parser versions without `--parser-version` (the versions found are named) or an unknown one, `--prices` without `--market` or a market with no file, a bad flag. Exit 1 for a store conflict (a stored id with different content) or an invalid input such as returns with no session in common with the axis, with the file and id on stderr. Nothing is written to `dreams/` on a non-zero exit; stores may already have appended, which is safe because the next run skips them. No retries. Output is written atomically.
 
 Scheduled: not until the pipeline runs live (spec 10.2); see Task 9.
 Loop: single pass. The report is a deterministic diff decided by tests, with no model and no oracle to iterate against.

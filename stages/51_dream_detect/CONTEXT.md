@@ -6,14 +6,14 @@ Detect tensions between claims, and between claims and prices, and silent shifts
 ## Inputs
 | Path or source | Layer | Authority | Required | Relevant section |
 |---|---:|---|---:|---|
-| `stages/50_dream_claims/output/claims.jsonl` | 4 | Authoritative for claims; read through `claims_asof` at the cutoff | Yes | Claims visible at the cutoff |
+| `<out>/claims/claims.jsonl` | 4 | Authoritative for claims; read through `claims_asof` at the cutoff | Yes | Claims visible at the cutoff |
 | `stages/01_ingest/output/` event store | 4 | Authoritative for events and `first_seen_utc`; read-only | For shifts and text-vs-price | Events up to the cutoff |
 | Ripple link store at `stages/30_*/output/`, once built | 4 | Authoritative for links; read-only | For link tensions and churn | Links up to the cutoff |
 | `references/dream/detector_params.json` | 3 | Authoritative for thresholds and windows | Yes | All sections |
 | `references/dream/claim_vocabulary.json` | 3 | Authoritative for conflicting value pairs | Yes | `conflicting_value_pairs` |
 | `references/dream/resolve_prompt_v*.txt` | 3 | Authoritative for the resolution prompt; versioned in `proposer_version` | For model proposals | Latest version |
 | Development and held-out resolution labels | 3 | Authoritative for scoring; read-only to the worker | For scoring | Label splits |
-| `stages/51_dream_detect/output/` (`tensions.jsonl`, `shifts.jsonl`, `resolutions.jsonl`) | 4 | This stage's own stores | Yes | Existing lines |
+| `<out>/tensions/`, `<out>/shifts/`, `<out>/resolutions/` (one `.jsonl` each) | 4 | This stage's own stores; `<out>` is the `dream` command's `--out` directory (default `stages/52_dream_report/output`), which holds all four Dream stores | Yes | Existing lines |
 
 ## Process
 1. Deterministic: take the session cutoff and read only what `claims_asof`, the event store and the link store show at that cutoff; nothing recorded later is read.
@@ -25,9 +25,9 @@ Detect tensions between claims, and between claims and prices, and silent shifts
 ## Outputs
 | Path | Schema or format | Consumer |
 |---|---|---|
-| `stages/51_dream_detect/output/tensions.jsonl` | Tension records, append-only, latest record per id wins | `52_dream_report`, `53_dream_evaluate` |
-| `stages/51_dream_detect/output/shifts.jsonl` | Shift records, append-only, latest record per id wins | `52_dream_report`, `53_dream_evaluate` |
-| `stages/51_dream_detect/output/resolutions.jsonl` | Resolution records, append-only, latest record per id wins | `52_dream_report` |
+| `<out>/tensions/tensions.jsonl` | Tension records, append-only, latest record per id wins | `52_dream_report`, `53_dream_evaluate` |
+| `<out>/shifts/shifts.jsonl` | Shift records, append-only, latest record per id wins | `52_dream_report`, `53_dream_evaluate` |
+| `<out>/resolutions/resolutions.jsonl` | Resolution records, append-only, latest record per id wins | `52_dream_report` |
 
 Tensions and shifts are observations about documents and prices, not forecasts.
 

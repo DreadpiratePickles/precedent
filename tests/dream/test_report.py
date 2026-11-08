@@ -17,7 +17,8 @@ from dream_synthetic import (
 from precedent.dream import report as report_module
 from precedent.dream.claim_schema import Claim, Shift, ShiftKind, claim_id_for
 from precedent.dream.claim_store import ClaimStore, ShiftStore, TensionStore
-from precedent.dream.report import DISCLAIMER, diff_between, run
+from precedent.dream.report import diff_between, run
+from precedent.dream.report_render import DISCLAIMER
 
 SESSION = "2024-06-03"
 SECTIONS = [
@@ -306,7 +307,9 @@ def test_a_shift_that_grew_past_the_re_report_fraction_is_re_fired_in_place(tmp_
 # --- text versus price ----------------------------------------------------------------------------------
 
 
-def priced_stores(tmp_path, monkeypatch, shock_day=SESSION, first_price="2023-06-01"):
+def priced_stores(
+    tmp_path, monkeypatch, shock_day=SESSION, first_price="2023-06-01", last_price="2024-06-07"
+):
     monkeypatch.setenv("PRECEDENT_DATA_DIR", str(tmp_path / "data"))
     from dream_synthetic import gdelt_record as rec
 
@@ -318,7 +321,7 @@ def priced_stores(tmp_path, monkeypatch, shock_day=SESSION, first_price="2023-06
         ],
     )
     prices = tmp_path / "prices"
-    write_prices(prices, first_price, "2024-06-07", shocks={("ACME", shock_day): -0.08})
+    write_prices(prices, first_price, last_price, shocks={("ACME", shock_day): -0.08})
     return ["--prices", str(prices), "--market", "MKT"]
 
 
@@ -340,6 +343,28 @@ def test_text_vs_price_uses_a_panel_built_once_per_invocation(tmp_path, monkeypa
         "abnormal return -"
     )
     assert "(z -" in line
+
+
+def test_prices_with_no_row_for_the_session_skip_the_detector_and_say_so(tmp_path, monkeypatch):
+    flags = priced_stores(
+        tmp_path, monkeypatch, shock_day="2024-05-30", last_price="2024-05-31"
+    )  # nothing for 06-03
+    assert dream(tmp_path, SESSION, *flags) == 0
+    text = markdown(tmp_path)
+    assert text.splitlines()[0] == (
+        "# Dream for 2024-06-03   (documents ingested: 1; feed gap: no; prices: none for 2024-06-03)"
+    )
+    assert "[text_vs_price]" not in text
+    header = json.loads(
+        (tmp_path / "dreams" / f"dream_{SESSION}.jsonl").read_text().splitlines()[0]
+    )
+    assert header["skipped"]["no_prices"] == 1 and header["prices_none_for"] == SESSION
+
+
+def test_prices_for_the_session_leave_the_header_line_unchanged(tmp_path, monkeypatch):
+    flags = priced_stores(tmp_path, monkeypatch)
+    assert dream(tmp_path, SESSION, *flags) == 0
+    assert "prices:" not in markdown(tmp_path).splitlines()[0]
 
 
 def test_a_dream_without_prices_says_the_price_detector_was_skipped(tmp_path, populated_stores):
@@ -439,3 +464,47 @@ def test_diff_between_shows_what_changed_across_sessions(tmp_path, populated_sto
     assert text.startswith("--- dream_2024-06-03.md\n+++ dream_2024-06-06.md\n")
     assert "-## Opened tensions (2)" in text and "+## Closed tensions (1)" in text
     assert diff_between(a, a) == ""
+
+
+# --- parser versions (D53) -----------------------------------------------------------------------------
+
+
+def two_parser_versions(tmp_path, monkeypatch):
+    monkeypatch.setenv("PRECEDENT_DATA_DIR", str(tmp_path / "data"))
+    first = gdelt_record(1, "2024-06-03T14:00:00Z")
+    second = gdelt_record(2, "2024-06-03T15:00:00Z", event_type="labor", direction=-1.0)
+    write_events(
+        tmp_path / "data" / "events",
+        [
+            first.model_copy(update={"parser_version": "alpha"}),
+            second.model_copy(update={"parser_version": "beta"}),
+        ],
+    )
+
+
+def test_several_parser_versions_without_a_flag_exit_two_and_name_the_versions(
+    tmp_path, monkeypatch, capsys
+):
+    two_parser_versions(tmp_path, monkeypatch)
+    assert dream(tmp_path) == 2
+    error = capsys.readouterr().err
+    assert "alpha" in error and "beta" in error and "--parser-version" in error
+    assert not (tmp_path / "dreams").exists() and not (tmp_path / "claims").exists()
+
+
+def test_the_parser_version_flag_selects_one_events_file(tmp_path, monkeypatch):
+    two_parser_versions(tmp_path, monkeypatch)
+    assert dream(tmp_path, SESSION, "--parser-version", "beta") == 0
+    stored = (tmp_path / "claims" / "claims.jsonl").read_text()
+    assert "gdelt:2" in stored and "gdelt:1" not in stored
+
+
+def test_an_unknown_parser_version_is_a_usage_error(tmp_path, populated_stores, capsys):
+    assert dream(tmp_path, SESSION, "--parser-version", "nope") == 2
+    assert "v1" in capsys.readouterr().err  # the versions that do exist
+    assert not (tmp_path / "dreams").exists()
+
+
+def test_a_single_events_file_is_used_without_a_flag(tmp_path, populated_stores):
+    assert dream(tmp_path) == 0
+    assert dream(tmp_path, SESSION, "--parser-version", "v1") == 0
