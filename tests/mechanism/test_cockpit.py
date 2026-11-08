@@ -649,3 +649,41 @@ def test_data_dir_defaults_to_the_config_default(monkeypatch, tmp_path, stubbed_
 def test_template_graphs_have_event_nodes_the_cli_can_value():
     templates = load_templates(references_dir() / "mechanism" / "templates", cli._vocabulary())
     assert all(g.event_node_ids for g in templates.values())
+
+
+def test_cli_event_values_match_the_panel_encoding_on_every_template():
+    from precedent.mechanism.panel import event_values_of
+
+    templates = load_templates(references_dir() / "mechanism" / "templates", cli._vocabulary())
+    assert templates
+    for graph in templates.values():
+        key = graph.event_key
+        assert cli._event_values(key, graph) == {
+            node: float(value)
+            for node, value in event_values_of(key, graph.event_node_ids).items()
+        }
+
+
+def test_parse_do_flags_rejects_a_duplicate_node():
+    graph = make_graph()
+    with pytest.raises(ValueError, match="duplicate"):
+        parse_do_flags([f"{RATES}=0", f"{RATES}=1.5"], graph)
+    with pytest.raises(ValueError, match="duplicate"):
+        parse_do_flags([f"{RATES}=0", f"{RISK}=1", f"{RATES}=2"], graph)
+    assert len(parse_do_flags([f"{RATES}=0", f"{RISK}=1"], graph)) == 2
+    assert run([*KEY_FLAGS, "--do", f"{RATES}=0", "--do", f"{RATES}=1"]) == 2
+
+
+def test_code_commit_marks_a_dirty_tree(monkeypatch):
+    calls = []
+
+    class Done:
+        stdout = "abc1234-dirty\n"
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        return Done()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    assert cli._code_commit() == "abc1234-dirty"
+    assert calls == [["git", "describe", "--always", "--dirty"]]

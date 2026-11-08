@@ -2,7 +2,7 @@
   "$defs": {
     "Edge": {
       "additionalProperties": false,
-      "description": "One signed, lagged cause-to-effect link, with where in a document it was read.",
+      "description": "One signed, lagged cause-to-effect link, with where in a document it was read.\n\n`sign` is a strict integer (-1 or +1): `True` and `1.0` are rejected, not coerced.\n`support` is an agreement count, so it is at least 1.",
       "properties": {
         "evidence_span": {
           "anyOf": [
@@ -49,6 +49,7 @@
         },
         "support": {
           "default": 1,
+          "minimum": 1,
           "title": "Support",
           "type": "integer"
         },

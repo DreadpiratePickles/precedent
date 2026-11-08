@@ -45,7 +45,6 @@ if TYPE_CHECKING:
 
 USAGE_ERROR = 2
 DEFAULT_HORIZON = 5
-_SEVERITY_LEVEL = {"low": 0.0, "mid": 1.0, "high": 2.0}
 _MISSING_ENGINE = "not built yet: mechanism needs {module} from the Precedent track"
 _PRECEDENT_PACKAGES = ("precedent.engine", "precedent.libraries")
 
@@ -108,10 +107,15 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def parse_do_flags(flags: list[str], graph: CausalGraph) -> tuple[Intervention, ...]:
-    """`NODE=VALUE` strings to interventions on intermediate or asset nodes with a finite value."""
+    """`NODE=VALUE` strings to interventions on intermediate or asset nodes with a finite value.
+
+    A repeated node is a usage error: two do() values for one node would silently keep only
+    one of them.
+    """
     node_ids = {node.id for node in graph.nodes}
     event_ids = set(graph.event_node_ids)
     parsed = []
+    seen: set[str] = set()
     for flag in flags:
         node, separator, raw = flag.rpartition("=")
         if not separator or not node:
@@ -123,6 +127,9 @@ def parse_do_flags(flags: list[str], graph: CausalGraph) -> tuple[Intervention, 
                 f"--do {flag!r}: {node!r} is an event variable, which is set by its key flag "
                 "(for example --direction), not by do()"
             )
+        if node in seen:
+            raise ValueError(f"--do {flag!r}: duplicate intervention on {node!r}")
+        seen.add(node)
         try:
             value = float(raw)
         except ValueError as error:
@@ -160,20 +167,19 @@ def _key_from_text(text: str) -> EventKey | None:
     return None
 
 
-def event_values_for(key: EventKey, graph: CausalGraph) -> dict[str, float]:
-    """A number for each event node of the graph, read off the key."""
-    values: dict[str, float] = {}
-    for node_id in graph.event_node_ids:
-        field = node_id.rsplit(":", 1)[-1]
-        if field == "direction_sign":
-            values[node_id] = float(key.direction_sign)
-        elif field == "severity_band":
-            values[node_id] = _SEVERITY_LEVEL[key.severity_band]
-        elif field == "is_scheduled":
-            values[node_id] = 1.0 if key.is_scheduled else 0.0
-        else:
-            raise ValueError(f"event node {node_id!r} has no known value encoding")
-    return values
+def _event_values(key: EventKey, graph: CausalGraph) -> dict[str, float]:
+    """The graph's event-node values for `key`, in the panel's one encoding.
+
+    `panel.event_values_of` is the single event-column encoding (the panel reads it off every
+    precedent's key); a query's values are the same mapping, as floats. The import is lazy so a
+    spine-only checkout still starts the command.
+    """
+    from precedent.mechanism.panel import event_values_of
+
+    return {
+        node_id: float(value)
+        for node_id, value in event_values_of(key, graph.event_node_ids).items()
+    }
 
 
 def _vocabulary() -> frozenset[str]:
@@ -321,9 +327,10 @@ def _fit_and_band(
 
 
 def _code_commit() -> str | None:
+    """The commit the run was made from, marked `-dirty` when the working tree has changes."""
     try:
         done = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
+            ["git", "describe", "--always", "--dirty"],
             capture_output=True, text=True, timeout=10, check=True,
             cwd=Path(__file__).resolve().parent,
         )  # fmt: skip
@@ -370,7 +377,7 @@ def _result_for(args: argparse.Namespace, key: EventKey, graph: CausalGraph) -> 
     return build_result(
         graph=graph,
         fitted=fitted,
-        event_values=event_values_for(key, graph),
+        event_values=_event_values(key, graph),
         interventions=interventions,
         precedent=bands,
         seed=args.seed,

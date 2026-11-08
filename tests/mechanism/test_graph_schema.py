@@ -189,6 +189,26 @@ def test_edge_rejects_unknown_fields_and_enum_values():
             Edge.model_validate({**base, **bad, "source_doc_id": None, "evidence_span": None})
 
 
+def test_edge_sign_is_a_strict_int():
+    base = {"source": "a", "target": "b", "lag_band": "days",
+            "source_doc_id": None, "evidence_span": None}  # fmt: skip
+    for bad in (True, False, 1.0, -1.0):
+        with pytest.raises(ValidationError):
+            Edge.model_validate({**base, "sign": bad})
+    assert Edge.model_validate({**base, "sign": 1}).sign == 1
+    assert Edge.model_validate({**base, "sign": -1}).sign == -1
+
+
+def test_edge_support_is_an_agreement_count_of_at_least_one():
+    base = {"source": "a", "target": "b", "sign": 1, "lag_band": "days",
+            "source_doc_id": None, "evidence_span": None}  # fmt: skip
+    for bad in (0, -3):
+        with pytest.raises(ValidationError):
+            Edge.model_validate({**base, "support": bad})
+    assert Edge.model_validate({**base}).support == 1
+    assert Edge.model_validate({**base, "support": 4}).support == 4
+
+
 def test_no_weight_probability_or_confidence_field_exists():
     banned = ("weight", "prob", "confidence")
     for model in (Edge, Node, CausalGraph):
