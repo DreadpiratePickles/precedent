@@ -18,6 +18,9 @@ Turn each triaged article into a validated `NewsEvent` by running a language mod
 4. Deterministic: wrap the object in the record envelope with `parser_version`, keyed by (`article_id`, `parser_version`); append, never overwrite.
 5. The rules typer (`precedent typers`, `PRECEDENT_TYPER=rules`) is deterministic and is single pass: it has no loop and needs none.
 
+### Typing (rules typer)
+`precedent typers` types a market question or headline into an event key with the keyword table in `references/typing_rules.json`. It is single pass: there is no loop. The gold set (`references/gold/typing_cases.json`, 60 cases, 40 dev and 20 held-out) is too small to tune against, so the rules are written once against the dev split and the held-out split is read only as a score. A model typer must beat the rules on the held-out split before it replaces them (design 8.4).
+
 ## Outputs
 | Path | Schema or format | Consumer |
 |---|---|---|
