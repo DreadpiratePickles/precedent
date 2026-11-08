@@ -221,11 +221,16 @@ class ResolutionStore(_AppendOnlyStore[Resolution]):
     def decide(
         self, resolution_id: str, status: Literal["accepted", "rejected"], decided_utc: datetime
     ) -> Resolution:
-        """Record the owner's decision on a proposed resolution."""
+        """Record the owner's decision on a proposed resolution, recorded when it is made."""
         if status not in ("accepted", "rejected"):
             raise ValueError(f"a decision is 'accepted' or 'rejected', not {status!r}")
         return self._append_update(
-            resolution_id, lambda latest: {"status": status, "decided_utc": decided_utc}
+            resolution_id,
+            lambda latest: {
+                "status": status,
+                "decided_utc": decided_utc,
+                "recorded_utc": decided_utc,
+            },
         )
 
 

@@ -66,13 +66,10 @@ def build_sections(
     for shift in shifts:
         if shift.recorded_utc <= cutoff and shift.detected_session == session:
             changed_here[shift.shift_id] = shift
-    # A resolution decided after the cutoff is still proposed as of it.
+    # Like every store (D13), by when a line was recorded: a proposal stored after the cutoff is
+    # invisible, and a resolution decided after it is still proposed as of it.
     resolutions = list(
-        {
-            r.resolution_id: r
-            for r in resolutions
-            if r.proposed_utc <= cutoff and (r.decided_utc is None or r.decided_utc <= cutoff)
-        }.values()
+        {r.resolution_id: r for r in resolutions if r.recorded_utc <= cutoff}.values()
     )
     names = Names(
         latest_claim,

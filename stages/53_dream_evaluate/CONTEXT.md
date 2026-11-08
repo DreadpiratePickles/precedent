@@ -6,9 +6,9 @@ Sample tensions for the owner to check by hand and score each detector's precisi
 ## Inputs
 | Path or source | Layer | Authority | Required | Relevant section |
 |---|---:|---|---:|---|
-| `stages/51_dream_detect/output/tensions.jsonl` | 4 | Authoritative for tensions to sample; read-only | Yes | Latest record per id |
-| `stages/51_dream_detect/output/shifts.jsonl` | 4 | Authoritative for shifts to sample; read-only | Yes | Latest record per id |
-| `stages/52_dream_report/output/dream_<session>.jsonl` | 4 | Authoritative for what was reported; read-only | Yes | Sessions in the evaluation window |
+| `<out>/tensions/tensions.jsonl`: `<out>` is the `dream` command's `--out` directory (default `stages/52_dream_report/output`) | 4 | Authoritative for tensions to sample; read-only | Yes | Latest record per id |
+| `<out>/shifts/shifts.jsonl` (same `<out>`) | 4 | Authoritative for shifts to sample; read-only | Yes | Latest record per id |
+| `<out>/dreams/dream_<session>.jsonl` | 4 | Authoritative for what was reported; read-only | Yes | Sessions in the evaluation window |
 | `references/dream/detector_params.json` | 3 | Authoritative for `review_sample_per_kind` and `detector_keep_precision` | Yes | Evaluation |
 | `stages/53_dream_evaluate/output/` (owner's hand-check verdicts) | 4 | Authoritative for whether a record was correct; written by the owner | For scoring | Verdict file |
 

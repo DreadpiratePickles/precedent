@@ -68,3 +68,20 @@ def test_the_remaining_arguments_reach_the_subcommand(monkeypatch):
     )
     assert dream_run(["review", "--tension", "abc"]) == 7
     assert seen == [["--tension", "abc"]]
+
+
+@pytest.mark.parametrize(
+    ("word", "module", "function"),
+    [
+        ("promote", "promote", "run_promote"),
+        ("review", "promote", "run_review"),
+        ("brief", "brief", "run"),
+        ("report", "report", "run"),
+    ],
+)
+def test_each_built_subcommand_reaches_its_function(word, module, function, monkeypatch):
+    seen = []
+    target = importlib.import_module(f"precedent.dream.{module}")
+    monkeypatch.setattr(target, function, lambda argv: seen.append(argv) or 5)
+    assert dream_run([word, "--x", "1"]) == 5
+    assert seen == [["--x", "1"]]

@@ -172,8 +172,16 @@ def test_resolution_status_and_decision_time_agree():
         "evidence_span": None,
         "proposer_version": "dream-resolve-v1",
         "proposed_utc": UTC_2024_03_01,
+        "recorded_utc": UTC_2024_03_01,
     }
     assert Resolution(**base, status="proposed").decided_utc is None
+    assert Resolution(**base, status="proposed").claim_id is None  # D47: optional
+    named = Resolution(**base, status="proposed", claim_id="c1")
+    assert named.claim_id == "c1"
+    with pytest.raises(ValidationError):  # D61: recorded_utc is required
+        Resolution(**{k: v for k, v in base.items() if k != "recorded_utc"}, status="proposed")
+    with pytest.raises(ValidationError):
+        Resolution(**{**base, "recorded_utc": datetime(2024, 3, 1)}, status="proposed")
     with pytest.raises(ValidationError):
         Resolution(**base, status="accepted")
     with pytest.raises(ValidationError):

@@ -77,6 +77,7 @@ def resolution(hypothesis="one_is_stale") -> Resolution:
         proposer_version="dream-resolve-v1",
         status="proposed",
         proposed_utc=utc("2024-03-05T00:00:00"),
+        recorded_utc=utc("2024-03-05T00:00:00"),
     )
 
 
@@ -321,6 +322,8 @@ def test_resolution_store_decide_and_conflict(tmp_path):
     store.append([r1])
     decided = store.decide("r1", "accepted", utc("2024-03-06T00:00:00"))
     assert decided.status == "accepted" and decided.decided_utc == utc("2024-03-06T00:00:00")
+    assert decided.recorded_utc == decided.decided_utc  # D61: the decision is recorded when made
+    assert store.read_all()[0].recorded_utc == utc("2024-03-05T00:00:00")
     assert [r.status for r in store.read_all()] == ["proposed", "accepted"]
     assert [r.status for r in store.latest()] == ["accepted"]
     assert store.append([r1]).identical_skipped == 1

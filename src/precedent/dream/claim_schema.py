@@ -223,6 +223,8 @@ class Resolution(BaseModel):
     status: Literal["proposed", "accepted", "rejected"]
     proposed_utc: UtcDatetime
     decided_utc: UtcDatetime | None = None
+    recorded_utc: UtcDatetime  # when this line was stored: the proposer's ingest, or the decision
+    claim_id: str | None = None  # the claim the hypothesis names (one_is_stale, extraction_error)
 
     @field_validator("resolution_id", "tension_id")
     @classmethod

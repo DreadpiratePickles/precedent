@@ -574,6 +574,7 @@ def test_replaying_a_session_after_its_resolution_was_decided_later_gives_the_sa
         proposer_version="resolve-test-v1",
         status="proposed",
         proposed_utc=at("2024-06-03T19:00:00Z"),
+        recorded_utc=at("2024-06-03T19:00:00Z"),
     )
     store = ResolutionStore(tmp_path / "resolutions")
     store.append([proposal])
@@ -585,3 +586,36 @@ def test_replaying_a_session_after_its_resolution_was_decided_later_gives_the_sa
     assert b"## Proposed resolutions awaiting review (0)" in dream_bytes(tmp_path, "2024-06-06")[0]
     assert dream(tmp_path) == 0
     assert dream_bytes(tmp_path, SESSION) == first
+
+
+def test_replaying_a_session_after_a_proposal_was_appended_later_gives_the_same_bytes(
+    tmp_path, populated_stores
+):
+    """D61: a resolution is visible by when it was recorded, not by its business-time stamp."""
+    from precedent.dream.claim_schema import Resolution
+    from precedent.dream.claim_store import ResolutionStore
+
+    assert dream(tmp_path) == 0
+    first = dream_bytes(tmp_path, SESSION)
+    assert b"## Proposed resolutions awaiting review (0)" in first[0]
+    conflict = next(
+        t for t in TensionStore(tmp_path / "tensions").latest() if t.kind == "value_conflict"
+    )
+    ResolutionStore(tmp_path / "resolutions").append(
+        [
+            Resolution(
+                resolution_id="r-late",
+                tension_id=conflict.tension_id,
+                hypothesis="different_scope",
+                evidence_span="Acme labor news is about a subsidiary",
+                proposer_version="resolve-test-v1",
+                status="proposed",
+                proposed_utc=at("2024-06-03T19:00:00Z"),  # about the session ...
+                recorded_utc=at("2024-06-10T09:00:00Z"),  # ... but stored a week later
+            )
+        ]
+    )
+    assert dream(tmp_path) == 0
+    assert dream_bytes(tmp_path, SESSION) == first
+    assert dream(tmp_path, "2024-06-11") == 0
+    assert b"## Proposed resolutions awaiting review (1)" in dream_bytes(tmp_path, "2024-06-11")[0]
