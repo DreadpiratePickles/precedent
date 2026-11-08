@@ -169,7 +169,8 @@ def test_the_manifest_carries_the_run_provenance(tmp_path, synthetic_market, run
     assert manifest["parser_version"] == "rules-test"
     assert manifest["label_expr"] == DEFAULT_LABEL_EXPR
     assert manifest["lgb_params"] == LGB_PARAMS
-    assert manifest["events_without_price_row"] == 0
+    assert manifest["events_without_price_row"] == {"news_": 0}
+    assert manifest["events_without_price_row_total"] == 0
     assert re.fullmatch(r"[0-9a-f]{40}|unknown", manifest["code_commit"])
     assert manifest["folds"][0]["train"] == [day.isoformat() for day in FOLDS[0]["train"]]
     assert sorted(manifest["rung_files_sha256"]) == ["m0_price.yaml", "m1_news.yaml"]
@@ -184,6 +185,41 @@ def test_a_purge_gap_shorter_than_the_label_horizon_is_refused(
     with pytest.raises(ValueError, match="purge"):
         run(synthetic_market, tmp_path, rungs_dir, folds=too_short)
     assert not (tmp_path / "ablation.csv").exists()
+
+
+def test_a_bad_later_fold_is_refused_before_any_trial_is_fitted(
+    tmp_path, synthetic_market, rungs_dir, monkeypatch
+):
+    too_short = purged_walk_forward_segments(
+        SESSIONS, train_len=100, valid_len=30, test_len=60, step=60, label_horizon=1
+    )
+
+    def fail_if_fitted(*args, **kwargs):
+        raise AssertionError("a trial was fitted before every fold's purge gap was checked")
+
+    monkeypatch.setattr("precedent.spine.ablation.fit_fold_predictions", fail_if_fitted)
+    with pytest.raises(ValueError, match="purge"):
+        run(synthetic_market, tmp_path, rungs_dir, folds=[FOLDS[0], too_short[1]])
+
+
+def test_an_orphan_factor_row_is_counted_once_not_once_per_trial(
+    tmp_path, synthetic_market, rungs_dir
+):
+    orphan = pd.DataFrame(
+        0.0,
+        index=pd.MultiIndex.from_tuples(
+            [(FOLDS[0]["test"][0], "NOT_LISTED")], names=["datetime", "instrument"]
+        ),
+        columns=synthetic_market.panel.columns,
+    )
+    panel = pd.concat([synthetic_market.panel, orphan]).sort_index()
+    market = SyntheticMarket(synthetic_market.sessions, panel, synthetic_market.price_loader)
+    assert len(FOLDS) == 2
+    run(market, tmp_path, rungs_dir)
+    manifest = json.loads((tmp_path / "run_manifest.json").read_text())
+    assert manifest["trial_count"] == 4  # two folds, two rungs
+    assert manifest["events_without_price_row"] == {"news_": 1}
+    assert manifest["events_without_price_row_total"] == 1
 
 
 def test_a_rung_that_selects_no_supplied_panel_is_refused(tmp_path, synthetic_market):

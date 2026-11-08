@@ -180,6 +180,11 @@ def test_cutoff_audit_flags_a_session_outside_the_calendar():
     assert cutoff_audit(events, CUTOFFS).index.tolist() == [0]
 
 
+def test_cutoff_audit_does_not_depend_on_the_order_of_the_cutoffs():
+    events = audit_events([("2024-01-03", "2024-01-03 15:00"), ("2024-01-03", "2024-01-04 15:00")])
+    assert cutoff_audit(events, CUTOFFS.iloc[::-1]).index.tolist() == [1]
+
+
 def test_cutoff_audit_requires_aware_available_time():
     events = audit_events([("2024-01-03", "2024-01-03 15:00")])
     events["available_utc"] = events["available_utc"].dt.tz_localize(None)

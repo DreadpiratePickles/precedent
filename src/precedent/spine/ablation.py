@@ -194,6 +194,23 @@ def _panels_for(rung: Rung, factor_panels: Mapping[str, pd.DataFrame]) -> dict[s
     }
 
 
+def _price_index(
+    price_loader: DataLoader, start: pd.Timestamp, end: pd.Timestamp
+) -> pd.MultiIndex:
+    """The (datetime, instrument) rows the price loader has over `[start, end]`."""
+    handler, _ = make_alpha_handler(price_loader, {}, start, end)
+    return handler.fetch(col_set="__raw", data_key=handler.DK_R).index
+
+
+def _count_rows_without_price_row(
+    panel: pd.DataFrame, price_index: pd.MultiIndex, start: pd.Timestamp, end: pd.Timestamp
+) -> int:
+    """Panel rows inside `[start, end]` that have no price row (the join drops them)."""
+    dates = panel.index.get_level_values("datetime")
+    in_window = panel.index[(dates >= start) & (dates <= end)]
+    return int((~in_window.isin(price_index)).sum())
+
+
 def _write_text_atomically(path: Path, text: str) -> None:
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(text, encoding="utf-8")
@@ -215,30 +232,32 @@ def run_ablation(
     """Run every rung on every fold; write `ablation.csv` and `run_manifest.json` to `out_dir`.
 
     Each (rung, fold) is one trial with its own handler over `[train start, test end]` of the
-    fold. Raises `ValueError` before writing anything if a fold's purge gap is shorter than the
-    label horizon derived from `label_expr`, or a rung names a prefix no panel carries.
+    fold. Raises `ValueError` before fitting anything if any fold's purge gap is shorter than the
+    label horizon derived from `label_expr`, or a rung names a prefix no panel carries. Factor rows
+    with no price row are counted once per panel over the union window of all folds, not per trial.
     """
     if not rungs or not folds:
         raise ValueError("run_ablation needs at least one rung and one fold")
     horizon = label_horizon_of(label_expr)
     selected = {rung.name: _panels_for(rung, factor_panels) for rung in rungs}
+    window_start = min(fold["train"][0] for fold in folds)
+    window_end = max(fold["test"][1] for fold in folds)
+    price_index = _price_index(price_loader, window_start, window_end)
+    sessions = pd.DatetimeIndex(price_index.get_level_values("datetime").unique().sort_values())
+    for fold in folds:
+        check_purge_gap(sessions, fold, horizon)
+    orphan_rows = {
+        key: _count_rows_without_price_row(panel, price_index, window_start, window_end)
+        for key, panel in sorted(factor_panels.items())
+    }
     rows: list[dict[str, Any]] = []
-    events_without_price_row = 0
     for rung in rungs:
         for fold_index, fold in enumerate(folds):
-            handler, report = make_alpha_handler(
+            handler, _ = make_alpha_handler(
                 price_loader, selected[rung.name], fold["train"][0], fold["test"][1]
             )
-            sessions = pd.DatetimeIndex(
-                handler.fetch(col_set="__raw", data_key=handler.DK_R)
-                .index.get_level_values("datetime")
-                .unique()
-                .sort_values()
-            )
-            check_purge_gap(sessions, fold, horizon)
             predictions = fit_fold_predictions(handler, fold, lgb_params)
             summary = ic_summary(daily_rank_ic(predictions["pred"], predictions["label"]))
-            events_without_price_row += report.events_without_price_row
             rows.append(
                 {
                     "rung": rung.name,
@@ -266,7 +285,8 @@ def run_ablation(
         ],
         "lgb_params": dict(lgb_params),
         "trial_count": len(rows),
-        "events_without_price_row": events_without_price_row,
+        "events_without_price_row": orphan_rows,
+        "events_without_price_row_total": sum(orphan_rows.values()),
     }
     out_dir.mkdir(parents=True, exist_ok=True)
     _write_text_atomically(out_dir / "ablation.csv", result.to_csv(index=False))

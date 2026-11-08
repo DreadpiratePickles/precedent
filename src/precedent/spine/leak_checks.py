@@ -63,7 +63,7 @@ def cutoff_audit(events: pd.DataFrame, session_cutoffs_utc: pd.Series) -> pd.Dat
     if not isinstance(events["available_utc"].dtype, pd.DatetimeTZDtype):
         raise ValueError("events.available_utc must be timezone-aware")
     cutoffs = session_cutoffs_utc.dt.tz_convert("UTC").dt.as_unit("ns")
-    cutoffs = cutoffs.set_axis(pd.DatetimeIndex(cutoffs.index).as_unit("ns"))
+    cutoffs = cutoffs.set_axis(pd.DatetimeIndex(cutoffs.index).as_unit("ns")).sort_index()
     previous = cutoffs.shift(1)
     sessions = pd.DatetimeIndex(events["effective_session"]).as_unit("ns")
     available = events["available_utc"].dt.tz_convert("UTC").dt.as_unit("ns")
