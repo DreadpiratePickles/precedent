@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "design_section": "7.3",
+  "note": "Human record of the backtest assumptions. build_port_analysis_config reads its defaults from its own signature; a test checks the two agree. Every value is a proposal until the owner accepts it.",
+  "settings": {
+    "region": {"value": "us", "proposed": true, "basis": "Lot size 1, no price limit (SRC: Qlib region config)."},
+    "deal_price": {"value": "open", "proposed": true, "basis": "Matches the label (design 4.2); convention C1 decides at the close of t and trades at the open of t+1."},
+    "topk": {"value": 50, "proposed": true, "basis": "TopkDropoutStrategy(topk=50, n_drop=5), long-only: Qlib cannot short (SRC)."},
+    "n_drop": {"value": 5, "proposed": true, "basis": "TopkDropoutStrategy(topk=50, n_drop=5), long-only: Qlib cannot short (SRC)."},
+    "benchmark": {"value": "SPY", "proposed": true, "basis": "Must exist in the provider data."},
+    "account": {"value": 1000000, "proposed": true, "basis": "Starting cash in USD for the simulation; sets order sizes against min_cost, not a capacity claim."},
+    "open_cost": {"value": 0.0005, "proposed": true, "basis": "5 bps per side covers commission and half-spread for liquid large caps. No primary figure for the half-spread was confirmed. Anchor for institutional size: Frazzini, Israel and Moskowitz report mean implementation shortfall of 13 bps on live trades (SRC)."},
+    "close_cost": {"value": 0.0005, "proposed": true, "basis": "Same as open_cost: 5 bps per side, proposed."},
+    "cost_stress_per_side": {"value": [0.001, 0.002], "proposed": true, "basis": "Re-run at 10 and 20 bps per side; a result that dies at double the cost is not a result."},
+    "min_cost": {"value": 1.0, "proposed": true, "basis": "Per-order minimum of a retail broker's fixed plan (from a search snippet, unverified)."},
+    "impact_cost": {"value": 0.1, "proposed": true, "basis": "Qlib's rule: extra fee ratio = impact_cost * (trade value / day's traded value) ** 2 (SRC, not executed). At 10% of the day's volume this adds 10 bps; at 1%, 0.1 bps."},
+    "capacity_check": {"value": "square-root law", "proposed": true, "basis": "Report cost against impact = Y * daily_vol * sqrt(Q / V), Y of order one (Toth et al., 2011, SRC); Qlib's impact is quadratic in participation and leaves the fill price unchanged."},
+    "borrow_anchor_general_collateral_annual": {"value": 0.0017, "proposed": true, "basis": "General collateral averaged 17 bps a year in D'Avolio (2002), a dated sample (SRC)."},
+    "borrow_anchor_specials_annual": {"value": 0.043, "proposed": true, "basis": "Specials averaged 4.3% a year in D'Avolio (2002), a dated sample (SRC)."},
+    "borrow_stress_annual": {"value": [0.01, 0.05], "proposed": true, "basis": "Stress the short leg's borrow fee at 1% and 5% a year; borrow is charged outside Qlib by long_short_returns."}
+  }
+}
