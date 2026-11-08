@@ -87,7 +87,7 @@ The design's response library (P3) becomes one of three. All three produce rows 
 
 **Asset response** (design P3, unchanged math): CAR of the asset panel at 1, 5 and 20 sessions from prices the user supplies (`precedent prices import <csv>`, columns `date, symbol, open, close`) or builds with the spine's provider. Nothing in the repo displays or redistributes vendor prices; the sample ships no prices. Shown as `NOT BUILT: no prices` on the card until the user imports some.
 
-**Market resolution** (new): the universe is resolved binary markets from Polymarket and Kalshi. Each market's question is typed to an `EventKey` by the typer (section 7), with `source_ref` and the typer version stored. For a precedent event at `available_utc = t`, a market qualifies when it was open at `t` (created before, resolved after) and its typed key is not `UNTYPED`. `value` is 1.0 for a YES resolution; `response_complete_session` is the session on which the resolution time falls. The card groups by market key: "after the last 9 unscheduled central-bank holds in the US, `central_bank / cut / US` markets open at the time resolved YES 2 of 9". Untyped markets are counted and reported, never silently dropped.
+**Market resolution** (new): the universe is resolved binary markets from Polymarket and Kalshi. Polymarket: Gamma `GET /markets?closed=true`, winner derived by code from `outcomePrices` when `umaResolutionStatus == "resolved"` (there is no winner field; the derivation is checked against the outcome labels and any ambiguous row is skipped and counted). Kalshi: `GET /markets?status=settled` for markets settled after the `/historical/cutoff` timestamp and `GET /historical/markets` for earlier ones, `result` in {yes, no}, `settlement_ts` as the resolution time, category joined through the Series object *(all checked 2026-11-07, section 12)*. Each market's question is typed to an `EventKey` by the typer (section 7), with `source_ref` and the typer version stored. For a precedent event at `available_utc = t`, a market qualifies when it was open at `t` (created before, resolved after) and its typed key is not `UNTYPED`. `value` is 1.0 for a YES resolution; `response_complete_session` is the session on which the resolution time falls. The card groups by market key: "after the last 9 unscheduled central-bank holds in the US, `central_bank / cut / US` markets open at the time resolved YES 2 of 9". Untyped markets are counted and reported, never silently dropped.
 
 **Event sequence** (new): for a precedent event with actor country `c` and key `K`, and each follow-on `event_type` `T` in the schema, `value` is 1.0 if a first-report event of type `T` linked to `c` (same actor country, or `c` as Actor2's country) has `effective_session` within `h` sessions after the precedent's, else 0.0; one row per `(T, h)` for `h` in {5, 20, 60}. The placebo for a binary outcome is the unconditional rate of `T` for country group `g` over random windows of length `h`. The source is GDELT 2.0 only (section 8).
 
@@ -103,7 +103,7 @@ Effective sample size, shrinkage, story clustering, the refusal threshold and th
 
 ## 6. MCP server
 
-`precedent-mcp` runs over stdio with the official Python MCP SDK (section 12 for the package and version). Two tools, both read-only against the local library:
+`precedent-mcp` runs over stdio with the official Python MCP SDK, PyPI package `mcp`, pinned `>=2,<3`, using `from mcp.server.mcpserver import MCPServer` and `@server.tool()`; `server.run()` defaults to stdio *(checked 2026-11-07; `FastMCP` was removed in 2.x)*. Two tools, both read-only against the local library:
 
 - `precedents(text: str | None, key: dict | None, horizon: int = 5, outcome_type: str = "all") -> dict`: the card's JSON.
 - `card(text: str | None, key: dict | None, horizon: int = 5) -> str`: the text card.
@@ -150,17 +150,29 @@ The design left the CAMEO mapping open. Resolution:
 
 ## 11. Pre-publish checklist (owner's gate)
 
-Secret scan recorded; the copied research docs under `docs/` reviewed for what stays public; GitHub repository created and named by the owner (`precedent` suggested); PyPI name chosen (section 12); `LICENSE` Apache-2.0 with the owner's name; the securities-lawyer hour booked (thesis T5); the README's Status table lists every live path not exercised.
+Secret scan recorded; the copied research docs under `docs/` reviewed for what stays public; GitHub repository created and named by the owner (`precedent` suggested); PyPI name chosen (section 13, B1); `LICENSE` Apache-2.0 with the owner's name; the securities-lawyer hour booked (thesis T5); the README's Status table lists every live path not exercised.
 
 ## 12. Facts checked on 2026-11-07
 
-Filled from the fact-check report when it returns; each line names the URL read. Until then every API detail above is a proposal.
+Read from official sources by a fact-check agent; live probes were unauthenticated reads. Anything not listed here is a proposal.
+
+| Area | Fact | Source |
+|---|---|---|
+| Polymarket | Gamma base `https://gamma-api.polymarket.com`; `GET /markets?closed=true` lists closed markets; `limit`/`offset` and a keyset endpoint `/markets/keyset` with `after_cursor`/`next_cursor`; fields `question`, `endDate`, `createdAt`, `closedTime`, `conditionId`, `outcomes`, `outcomePrices`, `clobTokenIds` (the last three are JSON-encoded strings), `umaResolutionStatus`; no winner field; `category`/`tags` often empty on old markets; rate limit 300 requests per 10 s on `/markets` | docs.polymarket.com/api-reference/markets/list-markets, /market-data/discover-markets.md, /api-reference/rate-limits |
+| Polymarket prices | `GET https://clob.polymarket.com/prices-history?market=<token id>&interval=max&fidelity=<minutes>` returns `{"history":[{"t","p"}]}`; fine granularity on old closed markets came back empty in a live probe; a newer `data-api.polymarket.com/v2/prices-history` has 15-day explicit ranges and retention floors | docs.polymarket.com/api-reference/markets/get-prices-history, /market-data/prices-order-books.md |
+| Kalshi | Base `https://api.elections.kalshi.com/trade-api/v2` (also `external-api.kalshi.com`); unauthenticated reads allowed; `GET /markets?status=settled` with cursor pagination; fields `title` (deprecated, use `yes_sub_title`), `close_time`, `result` (`yes`/`no`/`''`), `settlement_ts`, `event_ticker`, `created_time`; `GET /historical/cutoff` returned `market_settled_ts` 2026-09-08, and older settled markets come only from `GET /historical/markets`; category lives on the Series (`/series/{ticker}`), not the market; rate limit about 20 reads per second, burst 60, 429 on excess | docs.kalshi.com/api-reference/market/get-markets, /api-reference/historical/get-historical-cutoff-timestamps, /getting_started/rate_limits, /getting_started/quick_start_market_data |
+| GDELT 2.0 | `http://data.gdeltproject.org/gdeltv2/masterfilelist.txt` (`<bytes> <md5> <url>` per line, first entry 2015-02-18 23:00); files `YYYYMMDDHHMMSS.export.CSV.zip` every 15 minutes, tab-separated, no header, 61 columns; `EventRootCode` col 29, `QuadClass` 30, `GoldsteinScale` 31, `NumMentions` 32, `NumSources` 33, `NumArticles` 34, `AvgTone` 35, `DATEADDED` 60 (`YYYYMMDDHHMMSS`, UTC), `SOURCEURL` 61; `NumMentions`/`NumSources`/`NumArticles` count only the first 15-minute window the event was seen in; CAMEO roots 01-20 as named in the lookup; terms: unrestricted academic, commercial or governmental use, citation and link required on redistribution (quote the page before using the wording) | data.gdeltproject.org/documentation/GDELT-Event_Codebook-V2.0.pdf, gdeltproject.org/data/lookups/CSV.header.dailyupdates.txt, gdeltproject.org/data/lookups/CAMEO.eventcodes.txt, gdeltproject.org/about.html |
+| GDELT 1.0 | `http://data.gdeltproject.org/events/YYYYMMDD.export.CSV.zip`, daily since 2013-04-01, still updated, 58 columns, no ADM2 fields; not used by this design (no 15-minute `DATEADDED` before 2015) | gdeltproject.org/data.html |
+| MCP SDK | PyPI `mcp` 2.3.0 (2026-10-02), `Requires-Python >=3.10`; `FastMCP` raises `ModuleNotFoundError` in 2.x; use `from mcp.server.mcpserver import MCPServer`, `@server.tool()`, `server.run()` (stdio default) | pypi.org/pypi/mcp/json, github.com/modelcontextprotocol/python-sdk |
+| SEC EDGAR | `https://data.sec.gov/submissions/CIK##########.json` (10-digit CIK); `filings.recent.acceptanceDateTime` is a columnar ISO-8601 UTC array beside `filingDate`, `accessionNumber`, `form`; 10 requests per second; a declared User-Agent with a contact is required | sec.gov/search-filings/edgar-application-programming-interfaces, sec.gov/about/webmaster-frequently-asked-questions |
+| PyPI | `precedent` is registered (placeholder, 0.0.0, 2026-09-01, not ours); `precedent-engine` and `precedents` returned 404 at check time | pypi.org/pypi/<name>/json |
+| uv | 0.13.7 (2026-11-03); install `curl -LsSf https://astral.sh/uv/install.sh \| sh` | docs.astral.sh/uv/getting-started/installation/ |
 
 ## 13. Open decisions for the owner
 
 | # | Decision | Default until decided |
 |---|---|---|
-| B1 | PyPI distribution name | `precedent` if free, else `precedent-engine` |
+| B1 | PyPI distribution name | `precedent-engine` (`precedent` is a reserved placeholder owned by someone else, checked 2026-11-07); the import name stays `precedent` |
 | B2 | Rename the GitHub repository to `precedent` | at publish time |
 | B3 | Which Polymarket and Kalshi categories to ingest first | politics, geopolitics, central banks, macro; no sports |
 | B4 | The `NumSources >= 3` and severity-band thresholds for GDELT | as proposed, measured in the first live run |
