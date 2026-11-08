@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from precedent.config import references_dir
 
@@ -26,6 +26,7 @@ class EngineParams(BaseModel):
     asset_horizons: tuple[int, ...]
     sequence_horizons: tuple[int, ...]
     wilson_z: float
+    embedding_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     placebo_samples: int
     placebo_seed: int
     market: str
