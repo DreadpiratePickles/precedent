@@ -159,3 +159,51 @@ def test_frame_has_one_row_per_resolved_impact_with_typed_columns(tmp_path: Path
     assert frame["effective_session"].iloc[0] == pd.Timestamp("2024-01-08")
     assert str(frame["available_utc"].dtype) == "datetime64[ns, UTC]"
     assert frame["available_utc"].iloc[0] == pd.Timestamp("2024-01-05 14:00", tz="UTC")
+
+
+def test_unresolved_impacts_counts_impacts_not_records(tmp_path: Path) -> None:
+    two_named = EVENT.model_copy(
+        update={
+            "impacted": [
+                *EVENT.impacted,
+                EVENT.impacted[0].model_copy(update={"name": "Beta Inc", "ticker_hint": "BETA"}),
+            ]
+        }
+    )
+    partly_resolved = RECORD.model_copy(update={"event": two_named})
+    store = EventStore(tmp_path)
+    store.append([partly_resolved])
+    frame, report = store.to_frame("rules-8k-v1")
+    assert len(frame) == 1
+    assert (report.unresolved_impacts, report.unaligned_records) == (1, 0)
+
+
+def test_an_unaligned_record_adds_nothing_to_unresolved_impacts(tmp_path: Path) -> None:
+    unaligned_unresolved = UNALIGNED_RECORD.model_copy(update={"resolved_impacts": []})
+    store = EventStore(tmp_path)
+    store.append([unaligned_unresolved])
+    _, report = store.to_frame("rules-8k-v1")
+    assert (report.unresolved_impacts, report.unaligned_records) == (0, 1)
+
+
+def test_the_same_article_twice_in_one_append_is_skipped_once(tmp_path: Path) -> None:
+    store = EventStore(tmp_path)
+    report = store.append([RECORD, RECORD])
+    assert (report.added, report.identical_skipped) == (1, 1)
+    assert store.read("rules-8k-v1") == [RECORD]
+
+
+def test_a_differing_repeat_in_one_append_conflicts_and_writes_nothing(tmp_path: Path) -> None:
+    store = EventStore(tmp_path)
+    changed = RECORD.model_copy(update={"body_sha256": "f" * 64})
+    with pytest.raises(EventConflictError):
+        store.append([RECORD, changed])
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_missing_available_utc_becomes_nat_in_the_frame(tmp_path: Path) -> None:
+    store = EventStore(tmp_path)
+    store.append([RECORD.model_copy(update={"available_utc": None})])
+    frame, _ = store.to_frame("rules-8k-v1")
+    assert pd.isna(frame["available_utc"].iloc[0])
+    assert str(frame["available_utc"].dtype) == "datetime64[ns, UTC]"

@@ -35,8 +35,9 @@ class EventConflictError(Exception):
 class FrameReport:
     """What `to_frame` kept and set aside.
 
-    `unaligned_records` have no effective session, so they cannot be placed on a trading day.
-    `unresolved_impacts` counts aligned records with no resolved instrument. The two are disjoint.
+    `unaligned_records` have no effective session, so they cannot be placed on a trading day;
+    they are counted only there. `unresolved_impacts` counts impacts, not records: over aligned
+    records, the impacted entities the event names minus those resolved to an instrument.
     """
 
     records: int
@@ -114,9 +115,7 @@ class EventStore:
             if record.effective_session is None:
                 unaligned += 1
                 continue
-            if not record.resolved_impacts:
-                unresolved += 1
-                continue
+            unresolved += max(0, len(record.event.impacted) - len(record.resolved_impacts))
             for impact in record.resolved_impacts:
                 rows.append(
                     {
