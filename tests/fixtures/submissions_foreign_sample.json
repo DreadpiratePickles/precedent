@@ -1,0 +1,45 @@
+{
+  "_label": "SYNTHETIC: hand-made in the shape of a data.sec.gov submissions document (field names checked 2026-11-07, amendment spec section 12); every value is invented.",
+  "cik": "1234567",
+  "entityType": "operating",
+  "sic": "3571",
+  "name": "Synthetic Foreign Holdings plc",
+  "tickers": [
+    "XYZ"
+  ],
+  "exchanges": [
+    "NYSE"
+  ],
+  "addresses": {
+    "mailing": {
+      "stateOrCountry": "X0"
+    },
+    "business": {
+      "city": "CUPERTINO",
+      "stateOrCountry": "X0"
+    }
+  },
+  "filings": {
+    "recent": {
+      "accessionNumber": [
+        "0001234567-24-000001"
+      ],
+      "filingDate": [
+        "2024-03-04"
+      ],
+      "acceptanceDateTime": [
+        "2024-03-04T07:15:30.000Z"
+      ],
+      "form": [
+        "8-K"
+      ],
+      "items": [
+        "1.01"
+      ],
+      "primaryDocument": [
+        "doc0.htm"
+      ]
+    },
+    "files": []
+  }
+}

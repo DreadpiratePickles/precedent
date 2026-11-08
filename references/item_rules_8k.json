@@ -1,0 +1,54 @@
+{
+  "proposed": true,
+  "source": "design 8.4 (RECALLED) + Dream plan",
+  "items": {
+    "1.01": {
+      "event_type": "other",
+      "description": "Entry into a Material Definitive Agreement",
+      "severity": 4,
+      "is_scheduled": false
+    },
+    "1.03": {
+      "event_type": "legal_regulatory",
+      "description": "Bankruptcy or Receivership",
+      "severity": 9,
+      "is_scheduled": false
+    },
+    "1.05": {
+      "event_type": "cyber_incident",
+      "description": "Material Cybersecurity Incidents",
+      "severity": 6,
+      "is_scheduled": false
+    },
+    "2.02": {
+      "event_type": "earnings",
+      "description": "Results of Operations and Financial Condition",
+      "severity": 5,
+      "is_scheduled": true
+    },
+    "2.05": {
+      "event_type": "labor",
+      "description": "Costs Associated with Exit or Disposal Activities",
+      "severity": 5,
+      "is_scheduled": false
+    },
+    "2.06": {
+      "event_type": "other",
+      "description": "Material Impairments",
+      "severity": 5,
+      "is_scheduled": false
+    },
+    "4.02": {
+      "event_type": "legal_regulatory",
+      "description": "Non-Reliance on Previously Issued Financial Statements",
+      "severity": 7,
+      "is_scheduled": false
+    },
+    "5.02": {
+      "event_type": "management_change",
+      "description": "Departure/Election of Directors or Officers",
+      "severity": 4,
+      "is_scheduled": false
+    }
+  }
+}
