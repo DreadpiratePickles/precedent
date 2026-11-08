@@ -10,6 +10,7 @@ from precedent.ripple.link_extraction import (
     ExtractedLink,
     ExtractedLinks,
     LinkParseReport,
+    load_link_prompt,
     parse_links,
 )
 from precedent.ripple.link_store import LinkStore, Relation, graph_asof
@@ -236,10 +237,26 @@ def test_twenty_one_links_are_a_schema_violation_and_twenty_are_fine():
 
 def test_error_text_does_not_echo_the_model_output():
     secret = "ZXQ-UNIQUE-MARKER-9137"
-    _, report = run(json.dumps({"links": [{"relation": secret}]}))
-    assert report.invalid_output and secret not in (report.error or "")
-    _, report = run(secret)
-    assert report.invalid_output and secret not in (report.error or "")
+    row = {
+        "relation": "customer_of",
+        "counterparty_name": "Globex Inc",
+        "counterparty_kind": "company",
+        "evidence_span": GLOBEX_SPAN,
+    }
+    replies = [
+        json.dumps({"links": [{"relation": secret}]}),
+        secret,
+        json.dumps({"links": [], secret: 1}),
+        json.dumps({"links": [{**row, secret: 1}]}),
+        json.dumps({secret: {secret: [secret]}}),
+        json.dumps({"links": [{**row, "relation": secret}]}),
+    ]
+    for reply in replies:
+        _, report = run(reply)
+        assert report.invalid_output and report.error
+        assert secret not in report.error
+    _, report = run(json.dumps({"links": [{**row, secret: 1}]}))
+    assert report.error.startswith("links.0.<extra>:")
 
 
 def test_extractor_is_called_once_with_the_passage_and_the_schema():
@@ -335,3 +352,89 @@ def test_rung_file_matches_the_g3_shape():
     g4 = (root / "m3_ripple_g4.yaml").read_text(encoding="utf-8").splitlines()
     assert g4[0] == "name: m3_ripple_g4"
     assert g4[-1] == g3[-1] == 'panel_prefixes: ["news_", "ripple_"]'
+
+
+def test_mid_word_cut_of_the_evidence_is_dropped():
+    for cut in ("Globex Inc accounted for 1", "lobex Inc accounted for 14%", "Globex Inc accou"):
+        _, report = run(json_links([("customer_of", "Globex Inc", "company", cut)]))
+        assert report.evidence_missing == 1 and report.kept == 0, cut
+
+
+def test_evidence_ending_in_punctuation_or_at_the_passage_edges_is_accepted():
+    for span in ("Globex Inc accounted for 14% of revenue in 2019.", "Item 1. Business.",
+                 "We buy copper from several mines."):
+        _, report = run(json_links([("customer_of", "Globex Inc", "company", span)]))
+        assert report.kept == 1, span
+
+
+def test_report_counts_add_up():
+    reply = json_links(
+        [
+            GLOBEX_ROW,  # kept
+            GLOBEX_ROW,  # duplicate
+            ("customer_of", "Globex Inc", "company", "not in the passage"),  # evidence missing
+            ("supplier_of", "Initech LLC", "company", "We buy copper"),  # unresolved
+        ]
+    )
+    links, report = run(reply)
+    assert (report.proposed, report.evidence_missing, report.unresolved) == (4, 1, 1)
+    assert (report.duplicates, report.kept) == (1, 1) == (1, len(links))
+    assert report.proposed == (
+        report.evidence_missing + report.unresolved + report.duplicates + report.kept
+    )
+
+
+@pytest.mark.parametrize("node", ["", "   "])
+def test_blank_resolved_node_is_unresolved(node):
+    links, report = run(json_links([GLOBEX_ROW]), resolve=lambda name: node)
+    assert links == [] and report.unresolved == 1 and report.kept == 0
+
+
+def test_span_copied_only_from_the_prompt_template_is_dropped():
+    extractor = FakeExtractor(
+        json_links([("customer_of", "Globex Inc", "company", "=== PASSAGE START ===")])
+    )
+    _, report = run(extractor.reply, extractor=extractor)
+    assert "=== PASSAGE START ===" in extractor.calls[0][0]  # it is in the prompt, not the passage
+    assert report.evidence_missing == 1 and report.kept == 0
+    reply = json_links([("customer_of", "Globex Inc", "company", "closed lists")])
+    _, report = run(reply)
+    assert report.evidence_missing == 1
+
+
+def test_a_later_prompt_version_is_used(tmp_path, monkeypatch):
+    references = tmp_path / "references"
+    references.mkdir()
+    source = config.references_dir()
+    (references / "ripple_params.json").write_bytes((source / "ripple_params.json").read_bytes())
+    (references / "link_prompt_v2.txt").write_text(
+        "VERSION TWO for {filer}\n{passage}\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(config, "references_dir", lambda: references)
+    extractor = FakeExtractor(json_links([GLOBEX_ROW]))
+    _, report = run(extractor.reply, extractor=extractor, prompt_file="link_prompt_v2.txt")
+    assert report.kept == 1
+    assert extractor.calls[0][0].startswith("VERSION TWO for ACME")
+    assert load_link_prompt(prompt_file="link_prompt_v2.txt").startswith("VERSION TWO")
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "../link_prompt_v1.txt",
+        "sub/link_prompt_v1.txt",
+        "/etc/passwd",
+        "link_prompt_v.txt",
+        "link_prompt_v1.md",
+        "link_prompt_v1.txt\n",
+        "typing_prompt_v1.txt",
+        "",
+    ],
+)
+def test_bad_prompt_file_name_is_rejected_before_the_model_is_called(name):
+    extractor = FakeExtractor(json_links([GLOBEX_ROW]))
+    with pytest.raises(ValueError, match="prompt_file"):
+        run(extractor.reply, extractor=extractor, prompt_file=name)
+    assert extractor.calls == []
+    with pytest.raises(ValueError, match="prompt_file"):
+        load_link_prompt(prompt_file=name)
