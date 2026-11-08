@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,9 +55,10 @@ def _banner(typer_name: str, dry_run: bool, typer: Typer) -> Banner:
 def _split_scores(
     typer: Typer, cases: list[GoldCase], split: str
 ) -> dict[str, TypingScore]:
-    """Type each case exactly once; every split's score comes from those stored results."""
-    results: list[TypedText] = [typer.type_text(c.text) for c in cases]
-    pairs = list(zip(cases, results, strict=True))
+    """Type only the requested split, each case once; every table comes from that one pass."""
+    wanted = cases if split == "all" else [c for c in cases if c.split == split]
+    results: list[TypedText] = [typer.type_text(c.text) for c in wanted]
+    pairs = list(zip(wanted, results, strict=True))
 
     def score(name: str) -> TypingScore:
         chosen = [(c, r) for c, r in pairs if name == "all" or c.split == name]
@@ -76,6 +78,16 @@ def _print_scores(scores: dict[str, TypingScore]) -> None:
 
 def _status_path() -> Path:
     return repo_root() / "docs" / "STATUS.md"
+
+
+def _status_problem() -> str | None:
+    """Why docs/STATUS.md cannot take a LIVE-MODEL row, or None when it can."""
+    path = _status_path()
+    if not path.is_file():
+        return f"{path} is not an existing regular file"
+    if not os.access(path, os.W_OK):
+        return f"{path} is not writable"
+    return None
 
 
 def _record_live_run(typer_name: str, version: str, out: Path) -> None:
@@ -100,11 +112,9 @@ def run(argv: list[str]) -> int:
     if args.typer != "rules" and args.max_calls is None:
         print("a model typer requires an explicit --max-calls N", file=sys.stderr)
         return USAGE_ERROR
-    if args.typer != "rules" and not args.dry_run and not _status_path().is_file():
-        print(
-            f"cannot record a LIVE-MODEL run: {_status_path()} not found; no model was called",
-            file=sys.stderr,
-        )
+    problem = None if args.typer == "rules" or args.dry_run else _status_problem()
+    if problem is not None:
+        print(f"cannot record a LIVE-MODEL run: {problem}; no model was called", file=sys.stderr)
         return _EXIT_FAILURE
     try:
         typer = typer_by_name(args.typer, args.max_calls, args.dry_run)

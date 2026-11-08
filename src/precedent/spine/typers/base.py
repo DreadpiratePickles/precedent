@@ -36,7 +36,7 @@ class TypedText(BaseModel):
             if self.key is None or not self.evidence_span:
                 raise ValueError("a typed result needs a key and an evidence_span")
         elif self.key is not None or self.evidence_span is not None:
-            raise ValueError(f"a {self.status} result carries neither a key nor an evidence_span")
+            raise ValueError(f"status {self.status!r} must carry neither key nor evidence_span")
         return self
 
 

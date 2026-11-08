@@ -1,5 +1,6 @@
 """Tests for gold-set scoring, the gold set's shape, and the score command."""
 import json
+import os
 
 import pytest
 
@@ -128,12 +129,51 @@ def _use_typer(monkeypatch, typer):
     monkeypatch.setattr(typers_cli, "typer_by_name", lambda name, max_calls, dry_run: typer)
 
 
-def test_split_all_types_each_case_exactly_once(fake_repo, monkeypatch):
+@pytest.mark.parametrize("split, expected_calls", [("dev", 40), ("heldout", 20), ("all", 60)])
+def test_each_split_types_only_its_own_cases_exactly_once(
+    fake_repo, monkeypatch, split, expected_calls
+):
     counting = CountingTyper()
     _use_typer(monkeypatch, counting)
     out = fake_repo / "s.md"
-    assert run(["score", "--typer", "anthropic", "--max-calls", "60", "--out", str(out)]) == 0
-    assert counting.calls == 60
+    args = ["score", "--typer", "anthropic", "--max-calls", "70", "--split", split]
+    assert run([*args, "--out", str(out)]) == 0
+    assert counting.calls == expected_calls
+
+
+def test_a_typer_without_calls_made_falls_back_to_the_dry_run_flag(fake_repo, monkeypatch):
+    _use_typer(monkeypatch, FakeTyper({}))
+    live = fake_repo / "live.md"
+    assert run(["score", "--typer", "anthropic", "--max-calls", "5", "--out", str(live)]) == 0
+    assert live.read_text(encoding="utf-8").startswith("LIVE —")
+    dry = fake_repo / "dry.md"
+    args = ["score", "--typer", "anthropic", "--max-calls", "5", "--dry-run", "--out", str(dry)]
+    assert run(args) == 0
+    assert dry.read_text(encoding="utf-8").startswith("NO LIVE RUN —")
+
+
+def test_an_unwritable_status_file_fails_before_any_call(fake_repo, monkeypatch, capsys):
+    status = fake_repo / "docs" / "STATUS.md"
+    status.chmod(0o444)
+    if os.access(status, os.W_OK):
+        pytest.skip("this platform or user ignores file permissions")
+    counting = CountingTyper()
+    _use_typer(monkeypatch, counting)
+    args = ["score", "--typer", "anthropic", "--max-calls", "5", "--out", str(fake_repo / "s.md")]
+    assert run(args) == 1 and counting.calls == 0
+    assert "not writable" in capsys.readouterr().err
+
+
+def test_a_status_write_failure_after_the_run_exits_nonzero(fake_repo, monkeypatch, capsys):
+    _use_typer(monkeypatch, CountingTyper())
+
+    def refuse(*_args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(typers_cli, "_record_live_run", refuse)
+    args = ["score", "--typer", "anthropic", "--max-calls", "70", "--out", str(fake_repo / "s.md")]
+    assert run(args) == 1
+    assert "disk full" in capsys.readouterr().err
 
 
 def test_a_live_run_gets_a_live_banner_and_a_status_row_even_without_a_trailing_newline(
