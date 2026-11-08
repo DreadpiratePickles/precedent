@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from precedent.spine.jsonl_io import AppendReport, atomic_write_lines
+from precedent.spine.jsonl_io import (
+    AppendReport,
+    atomic_write_lines,
+    read_json_state,
+    write_json_state,
+)
 
 
 def test_a_write_creates_the_file_with_one_line_per_item(tmp_path: Path) -> None:
@@ -41,3 +46,20 @@ def test_append_report_is_a_frozen_pair_of_counts() -> None:
     report = AppendReport(added=1, identical_skipped=2)
     with pytest.raises(AttributeError):
         report.added = 5  # type: ignore[misc]
+
+
+def test_state_files_round_trip_and_a_missing_one_is_empty(tmp_path):
+    path = tmp_path / "state" / "x.json"
+    assert read_json_state(path) == {}
+    write_json_state(path, {"cursor": "c1", "exhausted": False})
+    assert read_json_state(path) == {"cursor": "c1", "exhausted": False}
+
+
+def test_a_corrupt_state_file_is_a_value_error_naming_the_file(tmp_path):
+    path = tmp_path / "x.json"
+    path.write_text("{not json")
+    with pytest.raises(ValueError, match=r"x\.json"):
+        read_json_state(path)
+    path.write_text("[1]")
+    with pytest.raises(ValueError, match="JSON object"):
+        read_json_state(path)
