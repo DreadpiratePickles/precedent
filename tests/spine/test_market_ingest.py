@@ -368,3 +368,32 @@ def test_is_transient_outcome_by_refusal_reason(reason, transient):
 def test_is_transient_outcome_for_dry_run_and_ordinary_answers():
     assert is_transient_outcome(_typed_with("untyped", "dry-run")) is True
     assert is_transient_outcome(_typed_with("untyped", "not in mapping")) is False
+
+
+def test_a_malformed_store_line_is_a_reported_failure_not_a_traceback(data_root, capsys):
+    store_file = data_root / "markets" / "markets_polymarket.jsonl"
+    store_file.parent.mkdir(parents=True)
+    store_file.write_text("{not json}\n")
+    code = polymarket.run(
+        [], transport=FakeTransport([ok({"markets": PM["response"]})]), clock=FakeClock(),
+        typer=TYPER,
+    )
+    captured = capsys.readouterr()
+    assert code == 1
+    summary = json.loads(captured.out.strip().splitlines()[-1])
+    assert summary["error"] is not None and "ValueError" in summary["error"]
+    assert "ingest stopped: ValueError" in captured.err
+    assert store_file.read_text() == "{not json}\n"
+
+
+def test_a_market_repeated_on_a_later_page_is_not_typed_twice(data_root, capsys):
+    page_one = {"markets": PM["response"][:1], "next_cursor": "c1"}
+    page_two = {"markets": PM["response"][:1]}
+    typer = _CountingTyper()
+    code = polymarket.run(
+        [], transport=FakeTransport([ok(page_one), ok(page_two)]), clock=FakeClock(), typer=typer
+    )
+    assert code == 0
+    assert typer.calls == 1
+    report = last_json_line(capsys)["report"]
+    assert (report["kept"], report["already_stored"]) == (1, 1)

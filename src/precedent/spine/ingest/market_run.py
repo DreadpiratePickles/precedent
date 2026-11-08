@@ -122,16 +122,18 @@ def run_market_ingest(
         report,
     )
     wanted = {name.lower() for name in args.category}
-    stored_ids = {r.market_id for r in store.read(venue, typer.version)}
     added = skipped = 0
     error: Exception | None = None
     try:
+        # Inside the error boundary: a malformed store line is a reported partial failure.
+        stored_ids = {r.market_id for r in store.read(venue, typer.version)}
         for page in pages:
             transient_before = report.not_stored_transient
             wanted_markets = _only_categories(page, wanted, report)
             candidates = _drop_already_stored(wanted_markets, stored_ids, report)
             records = type_markets(candidates, typer, report)
             appended = store.append(records)
+            stored_ids.update(record.market_id for record in records)
             added, skipped = added + appended.added, skipped + appended.identical_skipped
             if report.not_stored_transient > transient_before:
                 # Stop without saving the cursor past this page, so a later run fetches it again

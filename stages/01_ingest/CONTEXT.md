@@ -32,7 +32,7 @@ Fetch raw items from each source and append them, content-hashed and stamped wit
 Review the manifest counts and failures. A live fetch against a real source, and any fetch that downloads a dataset, is an owner gate: name the source, size and cost first.
 
 ## Failure Behavior
-Retry only transient failures (429, 5xx) with exponential backoff and jitter, at most 3 times. A partial failure is recorded per item in the manifest; a failed read never becomes an empty store. After the retry budget, stop, keep what was appended, and escalate with the manifest.
+Retry only transient failures (429, 5xx and transport failures) with exponential backoff and jitter, at most 3 times; a typing refusal of `http 408` is also transient (never stored, retried by a later run), while every other `http 4xx` is permanent. A partial failure is recorded per item in the manifest; a failed read never becomes an empty store. After the retry budget, stop, keep what was appended, and escalate with the manifest.
 
 Loop: single pass. The work is a deterministic transform decided by tests, so there is no oracle-driven iteration to run (design 10.2).
 
