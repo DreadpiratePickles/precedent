@@ -1,0 +1,263 @@
+{
+  "$defs": {
+    "ActorKind": {
+      "description": "Who performed the action in the article.",
+      "enum": [
+        "company",
+        "government",
+        "central_bank",
+        "regulator",
+        "international_org",
+        "person",
+        "other"
+      ],
+      "title": "ActorKind",
+      "type": "string"
+    },
+    "Confidence": {
+      "description": "The parser's own confidence in its reading of the article.",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "Entity": {
+      "additionalProperties": false,
+      "description": "The actor named in the article.",
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ActorKind"
+        },
+        "country_iso3": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Country Iso3"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ],
+      "title": "Entity",
+      "type": "object"
+    },
+    "EventType": {
+      "description": "What kind of event the article reports.",
+      "enum": [
+        "earnings",
+        "guidance",
+        "mna",
+        "capital_return",
+        "management_change",
+        "product",
+        "legal_regulatory",
+        "labor",
+        "supply_disruption",
+        "cyber_incident",
+        "credit_rating",
+        "macro_data_release",
+        "central_bank",
+        "fiscal_policy",
+        "trade_or_sanctions",
+        "armed_conflict",
+        "election_or_political",
+        "natural_disaster",
+        "commodity_supply",
+        "other",
+        "no_market_event"
+      ],
+      "title": "EventType",
+      "type": "string"
+    },
+    "Horizon": {
+      "description": "How long the event is expected to matter, as described by the article.",
+      "enum": [
+        "intraday",
+        "days",
+        "weeks",
+        "months",
+        "structural"
+      ],
+      "title": "Horizon",
+      "type": "string"
+    },
+    "Impact": {
+      "additionalProperties": false,
+      "description": "One thing the event is said to help or hurt, in five steps from -2 to +2.",
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ImpactKind"
+        },
+        "ticker_hint": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Z][A-Z0-9.\\-]{0,5}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ticker Hint"
+        },
+        "direction_step": {
+          "enum": [
+            -2,
+            -1,
+            0,
+            1,
+            2
+          ],
+          "title": "Direction Step",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "direction_step"
+      ],
+      "title": "Impact",
+      "type": "object"
+    },
+    "ImpactKind": {
+      "description": "What kind of thing the event touches.",
+      "enum": [
+        "company",
+        "sector",
+        "commodity",
+        "country",
+        "index",
+        "currency"
+      ],
+      "title": "ImpactKind",
+      "type": "string"
+    },
+    "Novelty": {
+      "description": "Whether the article reports something new.",
+      "enum": [
+        "new",
+        "update",
+        "recap",
+        "opinion"
+      ],
+      "title": "Novelty",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One news article reduced to one structured event; every scored field is a closed enum.",
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "event_type": {
+      "$ref": "#/$defs/EventType"
+    },
+    "actor": {
+      "$ref": "#/$defs/Entity"
+    },
+    "action": {
+      "maxLength": 120,
+      "minLength": 1,
+      "title": "Action",
+      "type": "string"
+    },
+    "impacted": {
+      "items": {
+        "$ref": "#/$defs/Impact"
+      },
+      "maxItems": 8,
+      "title": "Impacted",
+      "type": "array"
+    },
+    "severity": {
+      "enum": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "title": "Severity",
+      "type": "integer"
+    },
+    "macro_direction_step": {
+      "enum": [
+        -2,
+        -1,
+        0,
+        1,
+        2
+      ],
+      "title": "Macro Direction Step",
+      "type": "integer"
+    },
+    "confidence": {
+      "$ref": "#/$defs/Confidence"
+    },
+    "horizon": {
+      "$ref": "#/$defs/Horizon"
+    },
+    "novelty": {
+      "$ref": "#/$defs/Novelty"
+    },
+    "is_scheduled": {
+      "title": "Is Scheduled",
+      "type": "boolean"
+    },
+    "evidence_span": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Evidence Span",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "event_type",
+    "actor",
+    "action",
+    "impacted",
+    "severity",
+    "macro_direction_step",
+    "confidence",
+    "horizon",
+    "novelty",
+    "is_scheduled",
+    "evidence_span"
+  ],
+  "title": "NewsEvent",
+  "type": "object"
+}

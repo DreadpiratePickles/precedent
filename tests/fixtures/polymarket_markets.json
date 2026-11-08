@@ -1,0 +1,70 @@
+{
+  "_label": "SYNTHETIC — hand-written fixture, not a recorded response",
+  "response": [
+    {
+      "conditionId": "0xaaa",
+      "question": "Will the Fed cut rates in January 2024?",
+      "slug": "fed-cut-jan-2024",
+      "outcomes": "[\"Yes\", \"No\"]",
+      "outcomePrices": "[\"1\", \"0\"]",
+      "closed": true,
+      "createdAt": "2024-01-01T09:00:00.123Z",
+      "endDate": "2024-01-03T00:00:00Z",
+      "closedTime": "2024-01-03 14:15:00+00",
+      "category": "Politics",
+      "umaResolutionStatus": "resolved"
+    },
+    {
+      "conditionId": "0xbbb",
+      "question": "Will candidate X win the primary?",
+      "slug": "x-wins-primary",
+      "outcomes": "[\"Yes\", \"No\"]",
+      "outcomePrices": "[\"0\", \"1\"]",
+      "closed": true,
+      "createdAt": "2024-01-01T09:00:00.123Z",
+      "endDate": "2024-01-03T00:00:00Z",
+      "closedTime": "2024-01-03 14:15:00+00",
+      "category": "",
+      "umaResolutionStatus": "resolved"
+    },
+    {
+      "conditionId": "0xccc",
+      "question": "Will the coin land heads?",
+      "slug": "coin-heads",
+      "outcomes": "[\"Yes\", \"No\"]",
+      "outcomePrices": "[\"0.5\", \"0.5\"]",
+      "closed": true,
+      "createdAt": "2024-01-01T09:00:00.123Z",
+      "endDate": "2024-01-03T00:00:00Z",
+      "closedTime": "2024-01-03 14:15:00+00",
+      "category": "Politics",
+      "umaResolutionStatus": "resolved"
+    },
+    {
+      "conditionId": "0xddd",
+      "question": "Who wins the election?",
+      "slug": "who-wins",
+      "outcomes": "[\"Trump\", \"Harris\"]",
+      "outcomePrices": "[\"1\", \"0\"]",
+      "closed": true,
+      "createdAt": "2024-01-01T09:00:00.123Z",
+      "endDate": "2024-01-03T00:00:00Z",
+      "closedTime": "2024-01-03 14:15:00+00",
+      "category": "Politics",
+      "umaResolutionStatus": "resolved"
+    },
+    {
+      "conditionId": "0xeee",
+      "question": "Will the bill pass by March?",
+      "slug": "bill-march",
+      "outcomes": "[\"Yes\", \"No\"]",
+      "outcomePrices": "[\"1\", \"0\"]",
+      "closed": true,
+      "createdAt": "2024-01-01T09:00:00.123Z",
+      "endDate": "2024-01-03T00:00:00Z",
+      "closedTime": "2024-01-03 14:15:00+00",
+      "category": "Politics",
+      "umaResolutionStatus": "proposed"
+    }
+  ]
+}

@@ -1,0 +1,542 @@
+[
+  {
+    "id": "tc-001",
+    "text": "Will Congress raise the debt ceiling before July?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "fiscal_policy/government/country/US/mid/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-002",
+    "text": "Auto workers ratify new contract, ending six-week strike",
+    "kind": "headline",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "labor/other/sector/none/mid/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-003",
+    "text": "Prime minister resigns after confidence vote defeat in Japan",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "election_or_political/person/country/DM/mid/unscheduled/0",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-004",
+    "text": "Will OPEC+ raise oil production at its next meeting?",
+    "kind": "market_question",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "commodity_supply/international_org/commodity/none/mid/scheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-005",
+    "text": "Will the Oscar for Best Picture go to a musical this year?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "untyped",
+    "expected_key": null,
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-006",
+    "text": "Popular singer announces surprise engagement to longtime partner",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "untyped",
+    "expected_key": null,
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-007",
+    "text": "Will Apple unveil a foldable iPhone at its September event?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "product/company/company/none/mid/scheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-008",
+    "text": "Moody's downgrades Italy's sovereign rating",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "credit_rating/other/country/DM/mid/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-009",
+    "text": "Fed unexpectedly cuts rates in emergency move",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "central_bank/central_bank/country/US/high/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-010",
+    "text": "Hurricane makes landfall on the Florida coast, thousands evacuated",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "natural_disaster/other/country/US/high/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-011",
+    "text": "Will Nvidia beat revenue estimates in its next earnings report?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "earnings/company/company/none/mid/scheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-012",
+    "text": "Will Congress pass a federal budget before the shutdown deadline?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "fiscal_policy/government/country/US/mid/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-013",
+    "text": "Will India and Pakistan keep a ceasefire in place through December?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "armed_conflict/government/country/EM/mid/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-014",
+    "text": "Will the chief executive of Intel step down by year end?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "management_change/person/company/none/mid/unscheduled/0",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-015",
+    "text": "Markets react as news breaks",
+    "kind": "headline",
+    "split": "heldout",
+    "expected_status": "untyped",
+    "expected_key": null,
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-016",
+    "text": "Will Bitcoin trade above $150,000 on December 31?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "untyped",
+    "expected_key": null,
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-017",
+    "text": "Will Indonesia ban nickel ore exports again this year?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "commodity_supply/government/commodity/EM/mid/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-018",
+    "text": "Severe flooding displaces hundreds of thousands in Pakistan",
+    "kind": "headline",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "natural_disaster/other/country/EM/high/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-019",
+    "text": "Will the DOJ file an antitrust suit against a large chipmaker by June 30?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "legal_regulatory/regulator/company+sector/US/mid/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-020",
+    "text": "Hackers breach customer data at a large online retailer",
+    "kind": "headline",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "cyber_incident/other/company+sector/none/mid/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-021",
+    "text": "Will a magnitude 7 or stronger earthquake strike Japan before September?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "natural_disaster/other/country/DM/high/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-022",
+    "text": "Tesla recalls 400,000 vehicles over braking software fault",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "product/company/company/none/mid/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-023",
+    "text": "Will dockworkers strike at US East Coast ports before October?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "labor/other/sector/US/high/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-024",
+    "text": "Pharma group agrees to buy biotech rival for $12 billion",
+    "kind": "headline",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "mna/company/company/none/mid/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-025",
+    "text": "Retail chain cuts annual outlook, warns of weak consumer spending",
+    "kind": "headline",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "guidance/company/company/none/mid/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-026",
+    "text": "Will the next superhero sequel gross over $500 million on opening weekend?",
+    "kind": "market_question",
+    "split": "heldout",
+    "expected_status": "untyped",
+    "expected_key": null,
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-027",
+    "text": "Will Ethereum reach $10,000 before the end of the year?",
+    "kind": "market_question",
+    "split": "heldout",
+    "expected_status": "untyped",
+    "expected_key": null,
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-028",
+    "text": "Will the US impose tariffs on Chinese steel after the election?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "untyped",
+    "expected_key": null,
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-029",
+    "text": "Will Argentina miss a bond payment before the end of the year?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "credit_rating/government/country/EM/high/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-030",
+    "text": "Will the Federal Reserve cut rates at its December meeting?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "central_bank/central_bank/country/US/mid/scheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-031",
+    "text": "Will S&P upgrade Greece's credit rating again this year?",
+    "kind": "market_question",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "credit_rating/other/country/DM/mid/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-032",
+    "text": "Will the Bank of England raise interest rates at its next meeting?",
+    "kind": "market_question",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "central_bank/central_bank/country/DM/mid/scheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-033",
+    "text": "Parliament dissolves ahead of the election as the central bank cuts rates",
+    "kind": "headline",
+    "split": "heldout",
+    "expected_status": "untyped",
+    "expected_key": null,
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-034",
+    "text": "Italy unveils tax cuts worth 15 billion euros in its budget",
+    "kind": "headline",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "fiscal_policy/government/country/DM/mid/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-035",
+    "text": "Will the US economy add more than 200,000 jobs in the next payrolls report?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "macro_data_release/government/country/US/mid/scheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-036",
+    "text": "Missile strike hits energy plant in Ukraine, power grid damaged",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "armed_conflict/government/country/EM/high/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-037",
+    "text": "Will the Lakers win the NBA championship?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "untyped",
+    "expected_key": null,
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-038",
+    "text": "Fire at Taiwan chip plant halts output of key semiconductor line",
+    "kind": "headline",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "supply_disruption/company/company+sector/EM/mid/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-039",
+    "text": "Snap election set for 12 March in Thailand",
+    "kind": "headline",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "election_or_political/government/country/EM/mid/scheduled/0",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-040",
+    "text": "Will Alphabet announce a new share buyback of at least $50 billion this year?",
+    "kind": "market_question",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "capital_return/company/company/none/mid/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-041",
+    "text": "China's factory output growth beats forecasts in latest release",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "macro_data_release/government/country/EM/mid/scheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-042",
+    "text": "Will something big happen in the markets this year?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "untyped",
+    "expected_key": null,
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-043",
+    "text": "Chipmaker abandons $40 billion acquisition after regulators object",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "mna/company/company/none/mid/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-044",
+    "text": "Ransomware attack halts operations at major US hospital network",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "cyber_incident/other/company+sector/US/mid/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-045",
+    "text": "Will oil sanctions on Iran be lifted before 2027?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "trade_or_sanctions/government/commodity+country/EM/mid/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-046",
+    "text": "Will Russia and Ukraine agree to a ceasefire before July?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "armed_conflict/government/country/EM/mid/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-047",
+    "text": "Government announces sweeping austerity package as spending is cut by 10%",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "fiscal_policy/government/country/none/mid/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-048",
+    "text": "Company raises full-year profit forecast on strong demand",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "guidance/company/company/none/mid/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-049",
+    "text": "Local team clinches playoff berth with last-second goal",
+    "kind": "headline",
+    "split": "heldout",
+    "expected_status": "untyped",
+    "expected_key": null,
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-050",
+    "text": "Will Japan's unemployment rate fall below 2.4% in the next monthly report?",
+    "kind": "market_question",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "macro_data_release/government/country/DM/low/scheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-051",
+    "text": "UK regulator fines bank 200 million pounds over money laundering failures",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "legal_regulatory/regulator/company/DM/mid/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-052",
+    "text": "Japan tightens export controls on chipmaking equipment",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "trade_or_sanctions/government/sector/DM/mid/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-053",
+    "text": "Canada hits imported electric vehicles with steep new tariffs",
+    "kind": "headline",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "trade_or_sanctions/government/country+sector/DM/mid/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-054",
+    "text": "Will it snow in Chicago on Christmas Day?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "untyped",
+    "expected_key": null,
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-055",
+    "text": "Will the Bank of Japan lift its policy rate above 1% by September 30?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "central_bank/central_bank/country/DM/mid/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-056",
+    "text": "ECB holds rates steady, signals no cuts before autumn",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "central_bank/central_bank/country/DM/mid/unscheduled/0",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-057",
+    "text": "Starbucks tops profit estimates as same-store sales rise",
+    "kind": "headline",
+    "split": "heldout",
+    "expected_status": "typed",
+    "expected_key": "earnings/company/company/none/mid/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-058",
+    "text": "Boeing swings to a loss in the fourth quarter, missing estimates",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "earnings/company/company/none/mid/unscheduled/-1",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-059",
+    "text": "Will the incumbent win the French presidential runoff on May 4?",
+    "kind": "market_question",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "election_or_political/government/country/DM/mid/scheduled/0",
+    "source": "SYNTHETIC: written for this repository"
+  },
+  {
+    "id": "tc-060",
+    "text": "OPEC+ agrees to cut oil output by 1 million barrels a day",
+    "kind": "headline",
+    "split": "dev",
+    "expected_status": "typed",
+    "expected_key": "commodity_supply/international_org/commodity/none/high/unscheduled/1",
+    "source": "SYNTHETIC: written for this repository"
+  }
+]

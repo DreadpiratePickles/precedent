@@ -1,0 +1,13 @@
+stages/*/output/
+data/*
+!data/sample/
+vendor/
+.env
+dist/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+
+# Written into the workspace root by gitleaks/gitleaks-action (--report-path=results.sarif) in CI.
+results.sarif

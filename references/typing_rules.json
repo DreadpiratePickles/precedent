@@ -1,0 +1,629 @@
+{
+ "_comment": "rules-typing-v1. Phrases are whole-word and case-insensitive; spaces match any whitespace run; a trailing * lets the last word continue (recall* matches recalled). Per event type the typer counts distinct include phrases found in the text; an exclude phrase disqualifies the type. Written against the dev split of references/gold/typing_cases.json only; the held-out split is the check these rules have never seen.",
+ "version": "rules-typing-v1",
+ "event_types": {
+  "earnings": {
+   "include": [
+    "earnings",
+    "revenue",
+    "estimates",
+    "quarter",
+    "net income",
+    "net loss"
+   ],
+   "exclude": [],
+   "actor_kind": "company",
+   "impacted_kinds": [
+    "company"
+   ],
+   "direction": {
+    "1": [
+     "beat",
+     "beats",
+     "beating",
+     "surge",
+     "surges"
+    ],
+    "-1": [
+     "miss",
+     "misses",
+     "missed",
+     "missing",
+     "loss"
+    ]
+   }
+  },
+  "guidance": {
+   "include": [
+    "guidance",
+    "forecast",
+    "outlook",
+    "full-year"
+   ],
+   "exclude": [],
+   "actor_kind": "company",
+   "impacted_kinds": [
+    "company"
+   ],
+   "direction": {
+    "1": [
+     "raises",
+     "raised",
+     "lifts"
+    ],
+    "-1": [
+     "lowers",
+     "lowered",
+     "slashes",
+     "warns",
+     "cuts guidance"
+    ]
+   }
+  },
+  "mna": {
+   "include": [
+    "acquisition",
+    "merger",
+    "takeover",
+    "buyout",
+    "acquire",
+    "acquires"
+   ],
+   "exclude": [],
+   "actor_kind": "company",
+   "impacted_kinds": [
+    "company"
+   ],
+   "direction": {
+    "1": [
+     "to acquire",
+     "completes"
+    ],
+    "-1": [
+     "abandon*",
+     "scrap*",
+     "collapse*",
+     "blocked"
+    ]
+   }
+  },
+  "management_change": {
+   "include": [
+    "chief executive",
+    "ceo",
+    "step down",
+    "resigns",
+    "steps down",
+    "appoints"
+   ],
+   "exclude": [],
+   "actor_kind": "person",
+   "impacted_kinds": [
+    "company"
+   ],
+   "direction": {
+    "1": [],
+    "-1": []
+   }
+  },
+  "product": {
+   "include": [
+    "unveil",
+    "unveils",
+    "iphone",
+    "recall*",
+    "launch",
+    "launches"
+   ],
+   "exclude": [],
+   "actor_kind": "company",
+   "impacted_kinds": [
+    "company"
+   ],
+   "direction": {
+    "1": [
+     "unveil",
+     "unveils",
+     "launch",
+     "launches"
+    ],
+    "-1": [
+     "recall*"
+    ]
+   }
+  },
+  "legal_regulatory": {
+   "include": [
+    "antitrust",
+    "doj",
+    "lawsuit",
+    "suit",
+    "regulator",
+    "fine",
+    "fines",
+    "fined",
+    "probe",
+    "money laundering",
+    "settlement"
+   ],
+   "exclude": [],
+   "actor_kind": "regulator",
+   "impacted_kinds": [
+    "company"
+   ],
+   "direction": {
+    "1": [],
+    "-1": [
+     "antitrust",
+     "lawsuit",
+     "suit",
+     "fine",
+     "fines",
+     "fined",
+     "probe",
+     "money laundering"
+    ]
+   }
+  },
+  "labor": {
+   "include": [
+    "strike",
+    "strikes",
+    "dockworkers",
+    "union*",
+    "walkout",
+    "labor dispute"
+   ],
+   "exclude": [
+    "missile",
+    "air strike",
+    "airstrike",
+    "earthquake",
+    "military"
+   ],
+   "actor_kind": "other",
+   "impacted_kinds": [
+    "sector"
+   ],
+   "direction": {
+    "1": [],
+    "-1": [
+     "strike",
+     "strikes",
+     "walkout"
+    ]
+   }
+  },
+  "supply_disruption": {
+   "include": [
+    "supply chain",
+    "shortage*",
+    "port closure",
+    "factory shutdown"
+   ],
+   "exclude": [],
+   "actor_kind": "other",
+   "impacted_kinds": [
+    "sector"
+   ],
+   "direction": {
+    "1": [],
+    "-1": [
+     "shortage*",
+     "closure",
+     "shutdown"
+    ]
+   }
+  },
+  "cyber_incident": {
+   "include": [
+    "ransomware",
+    "cyberattack",
+    "cyber attack",
+    "hack",
+    "hacked",
+    "data breach"
+   ],
+   "exclude": [],
+   "actor_kind": "other",
+   "impacted_kinds": [
+    "company",
+    "sector"
+   ],
+   "direction": {
+    "1": [],
+    "-1": [
+     "ransomware",
+     "cyberattack",
+     "hack",
+     "hacked",
+     "breach"
+    ]
+   }
+  },
+  "credit_rating": {
+   "include": [
+    "moody's",
+    "downgrade*",
+    "upgrade*",
+    "sovereign rating",
+    "credit rating",
+    "bond payment",
+    "default"
+   ],
+   "exclude": [],
+   "actor_kind": "other",
+   "impacted_kinds": [
+    "country"
+   ],
+   "direction": {
+    "1": [
+     "upgrade*"
+    ],
+    "-1": [
+     "downgrade*",
+     "default",
+     "miss a bond payment"
+    ]
+   }
+  },
+  "macro_data_release": {
+   "include": [
+    "payrolls",
+    "jobs",
+    "cpi",
+    "inflation",
+    "gdp",
+    "unemployment",
+    "factory output",
+    "retail sales",
+    "pmi",
+    "release"
+   ],
+   "exclude": [],
+   "actor_kind": "government",
+   "impacted_kinds": [
+    "country"
+   ],
+   "direction": {
+    "1": [
+     "add",
+     "adds",
+     "growth",
+     "beat",
+     "beats",
+     "rises"
+    ],
+    "-1": [
+     "falls",
+     "fell",
+     "contracts",
+     "shrinks",
+     "declines"
+    ]
+   }
+  },
+  "central_bank": {
+   "include": [
+    "fed",
+    "federal reserve",
+    "ecb",
+    "european central bank",
+    "bank of japan",
+    "boj",
+    "bank of england",
+    "central bank",
+    "policy rate",
+    "cut rates",
+    "cuts rates",
+    "rate cut",
+    "rate hike"
+   ],
+   "exclude": [],
+   "actor_kind": "central_bank",
+   "impacted_kinds": [
+    "country"
+   ],
+   "direction": {
+    "1": [
+     "cut rates",
+     "cuts rates",
+     "rate cut",
+     "easing"
+    ],
+    "-1": [
+     "lift",
+     "hike",
+     "hikes",
+     "rate hike",
+     "tightening",
+     "raise rates"
+    ]
+   }
+  },
+  "fiscal_policy": {
+   "include": [
+    "debt ceiling",
+    "budget",
+    "austerity",
+    "shutdown",
+    "fiscal",
+    "stimulus",
+    "spending",
+    "tax cut*",
+    "tax bill"
+   ],
+   "exclude": [],
+   "actor_kind": "government",
+   "impacted_kinds": [
+    "country"
+   ],
+   "direction": {
+    "1": [
+     "raise",
+     "pass",
+     "stimulus"
+    ],
+    "-1": [
+     "austerity",
+     "spending cuts",
+     "cut spending"
+    ]
+   }
+  },
+  "trade_or_sanctions": {
+   "include": [
+    "tariff*",
+    "sanction*",
+    "embargo",
+    "export controls",
+    "export ban",
+    "trade war",
+    "trade deal",
+    "import duties"
+   ],
+   "exclude": [],
+   "actor_kind": "government",
+   "impacted_kinds": [
+    "sector"
+   ],
+   "direction": {
+    "1": [
+     "lift",
+     "lifted",
+     "lifts",
+     "ease",
+     "eases",
+     "eased",
+     "trade deal"
+    ],
+    "-1": [
+     "tighten*",
+     "impose",
+     "imposes",
+     "embargo"
+    ]
+   }
+  },
+  "armed_conflict": {
+   "include": [
+    "ceasefire",
+    "missile",
+    "invasion",
+    "war",
+    "troops",
+    "airstrike*",
+    "air strike*",
+    "military",
+    "drone strike"
+   ],
+   "exclude": [],
+   "actor_kind": "government",
+   "impacted_kinds": [
+    "country"
+   ],
+   "direction": {
+    "1": [
+     "ceasefire",
+     "truce",
+     "peace deal"
+    ],
+    "-1": [
+     "missile",
+     "invasion",
+     "airstrike*",
+     "escalat*"
+    ]
+   }
+  },
+  "election_or_political": {
+   "include": [
+    "election",
+    "runoff",
+    "presidential",
+    "prime minister",
+    "confidence vote",
+    "parliament",
+    "referendum",
+    "coalition"
+   ],
+   "exclude": [],
+   "actor_kind": "government",
+   "impacted_kinds": [
+    "country"
+   ],
+   "direction": {
+    "1": [],
+    "-1": []
+   }
+  },
+  "natural_disaster": {
+   "include": [
+    "hurricane",
+    "earthquake",
+    "tsunami",
+    "wildfire",
+    "flood*",
+    "typhoon",
+    "tornado",
+    "landfall",
+    "evacuat*",
+    "magnitude"
+   ],
+   "exclude": [],
+   "actor_kind": "other",
+   "impacted_kinds": [
+    "country"
+   ],
+   "direction": {
+    "1": [],
+    "-1": [
+     "hurricane",
+     "earthquake",
+     "tsunami",
+     "wildfire",
+     "flood*",
+     "typhoon",
+     "tornado"
+    ]
+   }
+  },
+  "commodity_supply": {
+   "include": [
+    "nickel",
+    "ore",
+    "oil output",
+    "oil production",
+    "barrels",
+    "opec+",
+    "opec"
+   ],
+   "exclude": [],
+   "actor_kind": "government",
+   "impacted_kinds": [
+    "commodity"
+   ],
+   "direction": {
+    "1": [
+     "ban",
+     "cut",
+     "cuts",
+     "curb",
+     "curbs",
+     "restrict*"
+    ],
+    "-1": [
+     "boost output",
+     "increase output",
+     "raises output"
+    ]
+   }
+  }
+ },
+ "severity": {
+  "high": [
+   "emergency",
+   "unexpectedly",
+   "hurricane",
+   "earthquake",
+   "tsunami",
+   "evacuated",
+   "missile",
+   "strike",
+   "strikes",
+   "default",
+   "miss a bond payment",
+   "million barrels"
+  ],
+  "low": [
+   "minor",
+   "slightly",
+   "routine"
+  ],
+  "default": "mid"
+ },
+ "scheduled": {
+  "scheduled": [
+   "meeting",
+   "next",
+   "latest release",
+   "runoff",
+   "election",
+   "at its"
+  ],
+  "unscheduled": [
+   "unexpectedly",
+   "emergency",
+   "surprise",
+   "sudden",
+   "suddenly",
+   "unannounced",
+   "unscheduled"
+  ],
+  "default": "unscheduled"
+ },
+ "countries": {
+  "usa": "USA",
+  "u.s.": "USA",
+  "united states": "USA",
+  "america": "USA",
+  "american": "USA",
+  "congress": "USA",
+  "doj": "USA",
+  "florida": "USA",
+  "washington dc": "USA",
+  "japan": "JPN",
+  "japanese": "JPN",
+  "china": "CHN",
+  "chinese": "CHN",
+  "russia": "RUS",
+  "russian": "RUS",
+  "ukraine": "UKR",
+  "ukrainian": "UKR",
+  "india": "IND",
+  "indian": "IND",
+  "pakistan": "PAK",
+  "indonesia": "IDN",
+  "argentina": "ARG",
+  "iran": "IRN",
+  "iranian": "IRN",
+  "israel": "ISR",
+  "italy": "ITA",
+  "italian": "ITA",
+  "france": "FRA",
+  "french": "FRA",
+  "germany": "DEU",
+  "german": "DEU",
+  "uk": "GBR",
+  "u.k.": "GBR",
+  "britain": "GBR",
+  "british": "GBR",
+  "united kingdom": "GBR",
+  "canada": "CAN",
+  "canadian": "CAN",
+  "australia": "AUS",
+  "brazil": "BRA",
+  "mexico": "MEX",
+  "turkey": "TUR",
+  "taiwan": "TWN",
+  "saudi arabia": "SAU",
+  "south korea": "KOR",
+  "_comment_euro": "ecb and the eurozone have no ISO3 of their own; DEU is a representative developed-market code, so only the group (DM) is meaningful.",
+  "eurozone": "DEU",
+  "euro area": "DEU",
+  "ecb": "DEU",
+  "european central bank": "DEU",
+  "u.s": "USA"
+ },
+ "countries_case_sensitive": {
+  "_comment": "matched exactly as written, so the all-caps abbreviation US is the country and the pronoun 'us' is not",
+  "US": "USA"
+ },
+ "event_type_countries": {
+  "central_bank": {
+   "_comment": "the Fed names the US only when the event is a central-bank one",
+   "fed": "USA",
+   "federal reserve": "USA"
+  }
+ }
+}

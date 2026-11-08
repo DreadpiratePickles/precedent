@@ -1,0 +1,4 @@
+# Append-only documents edited by parallel tasks: keep both sides on merge.
+stages/*/CONTEXT.md merge=union
+docs/STATUS.md merge=union
+references/README.md merge=union
