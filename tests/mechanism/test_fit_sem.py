@@ -201,6 +201,73 @@ def test_latent_with_too_few_rows_is_underdetermined_with_zero_score():
     assert {"rates_expectation", "TLT"} <= fitted.underdetermined
 
 
+def test_latent_is_identified_on_rows_with_parents_and_at_least_one_child():
+    """SPY and TLT never overlap: a shared all-children mask has zero rows, yet each child
+    has ten, so the latent is identified and each child's loading is recovered."""
+    rng = np.random.default_rng(31)
+    n = 20
+    direction = signs(n, seed=31)
+    spy = np.where(np.arange(n) < 10, 0.02 * direction + rng.normal(0, 0.0005, n), np.nan)
+    tlt = np.where(np.arange(n) >= 10, -0.01 * direction + rng.normal(0, 0.0005, n), np.nan)
+    graph = make_graph(
+        [(SIGN, "rates_expectation", 1), ("rates_expectation", "SPY", 1),
+         ("rates_expectation", "TLT", -1)]
+    )  # fmt: skip
+    fitted = fit_sem(
+        graph, make_panel({SIGN: list(direction)}, {"SPY": list(spy), "TLT": list(tlt)}),
+        ridge=1e-6,
+    )  # fmt: skip
+    assert "rates_expectation" not in fitted.underdetermined
+    assert fitted.coefficients["rates_expectation"][SIGN] == pytest.approx(1.0)
+    assert fitted.coefficients["SPY"]["rates_expectation"] == pytest.approx(0.02, abs=2e-3)
+    assert fitted.coefficients["TLT"]["rates_expectation"] == pytest.approx(-0.01, abs=2e-3)
+
+
+def test_a_child_with_too_few_rows_takes_no_part_in_the_identification():
+    """TLT has two rows, below parents + 2; the latent is identified from SPY alone and
+    TLT's own equation is flagged instead."""
+    rng = np.random.default_rng(37)
+    n = 12
+    direction = signs(n, seed=37)
+    spy = 0.02 * direction + rng.normal(0, 0.0005, n)
+    tlt = np.full(n, np.nan)
+    tlt[:2] = -0.01 * direction[:2]
+    graph = make_graph(
+        [(SIGN, "rates_expectation", 1), ("rates_expectation", "SPY", 1),
+         ("rates_expectation", "TLT", -1)]
+    )  # fmt: skip
+    fitted = fit_sem(
+        graph, make_panel({SIGN: list(direction)}, {"SPY": list(spy), "TLT": list(tlt)}),
+        ridge=1e-6,
+    )  # fmt: skip
+    assert "rates_expectation" not in fitted.underdetermined
+    assert fitted.coefficients["SPY"]["rates_expectation"] == pytest.approx(0.02, abs=2e-3)
+    assert "TLT" in fitted.underdetermined
+
+
+def test_the_underdetermined_flag_reaches_assets_below_an_unidentified_latent():
+    """A constant parent leaves the latent singular; the asset below it has ten observations
+    and fits, but its parent is unidentified, so it is flagged too."""
+    rng = np.random.default_rng(41)
+    spy = rng.normal(0.0, 0.01, size=10)
+    graph = make_graph([(SIGN, "rates_expectation", 1), ("rates_expectation", "SPY", 1)])
+    panel = make_panel({SIGN: [1.0] * 10}, {"SPY": list(spy)})
+    fitted = fit_sem(graph, panel)
+    assert "rates_expectation" in fitted.underdetermined
+    assert "SPY" in fitted.underdetermined
+
+
+def test_the_flag_propagates_down_a_chain_of_intermediates():
+    rng = np.random.default_rng(43)
+    spy = rng.normal(0.0, 0.01, size=10)
+    graph = make_graph(
+        [(SIGN, "rates_expectation", 1), ("rates_expectation", "risk_appetite", 1),
+         ("risk_appetite", "SPY", 1)]
+    )  # fmt: skip
+    fitted = fit_sem(graph, make_panel({SIGN: [1.0] * 10}, {"SPY": list(spy)}))
+    assert {"rates_expectation", "risk_appetite", "SPY"} <= fitted.underdetermined
+
+
 def test_sign_disagreement_is_recorded_not_corrected():
     rng = np.random.default_rng(3)
     direction = signs(120, seed=3)

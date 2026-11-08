@@ -139,8 +139,12 @@ def _identify_latent(
 ) -> tuple[np.ndarray, float, np.ndarray] | None:
     """Weights, intercept and per-row score of an unobserved node; None when not identifiable.
 
-    The score is centred on the usable rows' parent mean, and the intercept is
-    -(parent mean @ weights), so intercept + sum(weight * parent) reproduces the score exactly.
+    A row joins the identification when every parent is observed and at least one child is;
+    requiring all children on one row would throw away history. Each child is regressed on
+    the rows where that child is observed, and a child seen on fewer than parents + 2 rows
+    takes no part in the identification. The score is centred on the identifying rows'
+    parent mean, and the intercept is -(parent mean @ weights), so intercept +
+    sum(weight * parent) reproduces the score exactly.
     """
     parents = graph.parents(node)
     reached = descendants(graph, node)
@@ -148,19 +152,30 @@ def _identify_latent(
     if not parents or not children:
         return None
     parent_matrix = np.column_stack([series[p] for p in parents])
-    child_matrix = np.column_stack([series[a] for a in children])
-    usable = ~np.isnan(parent_matrix).any(axis=1) & ~np.isnan(child_matrix).any(axis=1)
-    if usable.sum() < len(parents) + _MIN_ROWS_BEYOND_PARENTS:
+    parent_ok = ~np.isnan(parent_matrix).any(axis=1)
+    min_rows = len(parents) + _MIN_ROWS_BEYOND_PARENTS
+    columns: list[np.ndarray] = []
+    identified_children: list[str] = []
+    identifying = np.zeros(parent_matrix.shape[0], dtype=bool)
+    for child in children:
+        mask = parent_ok & ~np.isnan(series[child])
+        if mask.sum() < min_rows:
+            continue  # this child takes no part in the identification
+        slopes, _ = _ridge(parent_matrix[mask], series[child][mask, None], ridge)
+        columns.append(slopes[:, 0])
+        identified_children.append(child)
+        identifying |= mask
+    if not columns:
         return None
-    slopes, _ = _ridge(parent_matrix[usable], child_matrix[usable], ridge)
-    left, singular, right_t = np.linalg.svd(slopes, full_matrices=False)
+    slope_matrix = np.column_stack(columns)
+    left, singular, right_t = np.linalg.svd(slope_matrix, full_matrices=False)
     if singular[0] == 0.0:
         return None
     weights = left[:, 0]
-    loadings = dict(zip(children, singular[0] * right_t[0], strict=True))
+    loadings = dict(zip(identified_children, singular[0] * right_t[0], strict=True))
     if _anchor_flips_weights(graph, node, weights, loadings):
         weights = -weights
-    intercept = -float(parent_matrix[usable].mean(axis=0) @ weights)
+    intercept = -float(parent_matrix[identifying].mean(axis=0) @ weights)
     score = parent_matrix @ weights + intercept
     return weights, intercept, score
 
@@ -219,7 +234,13 @@ def fit_sem(graph: CausalGraph, panel: GuardedPanel, ridge: float = 1.0) -> Fitt
     """Fit every non-event node on the panel, in topological order.
 
     The ridge penalty is scale-free: event columns are unit-scale enums and latent weights are
-    unit-norm, so the default 1.0 shrinks slopes by about 1/(n + 1) relative at small n.
+    unit-norm. A slope is shrunk by the factor n*var/(n*var + ridge) of its centred column, so
+    the default 1.0 shrinks a unit-variance column's slope by n/(n + 1).
+
+    `underdetermined` holds every node whose equation could not be fitted (too little data,
+    a singular latent, no observations) and, propagated downstream, every node with an
+    underdetermined parent: an asset below an unidentified latent is fitted against a zero
+    score and must be read as uninformative.
     """
     if ridge < 0:
         raise ValueError(f"ridge must not be negative; got {ridge}")
@@ -267,6 +288,14 @@ def fit_sem(graph: CausalGraph, panel: GuardedPanel, ridge: float = 1.0) -> Fitt
         if (coef := coefficients[edge.target].get(edge.source, 0.0)) != 0.0
         and (coef > 0) != (edge.sign > 0)
     )
+    # Propagate the flag downstream: parents come first in topological order, so one pass
+    # flags every node with an underdetermined parent (an asset below an unidentified latent
+    # is fitted against a zero score and is uninformative).
+    for node in graph.topological_order():
+        if node not in underdetermined and any(
+            parent in underdetermined for parent in graph.parents(node)
+        ):
+            underdetermined.add(node)
     residual_matrix = np.vstack([residuals[a] for a in assets]) if assets else np.empty((0, 0))
     return FittedSEM(
         coefficients=coefficients,
