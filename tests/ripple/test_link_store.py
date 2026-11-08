@@ -214,6 +214,7 @@ def test_load_ripple_params_returns_the_proposed_values():
     assert params["half_life_sessions"] == 3.0 and params["max_age_sessions"] == 20
     assert params["annual_link_expiry_months"] == 15
     assert params["correlation_window_sessions"] == 250 and params["correlation_top_k"] == 10
+    assert params["placebo_margin_floor"] == 0.01 and params["placebo_margin_se_multiple"] == 2.0
     assert params["proposed"] is True
 
 
@@ -274,6 +275,8 @@ def test_ripple_params_reject_out_of_range_alpha_and_extra_keys():
         ("annual_link_expiry_months", 0),
         ("correlation_window_sessions", 1),
         ("correlation_top_k", 0),
+        ("placebo_margin_floor", 0.0),
+        ("placebo_margin_se_multiple", -1.0),
     ],
 )
 def test_ripple_params_reject_out_of_range_values(field, value):

@@ -168,6 +168,11 @@ def _write_atomically(path: Path, write: Callable[[Path], None]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def write_text_atomically(path: Path, text: str) -> None:
+    """Write `text` through a temporary sibling and replace `path` in one step."""
+    _write_atomically(path, lambda temporary: temporary.write_text(text, encoding="utf-8"))
+
+
 def write_ripple_ledger(
     ripple_dir: Path,
     shocks: pd.Series,
@@ -197,5 +202,5 @@ def write_ripple_ledger(
         files[name] = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "rows": len(table)}
     manifest_path = ripple_dir / LEDGER_MANIFEST_NAME
     document = json.dumps({**manifest, "files": files}, indent=2, sort_keys=True) + "\n"
-    _write_atomically(manifest_path, lambda temporary: temporary.write_text(document, "utf-8"))
+    write_text_atomically(manifest_path, document)
     return manifest_path

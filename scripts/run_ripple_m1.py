@@ -33,6 +33,7 @@ from precedent.ripple.graph_builders import (
     rolling_correlation_links,
     snapshot_graph_for_cutoff,
     write_ripple_ledger,
+    write_text_atomically,
 )
 from precedent.ripple.link_store import LinkStore
 from precedent.ripple.params import load_ripple_params
@@ -178,7 +179,7 @@ def check_inputs(args: argparse.Namespace) -> list[str]:
         f" rebuilt every {args.rebuild_every} sessions)",
         f"horizons (sessions): {', '.join(str(h) for h in args.horizons)}; baseline: M0 price only",
         f"label: {args.evidence_label}; ledger files written: {'yes' if args.publish else 'no'}",
-        f"output: {args.out_dir.name}/ (report.md, ladder.csv, links/, per-run manifests)",
+        f"output: {args.out_dir.name}/ (report.md, ladder.csv, ladder_folds.csv, links/, ...)",
     ]
 
 
@@ -234,8 +235,8 @@ def run(
     from precedent.ripple.evaluate import (
         evaluate_graph_ladder,
         label_expr_for,
+        load_fold_ics,
         render_report,
-        write_text_atomically,
     )
     from precedent.spine.ablation import code_commit
     from precedent.spine.purged_splits import purged_walk_forward_segments
@@ -303,7 +304,13 @@ def run(
     ]
     write_text_atomically(
         args.out_dir / "report.md",
-        render_report(ladder, evidence_label=args.evidence_label, counts=counts, notes=notes),
+        render_report(
+            ladder,
+            fold_ics=load_fold_ics(args.out_dir),
+            evidence_label=args.evidence_label,
+            counts=counts,
+            notes=notes,
+        ),
     )
     manifest = {
         "run_id": args.run_id,

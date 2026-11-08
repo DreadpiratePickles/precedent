@@ -7,6 +7,8 @@
     "annual_link_expiry_months": 15,
     "correlation_window_sessions": 250,
     "correlation_top_k": 10,
+    "placebo_margin_floor": 0.01,
+    "placebo_margin_se_multiple": 2.0,
     "proposed": true,
     "note": "Design section 9.5; every value is a proposal until a result on data supports it."
   }

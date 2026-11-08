@@ -23,9 +23,12 @@ from qlib.data.dataset.loader import QlibDataLoader  # noqa: E402
 
 from precedent.ripple.control_graphs import shuffle_preserving_degree  # noqa: E402
 from precedent.ripple.evaluate import (  # noqa: E402
+    FOLD_COLUMNS,
     LADDER_COLUMNS,
+    PAIR_COLUMNS,
     diffusion_table,
     evaluate_graph_ladder,
+    load_fold_ics,
     placebo_pairs,
     render_report,
 )
@@ -217,6 +220,12 @@ def test_true_graph_beats_its_shuffle_on_planted_spillover(planted_market):
     written = pd.read_csv(planted_market.kwargs["out_dir"] / "ladder.csv")
     assert list(written.columns) == LADDER_COLUMNS
     assert written["rank_ic_mean"].to_numpy() == pytest.approx(table["rank_ic_mean"].to_numpy())
+    fold_ics = load_fold_ics(planted_market.kwargs["out_dir"])
+    assert len(fold_ics) == 2 * len(FOLDS)  # two graphs, one row per fold
+    means = fold_ics.groupby("graph")["rank_ic_mean"].mean()
+    assert means["true"] == pytest.approx(ic["true"]) and means["placebo"] == pytest.approx(
+        ic["placebo"]
+    )
 
 
 def test_ladder_records_every_rung_with_the_horizon_label_and_calls_folds_per_horizon(
@@ -341,35 +350,143 @@ def test_diffusion_table_without_a_20_session_horizon_keeps_every_horizon():
     assert horizons[:2] == ["5", "1"]
 
 
-def test_placebo_pairs_put_each_graph_beside_its_placebo_and_demand_one():
-    pairs = placebo_pairs(ladder_frame(horizons=(20,)))
-    assert list(pairs["graph"]) == ["g1", "g2"]
-    assert list(pairs.columns) == [
-        "graph", "horizon", "rank_ic_mean", "placebo_rank_ic_mean", "margin_over_placebo",
+def fold_ics_for(ladder, n_folds=2, spread=0.0):
+    """Per-fold rank ICs whose mean is each row's `rank_ic_mean`. With a `spread`, a graph's folds
+    sit at mean +/- spread and its placebo's at mean -/+ spread, so the per-fold difference
+    between them swings by 2 * spread around the margin."""
+    rows = []
+    for row in ladder.itertuples():
+        sign = -1.0 if row.graph.endswith("_placebo") else 1.0
+        for fold in range(n_folds):
+            offset = spread * sign * (1.0 if fold % 2 == 0 else -1.0)
+            rows.append(
+                {"graph": row.graph, "horizon": row.horizon, "fold": fold,
+                 "rank_ic_mean": row.rank_ic_mean + offset}
+            )
+    return pd.DataFrame(rows, columns=FOLD_COLUMNS)
+
+
+def pair_ladder(graph_ic, placebo_ic, horizon=20):
+    rows = [
+        {"graph": name, "horizon": horizon, "rank_ic_mean": ic, "icir": 0.1,
+         "incremental_rank_ic_vs_m1": ic, "baseline": "m0_price"}
+        for name, ic in (("g1", graph_ic), ("g1_placebo", placebo_ic))
     ]
+    return pd.DataFrame(rows, columns=LADDER_COLUMNS)
+
+
+def test_placebo_pairs_put_each_graph_beside_its_placebo_and_demand_one():
+    ladder = ladder_frame(horizons=(20,))
+    pairs = placebo_pairs(ladder, fold_ics_for(ladder))
+    assert list(pairs["graph"]) == ["g1", "g2"]
+    assert list(pairs.columns) == PAIR_COLUMNS
     assert pairs["margin_over_placebo"].to_numpy() == pytest.approx(
         pairs["rank_ic_mean"] - pairs["placebo_rank_ic_mean"]
     )
+    broken = ladder_frame(graphs=("g1", "g1_placebo", "g3"))
     with pytest.raises(ValueError, match="g3"):
-        placebo_pairs(ladder_frame(graphs=("g1", "g1_placebo", "g3")))
+        placebo_pairs(broken, fold_ics_for(broken))
 
 
-def test_report_says_plainly_when_no_graph_beats_its_placebo():
-    ladder = ladder_frame(graphs=("g1", "g1_placebo"))
-    ladder.loc[ladder["graph"] == "g1_placebo", "rank_ic_mean"] += 1.0  # placebo wins everywhere
-    text = render_report(ladder, evidence_label="SYNTHETIC", counts={"shocks": 3})
+def test_a_tiny_positive_margin_is_within_noise_and_no_graph_is_said_to_beat_its_placebo():
+    ladder = pair_ladder(0.0303, 0.0300)  # +0.0003
+    text = render_report(
+        ladder, fold_ics=fold_ics_for(ladder), evidence_label="SYNTHETIC", counts={"shocks": 3}
+    )
     assert text.splitlines()[0].startswith("SYNTHETIC —")
     assert "No graph beats its placebo at any horizon." in text
+    assert "- g1 at 20 sessions: margin +0.0003, tolerance 0.0100: within noise." in text
     assert "EXPLORATORY (survivorship-biased prices)" in text
     assert "monthly" in text and "leads with 20" in text
     assert "shocks: 3" in text
+    pairs = placebo_pairs(ladder, fold_ics_for(ladder))
+    assert not pairs.loc[0, "beats_placebo"]
+
+
+def test_a_margin_clearly_above_the_tolerance_beats_the_placebo():
+    ladder = pair_ladder(0.05, 0.0)
+    text = render_report(ladder, fold_ics=fold_ics_for(ladder), evidence_label="SYNTHETIC", counts={})
+    assert "g1 beats its placebo at horizons 20." in text
+    assert "No graph beats its placebo" not in text
+    assert "- g1 at 20 sessions: margin +0.0500, tolerance 0.0100: beats its placebo." in text
+
+
+def test_the_standard_error_of_the_fold_differences_dominates_when_they_are_spread():
+    ladder = pair_ladder(0.03, 0.0)  # margin 0.03, above the 0.01 floor
+    folds = fold_ics_for(ladder, n_folds=4, spread=0.02)  # differences 0.03 +/- 0.04
+    pairs = placebo_pairs(ladder, folds)
+    differences = np.array([0.07, -0.01, 0.07, -0.01])
+    expected = 2.0 * differences.std(ddof=1) / np.sqrt(4)
+    assert pairs.loc[0, "tolerance"] == pytest.approx(expected)
+    assert expected > 0.01 and pairs.loc[0, "margin_over_placebo"] < expected
+    assert not pairs.loc[0, "beats_placebo"]
+    text = render_report(ladder, fold_ics=folds, evidence_label="SYNTHETIC", counts={})
+    assert f"tolerance {expected:.4f}: within noise." in text
+    assert "No graph beats its placebo at any horizon." in text
+
+
+def test_a_single_fold_uses_the_absolute_floor_only():
+    ladder = pair_ladder(0.0301, 0.0)
+    pairs = placebo_pairs(ladder, fold_ics_for(ladder, n_folds=1))
+    assert pairs.loc[0, "tolerance"] == 0.01 and pairs.loc[0, "beats_placebo"]
+
+
+def test_the_noise_numbers_come_from_the_params_file_unless_passed():
+    from precedent.ripple.params import load_ripple_params
+
+    params = load_ripple_params()
+    ladder = pair_ladder(0.05, 0.0)
+    folds = fold_ics_for(ladder, n_folds=4, spread=0.02)
+    from_file = placebo_pairs(ladder, folds).loc[0, "tolerance"]
+    assert params["placebo_margin_floor"] == 0.01 and params["placebo_margin_se_multiple"] == 2.0
+    differences = np.array([0.09, 0.01, 0.09, 0.01])
+    standard_error = differences.std(ddof=1) / np.sqrt(4)
+    assert from_file == pytest.approx(
+        max(params["placebo_margin_floor"], params["placebo_margin_se_multiple"] * standard_error)
+    )
+    larger_floor = placebo_pairs(ladder, folds, margin_floor=0.5).loc[0, "tolerance"]
+    assert larger_floor == 0.5
+    no_se = placebo_pairs(ladder, folds, se_multiple=0.0).loc[0, "tolerance"]
+    assert no_se == params["placebo_margin_floor"]
+
+
+def test_a_graph_whose_placebo_has_other_folds_is_rejected():
+    ladder = pair_ladder(0.05, 0.0)
+    folds = fold_ics_for(ladder)
+    folds = folds[~((folds["graph"] == "g1_placebo") & (folds["fold"] == 1))]
+    with pytest.raises(ValueError, match="same folds"):
+        placebo_pairs(ladder, folds)
+
+
+def test_the_report_says_beside_the_exploratory_line_that_the_sector_map_looks_ahead():
+    ladder = pair_ladder(0.05, 0.0)
+    text = render_report(ladder, fold_ics=fold_ics_for(ladder), evidence_label="SYNTHETIC", counts={})
+    lines = text.splitlines()
+    exploratory = next(i for i, line in enumerate(lines) if "EXPLORATORY" in line)
+    assert any("static sector map" in line and "looks" in line for line in lines[exploratory : exploratory + 4])
+    g2_only = pair_ladder(0.05, 0.0).assign(graph=lambda f: f["graph"].str.replace("g1", "g2"))
+    assert "sector map" not in render_report(
+        g2_only, fold_ics=fold_ics_for(g2_only), evidence_label="SYNTHETIC", counts={}
+    )
 
 
 def test_report_label_line_for_a_live_run_and_an_unknown_label():
-    text = render_report(ladder_frame(), evidence_label="LIVE-DATA", counts={})
+    ladder = ladder_frame()
+    folds = fold_ics_for(ladder)
+    text = render_report(ladder, fold_ics=folds, evidence_label="LIVE-DATA", counts={})
     assert text.splitlines()[0].startswith("LIVE —")
     with pytest.raises(ValueError, match="evidence_label"):
-        render_report(ladder_frame(), evidence_label="PROBABLY-FINE", counts={})
+        render_report(ladder, fold_ics=folds, evidence_label="PROBABLY-FINE", counts={})
+
+
+def test_the_ladder_and_the_graph_builders_share_one_writer_and_one_alias(tmp_path):
+    from precedent.ripple import evaluate, graph_builders
+
+    assert evaluate.write_text_atomically is graph_builders.write_text_atomically
+    assert evaluate.GraphForCutoff is graph_builders.GraphForCutoff
+    graph_builders.write_text_atomically(tmp_path / "a.txt", "x")
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "x"
+    assert [p.name for p in tmp_path.iterdir()] == ["a.txt"]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -521,6 +638,8 @@ def test_script_main_writes_the_report_beside_the_placebo_and_publishes_only_whe
     report = (out_dir / "report.md").read_text(encoding="utf-8")
     assert report.splitlines()[0].startswith("SYNTHETIC —")
     assert "g1_placebo" in report and "EXPLORATORY (survivorship-biased prices)" in report
+    assert "static sector map" in report and "tolerance" in report
+    assert (out_dir / "ladder_folds.csv").exists()
     ladder = pd.read_csv(out_dir / "ladder.csv")
     assert sorted(ladder["graph"]) == ["g1", "g1_placebo", "g2", "g2_placebo"]
     assert (out_dir / "links" / "g1" / "links.jsonl").exists()
