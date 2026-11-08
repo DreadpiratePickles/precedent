@@ -21,7 +21,13 @@ from precedent.engine.retrieval import PrecedentQuery, find_precedents
 from precedent.mechanism.fit_sem import GuardedPanel
 from precedent.spine.event_key import EventKey
 
-__all__ = ["PanelError", "build_guarded_panel", "mechanism_query"]
+__all__ = [
+    "NoPrecedentError",
+    "PanelError",
+    "build_guarded_panel",
+    "event_values_of",
+    "mechanism_query",
+]
 
 _EVENT_PREFIX = "event"
 _DEFAULT_FIELD = "direction_sign"
@@ -35,6 +41,23 @@ _EVENT_FIELDS: dict[str, Callable[[EventKey], int]] = {
 
 class PanelError(ValueError):
     """A guarded panel that cannot be built; the message names what was missing or inconsistent."""
+
+
+class NoPrecedentError(PanelError):
+    """No precedent passed the time guard: the one panel failure that is a refusal, not a bug."""
+
+
+def event_values_of(key: EventKey, event_node_ids: Sequence[str]) -> dict[str, int]:
+    """The value of each event node id for `key`: the mapping a panel's event columns use.
+
+    The panel reads it off every precedent's key; a forecast reads it off the query's own key,
+    so a fit and the event it is run for share one encoding. Ids follow the panel's rules (see
+    `build_guarded_panel`); one that does not raises `PanelError`.
+    """
+    return {
+        node_id: _EVENT_FIELDS[_event_field(node_id, key.event_type)](key)
+        for node_id in event_node_ids
+    }
 
 
 def mechanism_query(
@@ -100,12 +123,12 @@ def build_guarded_panel(
     if horizon < 1:
         raise PanelError(f"horizon must be at least 1, got {horizon}")
     asset_list, event_list = _distinct(assets, "asset"), _distinct(event_node_ids, "event node")
-    fields = [_event_field(node_id, query.key.event_type) for node_id in event_list]
+    event_values_of(query.key, event_list)  # validate every event column id before any work
     _check_returns(returns, session_cutoffs_utc, market)
     found = find_precedents(query, events, rows, session_cutoffs_utc, horizon, "asset", top_k=top_k)
     event_ids = list(dict.fromkeys(found["event_id"]))
     if not event_ids:
-        raise PanelError(f"no precedent passed the time guard for {query.key.as_string()}")
+        raise NoPrecedentError(f"no precedent passed the time guard for {query.key.as_string()}")
     asset_returns = _asset_values(found, event_ids, asset_list)
     event_rows = events.set_index("event_id").loc[event_ids]
     if market in asset_list:
@@ -117,10 +140,11 @@ def build_guarded_panel(
             horizon,
         )
     keys = [_parse_key(event_id, text) for event_id, text in event_rows["key"].items()]
+    per_event = [event_values_of(key, event_list) for key in keys]
     event_values = pd.DataFrame(
         {
-            node_id: pd.Series([_EVENT_FIELDS[field](key) for key in keys], dtype="int64")
-            for node_id, field in zip(event_list, fields, strict=True)
+            node_id: pd.Series([values[node_id] for values in per_event], dtype="int64")
+            for node_id in event_list
         }
     )
     event_values.index = pd.Index(event_ids, name="event_id", dtype=object)
