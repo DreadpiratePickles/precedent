@@ -44,7 +44,12 @@ class GuardedPanel:
 
 @dataclass(frozen=True)
 class FittedSEM:
-    """Fitted equations for one graph; `residual_cov` is over `assets`, in that order."""
+    """Fitted equations for one graph.
+
+    `residual_cov` is over `assets`, in that order, with each asset's variance on n - slopes - 1
+    degrees of freedom. It is estimated pairwise, so it may not be positive definite; the
+    simulator owns the Cholesky-or-diagonal fallback.
+    """
 
     coefficients: dict[str, dict[str, float]]
     intercepts: dict[str, float]
@@ -171,6 +176,13 @@ def _fit_asset(
     return {}, intercept, residuals, bool(parents) or count == 0
 
 
+def _dof_scale(residuals: np.ndarray, slope_count: int) -> float:
+    """Factor turning the n - 1 denominator into n - slopes - 1; 1.0 when no dof remain."""
+    observed = int(np.count_nonzero(~np.isnan(residuals)))
+    remaining = observed - slope_count - 1
+    return float(np.sqrt((observed - 1) / remaining)) if remaining >= 1 else 1.0
+
+
 def _residual_covariance(residuals: np.ndarray) -> np.ndarray:
     """Pairwise-complete sample covariance (a x a); a pair with under two common rows is 0."""
     size = residuals.shape[0]
@@ -194,10 +206,20 @@ def _column(frame: pd.DataFrame, name: str, what: str) -> np.ndarray:
 
 
 def fit_sem(graph: CausalGraph, panel: GuardedPanel, ridge: float = 1.0) -> FittedSEM:
-    """Fit every non-event node of the graph on the panel, in topological order."""
+    """Fit every non-event node on the panel, in topological order.
+
+    The ridge penalty is scale-free: event columns are unit-scale enums and latent weights are
+    unit-norm, so the default 1.0 shrinks slopes by about 1/(n + 1) relative at small n.
+    """
     if ridge < 0:
         raise ValueError(f"ridge must not be negative; got {ridge}")
     kinds = {node.id: node.kind for node in graph.nodes}
+    for edge in graph.edges:
+        if kinds[edge.target] is NodeKind.EVENT:
+            raise ValueError(
+                f"edge {edge.source!r} -> {edge.target!r}: "
+                "an event node cannot have parents in a fitted graph"
+            )
     assets = [node.id for node in graph.nodes if node.kind is NodeKind.ASSET]
     series = {a: _column(panel.asset_returns, a, "asset return") for a in assets}
     observed_assets = [a for a in assets if not np.isnan(series[a]).all()]
@@ -226,6 +248,7 @@ def fit_sem(graph: CausalGraph, panel: GuardedPanel, ridge: float = 1.0) -> Fitt
                 parents, series, node, ridge
             )
             coefficients[node] = coefs
+            residuals[node] *= _dof_scale(residuals[node], len(coefs))
             if flagged:
                 underdetermined.add(node)
     disagreements = tuple(

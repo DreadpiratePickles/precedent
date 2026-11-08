@@ -99,6 +99,57 @@ def test_recovers_planted_linear_structure(planted):
     assert fitted.intercepts["rates_expectation"] == 0.0
 
 
+def test_recovers_planted_structure_at_the_default_ridge(planted):
+    graph, panel = planted
+    fitted = fit_sem(graph, panel)  # ridge=1.0
+    product = (
+        fitted.coefficients["SPY"]["rates_expectation"]
+        * (fitted.coefficients["rates_expectation"][SIGN])
+    )
+    assert product == pytest.approx(0.02, abs=2e-3)
+
+
+def test_recovers_multi_parent_multi_child_latent_direction_and_loadings():
+    rng = np.random.default_rng(21)
+    n = 200
+    a = signs(n, seed=21)
+    b = np.random.default_rng(22).integers(0, 3, size=n).astype(float)
+    z = 0.8 * a + 0.6 * b
+    spy = 0.02 * z + rng.normal(0.0, 0.0005, size=n)
+    tlt = -0.01 * z + rng.normal(0.0, 0.0005, size=n)
+    graph = make_graph(
+        [
+            (SIGN, "rates_expectation", 1),
+            (SEVERITY, "rates_expectation", 1),
+            ("rates_expectation", "SPY", 1),
+            ("rates_expectation", "TLT", -1),
+        ]
+    )
+    fitted = fit_sem(
+        graph,
+        make_panel({SIGN: list(a), SEVERITY: list(b)}, {"SPY": list(spy), "TLT": list(tlt)}),
+        ridge=1e-6,
+    )
+    w = fitted.coefficients["rates_expectation"]
+    assert np.hypot(w[SIGN], w[SEVERITY]) == pytest.approx(1.0)
+    assert w[SIGN] / w[SEVERITY] == pytest.approx(0.8 / 0.6, rel=0.05)
+    assert w[SIGN] > 0 and w[SEVERITY] > 0  # anchored to the +1 edge
+    # the planted weights (0.8, 0.6) are already unit norm, so score and loadings match the plant
+    spy_product = fitted.coefficients["SPY"]["rates_expectation"]
+    tlt_product = fitted.coefficients["TLT"]["rates_expectation"]
+    assert spy_product * w[SIGN] == pytest.approx(0.016, abs=1.5e-3)
+    assert tlt_product * w[SIGN] == pytest.approx(-0.008, abs=1e-3)
+    assert fitted.sign_disagreements == ()
+
+
+def test_event_node_with_a_parent_is_rejected():
+    graph = make_graph([(SIGN, SEVERITY, 1), (SEVERITY, "SPY", 1)])
+    panel = make_panel({SIGN: [1.0, -1.0, 1.0], SEVERITY: [0.0, 1.0, 2.0]}, {"SPY": [0.1] * 3})
+    with pytest.raises(ValueError, match="cannot have parents") as raised:
+        fit_sem(graph, panel)
+    assert SIGN in str(raised.value) and SEVERITY in str(raised.value)
+
+
 def test_too_few_rows_is_intercept_only_and_flagged():
     graph = make_graph([(SIGN, "HYG", 1), (SEVERITY, "HYG", 1), (SCHEDULED, "HYG", 1)])
     panel = make_panel(
@@ -262,7 +313,10 @@ def test_residual_cov_is_symmetric_in_asset_order_and_matches_ols_residuals():
     residuals = np.vstack(
         [y - design @ np.linalg.lstsq(design, y, rcond=None)[0] for y in (spy, tlt)]
     )
-    assert fitted.residual_cov == pytest.approx(np.cov(residuals), rel=1e-6)
+    # one slope per asset, so the variance uses n - 2 = 98 degrees of freedom, not n - 1 = 99
+    dof_scaled = residuals * np.sqrt(99 / 98)
+    assert fitted.residual_cov == pytest.approx(np.cov(dof_scaled), rel=1e-6)
+    assert fitted.residual_cov[0, 0] == pytest.approx((residuals[0] ** 2).sum() / 98, rel=1e-6)
     assert fitted.residual_cov[0, 1] > 0  # the planted shared noise shows up
 
 
