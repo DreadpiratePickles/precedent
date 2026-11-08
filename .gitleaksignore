@@ -1,0 +1,3 @@
+# False positive: tests/ripple/test_link_extraction.py assigns a dummy marker string to a
+# variable named `secret` to check the error text never echoes model output.
+a6710f8a626c9a2fa733b05e9cf7116d74b51f13:tests/ripple/test_link_extraction.py:generic-api-key:238
