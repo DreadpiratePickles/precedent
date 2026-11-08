@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 
 import numpy as np
@@ -91,6 +91,8 @@ def score_precedent_ladder(
     rungs: tuple[str, ...] = RUNGS,
     horizon: int = 5,
     quantiles: tuple[float, ...] = (0.1, 0.5, 0.9),
+    *,
+    score_only: pd.Series | Collection[str] | None = None,
 ) -> pd.DataFrame:
     """Score each rung on `outcome_type`, one unit per first-report event and realised row.
 
@@ -100,6 +102,11 @@ def score_precedent_ladder(
     the engine parameters. Output columns are `OUTPUT_COLUMNS`, one row per
     `(rung, event_type, quantile)` for continuous types and per `(rung, event_type)` for binary
     types; the loss columns that do not apply are NaN.
+
+    `score_only` limits which events are scored without shrinking the precedent pool: a boolean
+    Series aligned to `events` (same index) or a collection of event ids. Every event in `events`
+    still serves as a precedent through the time guard; only the listed events add to the
+    tallies. None scores every first report.
     """
     if outcome_type not in OUTCOME_TYPES:
         raise ValueError(f"unknown outcome_type {outcome_type!r}; expected one of {OUTCOME_TYPES}")
@@ -109,6 +116,7 @@ def score_precedent_ladder(
     unsupported = [q for q in quantiles if q not in QUANTILE_LEVELS]
     if unsupported:
         raise ValueError(f"unsupported quantile {unsupported}; expected {QUANTILE_LEVELS}")
+    scored_ids = _scored_ids(events, score_only)
     params = load_engine_params()
     realised = _realised_rows(rows, outcome_type, horizon)
     position_of = events.set_index("event_id")["effective_position"]
@@ -118,6 +126,8 @@ def score_precedent_ladder(
     tallies: dict[tuple[str, str], _Tally] = {}
     is_binary = False
     for event in ordered.itertuples(index=False):
+        if scored_ids is not None and event.event_id not in scored_ids:
+            continue
         event_rows = realised.get(event.event_id)
         if event_rows is None:
             continue
@@ -164,6 +174,18 @@ def score_precedent_ladder(
                 tally.band_low.append(summary.quantiles[_BAND_LOW])
                 tally.band_high.append(summary.quantiles[_BAND_HIGH])
     return _table(tallies, outcome_type, is_binary, quantiles)
+
+
+def _scored_ids(
+    events: pd.DataFrame, score_only: pd.Series | Collection[str] | None
+) -> frozenset[str] | None:
+    if score_only is None:
+        return None
+    if isinstance(score_only, pd.Series):
+        if not score_only.index.equals(events.index) or score_only.dtype != bool:
+            raise ValueError("score_only as a Series must be boolean and indexed like events")
+        return frozenset(events.loc[score_only, "event_id"])
+    return frozenset(score_only)
 
 
 def _realised_rows(rows: pd.DataFrame, outcome_type: str, horizon: int) -> dict[str, pd.DataFrame]:
