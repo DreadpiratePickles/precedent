@@ -17,7 +17,7 @@ from precedent.config import references_dir
 from precedent.spine.event_record import EventRecord, ResolvedImpact
 from precedent.spine.event_schema import EventType, Impact, NewsEvent
 from precedent.spine.pit_alignment import align_records
-from precedent.spine.session_calendar import calendar_cutoffs, load_nyse_calendar, weekday_sessions
+from precedent.spine.session_calendar import default_cutoffs_for, load_nyse_calendar
 
 PARSER_VERSION = "rules-8k-v1"
 SOURCE = "edgar"
@@ -142,10 +142,9 @@ def _item_codes(items: Any, accession: str) -> list[str]:
 
 
 def _default_cutoffs(first_seen: list[datetime]) -> pd.Series:
-    calendar = load_nyse_calendar()
-    first_day = min(first_seen).date()
-    last_day = (max(first_seen) + CUTOFF_LOOKAHEAD).date()
-    return calendar_cutoffs(weekday_sessions(first_day, last_day, calendar), calendar)
+    return default_cutoffs_for(
+        [stamp.date() for stamp in first_seen], load_nyse_calendar(), CUTOFF_LOOKAHEAD.days
+    )
 
 
 def events_from_submissions(

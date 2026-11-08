@@ -174,3 +174,19 @@ def test_country_groups_file_is_marked_proposed_and_sourced() -> None:
 
 def test_load_country_groups_is_cached() -> None:
     assert load_country_groups() is load_country_groups()
+
+
+@pytest.mark.parametrize(
+    ("text", "field"),
+    [
+        ("garbage/central_bank/none/US/low/scheduled/0", "event_type"),
+        ("central_bank/garbage/none/US/low/scheduled/0", "actor_kind"),
+        ("central_bank/central_bank/country+foo/US/low/scheduled/0", "impacted kind"),
+        ("central_bank/central_bank/none/XX/low/scheduled/0", "country_group"),
+        ("central_bank/central_bank/none/US/extreme/scheduled/0", "severity_band"),
+        ("central_bank/central_bank/none/US/low/scheduled/2", "direction_sign"),
+    ],
+)
+def test_from_string_refuses_an_unknown_field_value_and_names_the_field(text, field):
+    with pytest.raises(ValueError, match=field):
+        EventKey.from_string(text)

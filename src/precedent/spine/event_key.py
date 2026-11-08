@@ -10,6 +10,7 @@ from typing import Literal, get_args
 
 from precedent.config import references_dir
 from precedent.spine.event_record import EventRecord
+from precedent.spine.event_schema import ActorKind, EventType, ImpactKind
 
 CountryGroup = Literal["US", "DM", "EM", "none"]
 SeverityBand = Literal["low", "mid", "high"]
@@ -55,14 +56,22 @@ class EventKey:
         event_type, actor_kind, kinds, group, band, schedule, sign = parts
         if not event_type or not actor_kind or not kinds:
             raise ValueError(f"event key has an empty part: {text!r}")
+        if event_type not in {member.value for member in EventType}:
+            raise ValueError(f"unknown event_type {event_type!r} in {text!r}")
+        if actor_kind not in {member.value for member in ActorKind}:
+            raise ValueError(f"unknown actor_kind {actor_kind!r} in {text!r}")
+        impact_kinds = {member.value for member in ImpactKind}
+        for kind in () if kinds == _NO_KINDS else kinds.split("+"):
+            if kind not in impact_kinds:
+                raise ValueError(f"unknown impacted kind {kind!r} in {text!r}")
         if group not in get_args(CountryGroup):
-            raise ValueError(f"unknown country group {group!r} in {text!r}")
+            raise ValueError(f"unknown country_group {group!r} in {text!r}")
         if band not in get_args(SeverityBand):
-            raise ValueError(f"unknown severity band {band!r} in {text!r}")
+            raise ValueError(f"unknown severity_band {band!r} in {text!r}")
         if schedule not in (_SCHEDULED, _UNSCHEDULED):
             raise ValueError(f"unknown schedule flag {schedule!r} in {text!r}")
         if sign not in ("-1", "0", "1"):
-            raise ValueError(f"direction sign must be -1, 0 or 1, got {sign!r} in {text!r}")
+            raise ValueError(f"direction_sign must be -1, 0 or 1, got {sign!r} in {text!r}")
         return cls(
             event_type=event_type,
             actor_kind=actor_kind,

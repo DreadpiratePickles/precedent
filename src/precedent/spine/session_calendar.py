@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date
 from pathlib import Path
 from types import MappingProxyType
@@ -74,13 +74,16 @@ def load_nyse_calendar(path: Path | None = None) -> NyseCalendar:
 
 
 def check_known_sessions(sessions: pd.DatetimeIndex, calendar: NyseCalendar) -> None:
-    """Raise ValueError naming any session outside the calendar's years or on a holiday."""
+    """Raise ValueError naming any session outside the calendar's years, on a weekend or holiday."""
     outside = [day for day in sessions if not calendar.first_year <= day.year <= calendar.last_year]
     if outside:
         raise ValueError(
             f"sessions outside the calendar's years {calendar.first_year}-{calendar.last_year}: "
             f"{_format_days(outside)}"
         )
+    on_weekend = [day for day in sessions if day.weekday() >= 5]
+    if on_weekend:
+        raise ValueError(f"sessions that fall on a weekend: {_format_days(on_weekend)}")
     on_holiday = [day for day in sessions if day.date() in calendar.holidays]
     if on_holiday:
         raise ValueError(f"sessions that are NYSE holidays: {_format_days(on_holiday)}")
@@ -112,7 +115,7 @@ def calendar_cutoffs(
 ) -> pd.Series:
     """UTC cutoff per session; an early-close session uses its early close if that is earlier.
 
-    Raises ValueError for a session outside the calendar's years or on a holiday, so an
+    Raises ValueError for a session outside the calendar's years, on a weekend or a holiday, so an
     unknown day never silently gets a regular-close cutoff.
     """
     check_known_sessions(sessions, calendar)
@@ -127,6 +130,21 @@ def calendar_cutoffs(
     return cutoffs
 
 
+def default_cutoffs_for(
+    dates: Sequence[date], calendar: NyseCalendar, lookahead_days: int
+) -> pd.Series:
+    """Cutoffs from the first date to `lookahead_days` past the last, capped at the last year.
+
+    The lookahead lets late-arriving items align to a later session; the cap keeps it inside
+    the calendar's years so a date near the end of the calendar does not raise.
+    """
+    start = min(dates)
+    end = max(dates) + dt.timedelta(days=lookahead_days)
+    if end.year > calendar.last_year >= start.year:
+        end = date(calendar.last_year, 12, 31)
+    return calendar_cutoffs(weekday_sessions(start, end, calendar), calendar)
+
+
 def resolve_sessions(
     start: date,
     end: date,
@@ -135,7 +153,8 @@ def resolve_sessions(
 ) -> pd.DatetimeIndex:
     """The price provider's sessions when given, else the committed calendar's.
 
-    Provider sessions are checked against the calendar's years and holidays (ValueError)."""
+    Provider sessions are checked against the calendar's years, weekends and holidays
+    (ValueError)."""
     if provider_sessions is not None:
         check_known_sessions(provider_sessions, calendar)
         return provider_sessions

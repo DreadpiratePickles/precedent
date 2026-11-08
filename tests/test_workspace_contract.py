@@ -87,7 +87,8 @@ def test_ci_pins_actions_by_sha_and_runs_the_offline_checks():
     for ref, comment in uses:
         assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", ref), ref
         assert comment.startswith("# v"), ref
-    assert "secrets." not in ci
+    assert set(re.findall(r"secrets\.\w+", ci)) <= {"secrets.GITHUB_TOKEN"}  # no other secret
+    assert "gitleaks/gitleaks-action@" in ci
     assert "contents: read" in ci
     for step in (
         "uv sync --frozen --all-extras",

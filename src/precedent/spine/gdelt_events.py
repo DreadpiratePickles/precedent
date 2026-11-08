@@ -12,7 +12,7 @@ import json
 import zipfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,7 @@ from precedent.spine.event_key import build_event_key, load_country_groups
 from precedent.spine.event_record import EventRecord
 from precedent.spine.event_schema import ActorKind, EventType, NewsEvent
 from precedent.spine.pit_alignment import align_records
-from precedent.spine.session_calendar import calendar_cutoffs, load_nyse_calendar, weekday_sessions
+from precedent.spine.session_calendar import default_cutoffs_for, load_nyse_calendar
 
 PARSER_VERSION = "rules-gdelt-v1"
 SOURCE_NAME = "gdelt2"
@@ -338,12 +338,9 @@ def _record_for(
 
 def _default_cutoffs(first_seen: Sequence[datetime]) -> pd.Series:
     """Session cutoffs from the first row's date to 15 days past the last, so late rows align."""
-    calendar = load_nyse_calendar()
-    start = min(first_seen).date()
-    end = max(first_seen).date() + timedelta(days=_EXTRA_SESSION_DAYS)
-    if end.year > calendar.last_year >= start.year:
-        end = date(calendar.last_year, 12, 31)
-    return calendar_cutoffs(weekday_sessions(start, end, calendar), calendar)
+    return default_cutoffs_for(
+        [stamp.date() for stamp in first_seen], load_nyse_calendar(), _EXTRA_SESSION_DAYS
+    )
 
 
 def _keep_earliest(items: Sequence[tuple[EventRecord, str, int]]) -> list[EventRecord]:
@@ -368,14 +365,18 @@ def _event_id_of(record: EventRecord) -> int:
     return int(record.article_id.split(":", 1)[1])
 
 
+def _actor1_country_key(record: EventRecord) -> str:
+    """Actor1's ISO3 code when it is one, else "" (never Actor2's country)."""
+    return record.event.actor.country_iso3 or ""
+
+
 def dedupe_gdelt_records(records: list[EventRecord]) -> list[EventRecord]:
     """Apply the dedup rule across runs: stored records read back together.
 
-    Same rule as inside one conversion; Actor1's country is the record's first linked country.
+    Same rule as inside one conversion: the Actor1 country key is Actor1's ISO3 code if it is
+    ISO, else "" (the same `_actor1_country_key` serves both).
     """
-    items = [
-        (record, (record.linked_countries or [""])[0], _event_id_of(record)) for record in records
-    ]
+    items = [(record, _actor1_country_key(record), _event_id_of(record)) for record in records]
     return _keep_earliest(items)
 
 
@@ -410,7 +411,7 @@ def events_from_gdelt_rows(
             cameo_map, params, ingested_utc,
         )  # fmt: skip
         candidates.append(
-            _Candidate(record, int(row["GLOBALEVENTID"]), row["Actor1CountryCode"], non_iso)
+            _Candidate(record, int(row["GLOBALEVENTID"]), _actor1_country_key(record), non_iso)
         )
     cutoffs = session_cutoffs_utc
     if cutoffs is None and candidates:

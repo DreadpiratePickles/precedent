@@ -213,3 +213,24 @@ def test_an_early_close_never_moves_a_cutoff_later() -> None:
         pd.DatetimeIndex(["2024-11-29"]), CALENDAR, cutoff_local=dt.time(12, 0)
     )
     assert list(cutoffs) == [pd.Timestamp(utc("2024-11-29 17:00"))]
+
+
+def test_a_weekend_session_is_refused_and_named():
+    with pytest.raises(ValueError, match="weekend.*2024-01-06"):
+        calendar_cutoffs(pd.DatetimeIndex(["2024-01-05", "2024-01-06"]), CALENDAR)
+    with pytest.raises(ValueError, match="2024-01-07"):
+        resolve_sessions(
+            date(2024, 1, 5),
+            date(2024, 1, 8),
+            CALENDAR,
+            provider_sessions=pd.DatetimeIndex(["2024-01-07", "2024-01-08"]),
+        )
+
+
+def test_default_cutoffs_for_caps_the_lookahead_at_the_calendars_last_year():
+    from precedent.spine.session_calendar import default_cutoffs_for
+
+    cutoffs = default_cutoffs_for([date(2027, 12, 20)], CALENDAR, 15)
+    assert cutoffs.index.max() == pd.Timestamp("2027-12-31")
+    inside = default_cutoffs_for([date(2024, 3, 4)], CALENDAR, 15)
+    assert inside.index.max() == pd.Timestamp("2024-03-19")

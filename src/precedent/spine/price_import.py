@@ -16,6 +16,7 @@ import pandas as pd
 
 EXPECTED_COLUMNS = ["date", "symbol", "open", "close"]
 MANIFEST_NAME = "MANIFEST.json"
+_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _SYMBOL_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9._^-]*$")
 
 
@@ -58,6 +59,8 @@ def _parse_rows(csv_path: Path, text: str) -> dict[str, list[tuple[date, float, 
             raise PriceImportError(f"line {line}: expected 4 fields, found {len(fields)}")
         raw_date, raw_symbol, raw_open, raw_close = (field.strip() for field in fields)
         try:
+            if not _DATE_PATTERN.match(raw_date):
+                raise ValueError(raw_date)
             day = date.fromisoformat(raw_date)
         except ValueError:
             raise PriceImportError(f"line {line}: date {raw_date!r} is not YYYY-MM-DD") from None

@@ -54,3 +54,31 @@ def test_cli_imports_no_track_at_startup():
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert result.stdout.strip() == "[]"
+
+
+def test_help_flags_print_usage_to_stdout_and_exit_zero(capsys):
+    for flag in ("--help", "-h"):
+        assert main([flag]) == 0
+        out = capsys.readouterr().out
+        assert "usage: precedent" in out and "precedent <text>" in out
+        for command in TRACK_COMMANDS:
+            if not command.startswith("ingest "):
+                assert command in out
+        assert "edgar" in out and "gdelt" in out  # the ingest sources
+
+
+def test_no_arguments_prints_usage_and_exits_two(capsys):
+    assert main([]) == 2
+    assert "usage: precedent" in capsys.readouterr().out
+
+
+def test_an_unknown_flag_exits_two_with_usage_on_stderr(capsys):
+    assert main(["--bogus", "text"]) == 2
+    captured = capsys.readouterr()
+    assert "--bogus" in captured.err and "usage: precedent" in captured.err
+    assert captured.out == ""
+
+
+def test_a_leading_dash_is_never_ask_text():
+    assert resolve_command(["--dry-run", "Fed cuts"])[0] == "bad flag"
+    assert resolve_command(["-h"])[0] == "help"

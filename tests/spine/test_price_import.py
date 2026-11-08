@@ -100,3 +100,11 @@ def test_cli_import_reports_a_bad_csv_as_exit_one(tmp_path, monkeypatch, capsys)
 def test_cli_without_a_subcommand_is_a_usage_error(capsys):
     assert main(["prices"]) == 2
     assert "usage" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("raw_date", ["20240102", "2024-W01-1", "2024-1-2", "2024/01/02"])
+def test_only_yyyy_mm_dd_dates_are_accepted(tmp_path: Path, raw_date: str):
+    csv_path = tmp_path / "dates.csv"
+    csv_path.write_text(f"date,symbol,open,close\n{raw_date},AAA,10,11\n", encoding="utf-8")
+    with pytest.raises(PriceImportError, match="line 2.*YYYY-MM-DD"):
+        import_prices_csv(csv_path, tmp_path / "prices")

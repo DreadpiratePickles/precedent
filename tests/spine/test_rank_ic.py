@@ -33,7 +33,11 @@ def test_known_value_and_monotone_transform_invariance() -> None:
 
 def test_ties_use_average_ranks() -> None:
     pred, label = panel({"2024-01-02": ([1, 1, 2, 3], [1, 2, 3, 4])})
-    expected = pd.Series([1, 1, 2, 3]).corr(pd.Series([1, 2, 3, 4]), method="spearman")
+    # Hand-worked average ranks (the tied pair shares rank 1.5), then Pearson with numpy only,
+    # so the test needs no scipy.
+    pred_ranks = np.array([1.5, 1.5, 3.0, 4.0])
+    label_ranks = np.array([1.0, 2.0, 3.0, 4.0])
+    expected = np.corrcoef(pred_ranks, label_ranks)[0, 1]
     assert daily_rank_ic(pred, label).iloc[0] == pytest.approx(expected)
 
 

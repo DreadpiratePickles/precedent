@@ -1,8 +1,8 @@
 """Held-back adversarial tests written by the Task 21 verifier (SYNTHETIC data only).
 
-None of these were written by the implementers of Tasks 1-16. A test marked
-`xfail(strict=True, reason="FINDING V-n: ...")` pins a defect found by the verifier: it stays in
-place so the suite is green and the finding cannot be fixed without removing the marker.
+None of these were written by the implementers of Tasks 1-16. The tests under "Further probes"
+and the V-2 test pinned defects as `xfail(strict=True)`; the fix wave fixed all six findings
+(V-2 to V-7) and removed the markers, so every test here now runs green.
 """
 
 import json
@@ -412,14 +412,6 @@ def test_v_a_model_typer_without_max_calls_is_refused_before_any_call(monkeypatc
 # --- 11. GDELT dedup: the in-run rule and the cross-run helper must agree ------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING V-2: dedupe_gdelt_records keys on linked_countries[0], which is Actor2's country "
-        "when Actor1 has no country; events_from_gdelt_rows keys on Actor1CountryCode. The same "
-        "two rows are merged in one conversion but kept apart across runs."
-    ),
-)
 def test_v_gdelt_dedup_across_runs_matches_dedup_inside_one_run():
     # Actor1 has no country; the two rows differ only in Actor2's country and event id.
     def row(event_id: str, actor2_country: str) -> list[str]:
@@ -447,14 +439,6 @@ def test_v_gdelt_dedup_across_runs_matches_dedup_inside_one_run():
 # --- 12. Further probes pinned as findings --------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING V-3: check_known_sessions refuses holidays but not weekends, so a Saturday "
-        "session (for example from a price CSV with a weekend row) gets a cutoff and can receive "
-        "events that belong to Monday."
-    ),
-)
 def test_v_a_weekend_session_is_refused_like_a_holiday():
     from precedent.spine.session_calendar import calendar_cutoffs, load_nyse_calendar
 
@@ -462,14 +446,6 @@ def test_v_a_weekend_session_is_refused_like_a_holiday():
         calendar_cutoffs(pd.DatetimeIndex(["2024-01-05", "2024-01-06"]), load_nyse_calendar())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING V-4: edgar_8k_events._default_cutoffs does not cap its 15-day lookahead at the "
-        "calendar's last year (gdelt_events does), so an 8-K accepted in the last two weeks of "
-        "2027 raises instead of aligning or staying unaligned."
-    ),
-)
 def test_v_an_8k_accepted_in_the_last_days_of_the_calendar_still_aligns():
     from precedent.spine.edgar_8k_events import events_from_submissions
 
@@ -491,38 +467,16 @@ def test_v_an_8k_accepted_in_the_last_days_of_the_calendar_still_aligns():
     assert len(records) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING V-5: EventKey.from_string validates the field count, group, band, flag and sign "
-        "but not event_type, actor_kind or impacted kinds, so a typo in a gold case or a stored "
-        "key parses as a valid key."
-    ),
-)
 def test_v_an_event_key_with_an_unknown_event_type_is_refused():
     with pytest.raises(ValueError):
         EventKey.from_string("garbage/garbage/foo+bar/US/low/scheduled/0")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING V-6: `precedent --help` is treated as text for `ask` and exits 2 with "
-        "'not built yet: ask'; there is no top-level usage."
-    ),
-)
 def test_v_top_level_help_is_not_routed_to_ask(capsys):
     cli.main(["--help"])
     assert "not built yet" not in capsys.readouterr().err
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING V-7: price import accepts any ISO-8601 date form Python parses (20240102, "
-        "2024-W01-1) although the contract and its own error message say YYYY-MM-DD."
-    ),
-)
 def test_v_price_csv_date_must_be_yyyy_mm_dd(tmp_path: Path):
     csv_path = tmp_path / "compact.csv"
     csv_path.write_text("date,symbol,open,close\n20240102,AAA,10,11\n", encoding="utf-8")

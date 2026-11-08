@@ -13,6 +13,7 @@ KALSHI_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 ANTHROPIC_VERSION = "2026-10-21"
 ANTHROPIC_TYPER_MODEL = "claude-haiku-5-5"
+# PRECEDENT_MODEL_BASE_URL (env) is reserved for the parser runtime (Task 18); nothing reads it yet.
 PARSER_MODEL_ID: str | None = None  # set after decision D2
 SNAPSHOT_RELEASES_URL: str | None = None  # set by the owner when the GitHub repository exists
 
