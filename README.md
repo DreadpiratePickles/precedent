@@ -33,7 +33,7 @@ The first command downloads packages; the rest touch neither the network nor a m
 
 I have never run any of this against live data, a language model, or a real price provider. Every result so far comes from synthetic data and fakes, so it shows the code does what its tests say and nothing about the real world. Specifically:
 
-- The NYSE holiday calendar for 2010 to 2014 was generated from rules and not compared with a published source; two special closures are also unverified.
+- The NYSE holiday calendar for 2010 and 2011 is rule-derived and unverified against an NYSE source. The July 3 and December 24 early closes in 2012 and 2013 rest on a secondary source only. Everything else, including the special closures, is verified against NYSE or NYSE Euronext sources.
 - The CAMEO-to-event-type table and the 8-K item rules are my proposals, not confirmed against their sources.
 - The time zone of EDGAR's `acceptanceDateTime` is unconfirmed. The code reads its `Z` suffix as UTC; if that is wrong, every 8-K result is early by four to five hours. The check to run on the first live fetch is in `stages/01_ingest/CONTEXT.md`.
 - Free price data is survivorship-biased, so any result on it is exploratory.

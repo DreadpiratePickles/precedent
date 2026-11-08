@@ -1,5 +1,5 @@
 {
- "source": "NYSE holiday and trading-hours pages (current and archived); 2010-2014 and the 2018 and 2025 special closures are unverified, see sources",
+ "source": "NYSE holiday and trading-hours pages (current and archived) and NYSE Euronext releases; 2010-2011 are unverified (rule-derived), 2012-2013 July 3 and Dec 24 early closes are secondary-sourced only, special closures are verified, see sources",
  "checked_utc": "2026-11-08T01:10Z",
  "first_year": 2010,
  "last_year": 2027,
@@ -218,30 +218,30 @@
   {
    "date": "2012-10-29",
    "reason": "Hurricane Sandy",
-   "url": "https://en.wikipedia.org/wiki/New_York_Stock_Exchange",
-   "checked_utc": "2026-11-08T01:10Z",
-   "note": "article states the exchange was shut for two days from 2012-10-29; no NYSE page found"
+   "url": "https://mondovisione.com/media-and-resources/news/nyse-euronext-statement-on-closure-of-us-markets-on-tuesday-oct-30-20121029",
+   "checked_utc": "2026-11-08T00:00Z",
+   "note": "NYSE Euronext statement of 2012-10-29 (as reproduced by Mondovisione) says US markets were closed Monday Oct 29 and Tuesday Oct 30; the statement does not name the hurricane. The Wikipedia article on the NYSE also states a two-day closure from 2012-10-29"
   },
   {
    "date": "2012-10-30",
    "reason": "Hurricane Sandy",
-   "url": "https://en.wikipedia.org/wiki/New_York_Stock_Exchange",
-   "checked_utc": "2026-11-08T01:10Z",
-   "note": "second day of the same closure"
+   "url": "https://mondovisione.com/media-and-resources/news/nyse-euronext-statement-on-closure-of-us-markets-on-tuesday-oct-30-20121029",
+   "checked_utc": "2026-11-08T00:00Z",
+   "note": "second day of the same closure; same NYSE Euronext statement"
   },
   {
    "date": "2018-12-05",
    "reason": "National Day of Mourning, George H. W. Bush",
-   "url": null,
-   "checked_utc": null,
-   "unverified": true
+   "url": "https://ir.theice.com/press/news-details/2018/New-York-Stock-Exchange-to-Honor-President-George-H-W-Bush/default.aspx",
+   "checked_utc": "2026-11-08T00:00Z",
+   "note": "NYSE press release (ICE investor relations)"
   },
   {
    "date": "2025-01-09",
    "reason": "National Day of Mourning, Jimmy Carter",
-   "url": null,
-   "checked_utc": null,
-   "unverified": true
+   "url": "https://ir.theice.com/press/news-details/2024/The-New-York-Stock-Exchange-Will-Close-Markets-on-January-9-to-Honor-the-Passing-of-Former-President-Jimmy-Carter-on-National-Day-of-Mourning/default.aspx",
+   "checked_utc": "2026-11-08T00:00Z",
+   "note": "NYSE press release (ICE investor relations)"
   }
  ],
  "sources": [
@@ -288,11 +288,36 @@
    "note": "archived NYSE page, 2015-2016 table"
   },
   {
-   "years": "2010-2014",
+   "years": "2014",
+   "url": "https://ir.theice.com/press/news-details/2013/NYSE-Euronext-Announces-2015-Holiday-Calendar-and-Early-Closings/default.aspx",
+   "checked_utc": "2026-11-08T00:00Z",
+   "note": "NYSE Euronext release; all 2014 holidays and early closes verified"
+  },
+  {
+   "years": "2014",
+   "url": "https://marketscreener.com/quote/stock/NYSE-Euronext-NYX-Announces-its-2014-Holiday-Calendar-and-Early-Closings-for-NYSE-NYSE-Amex-and-13979294",
+   "checked_utc": "2026-11-08T00:00Z",
+   "note": "NYSE Euronext 2014 holiday calendar release (reproduced by MarketScreener); all 2014 holidays and early closes verified"
+  },
+  {
+   "years": "2012-2013",
+   "url": "https://ca.marketscreener.com/quote/stock/NYSE-EURO-NYSE-Euronext-NYX-Announces-its-2012-and-2013-Holiday-Calendar-and-Early-Closings-for-13533281",
+   "checked_utc": "2026-11-08T00:00Z",
+   "note": "NYSE Euronext 2012-2013 release (reproduced by MarketScreener); holidays and Thanksgiving early closes verified"
+  },
+  {
+   "years": "2012-2013 (July 3 and Dec 24 early closes only)",
+   "url": "https://investmentu.com/?p=29092",
+   "checked_utc": "2026-11-08T00:00Z",
+   "secondary_only": true,
+   "note": "secondary source only; no NYSE page seen for these early closes"
+  },
+  {
+   "years": "2010-2011",
    "url": null,
    "checked_utc": null,
    "unverified": true,
-   "note": "no archived NYSE page could be fetched; generated from the NYSE holiday rules (observed-day rules, Good Friday, early closes) and not compared with a page"
+   "note": "not verified against an NYSE source; rule-derived (observed-day rules, Good Friday, early closes), consistent with those rules, and no source contradicts them"
   }
  ]
 }
