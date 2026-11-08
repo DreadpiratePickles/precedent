@@ -305,23 +305,54 @@ def claims_asof(
     `valid_from_utc <= cutoff < valid_to_utc` (or it has no end). Enum columns hold their string
     values; the datetime columns are tz-aware UTC even when the frame is empty.
     """
+    known = _known_by(store, cutoff_utc)
+    rows = [
+        claim.model_dump(mode="json")
+        for claim in known.values()
+        if claim.valid_from_utc <= cutoff_utc
+        and (claim.valid_to_utc is None or claim.valid_to_utc > cutoff_utc)
+        and (subject is None or claim.subject == subject)
+        and (attribute is None or claim.attribute.value == attribute)
+    ]
+    return _claim_frame(rows)
+
+
+def claims_history_asof(
+    store: ClaimStore,
+    cutoff_utc: datetime,
+    lookback_start_utc: datetime,
+    subject: str | None = None,
+    attribute: str | None = None,
+) -> pd.DataFrame:
+    """Every claim that began in `[lookback_start_utc, cutoff_utc]`, expired or not (D71).
+
+    A history detector (the direction CUSUM) needs the claims that have come and gone, which
+    `claims_asof` hides once `valid_to_utc` has passed. The read is still as of the cutoff: for
+    each id the last record already recorded by it is used, and a claim recorded later is absent.
+    `valid_to_utc` is ignored. Same columns as `claims_asof`.
+    """
+    known = _known_by(store, cutoff_utc)
+    rows = [
+        claim.model_dump(mode="json")
+        for claim in known.values()
+        if lookback_start_utc <= claim.valid_from_utc <= cutoff_utc
+        and (subject is None or claim.subject == subject)
+        and (attribute is None or claim.attribute.value == attribute)
+    ]
+    return _claim_frame(rows)
+
+
+def _known_by(store: ClaimStore, cutoff_utc: datetime) -> dict[str, Claim]:
     if cutoff_utc.tzinfo is None or cutoff_utc.utcoffset() is None:
         raise ValueError("cutoff_utc must be timezone-aware (a naive cutoff is rejected)")
     known: dict[str, Claim] = {}
     for claim in store.read_all():
         if claim.recorded_utc <= cutoff_utc:
             known[claim.claim_id] = claim
-    rows = []
-    for claim in known.values():
-        if claim.valid_from_utc > cutoff_utc:
-            continue
-        if claim.valid_to_utc is not None and claim.valid_to_utc <= cutoff_utc:
-            continue
-        if subject is not None and claim.subject != subject:
-            continue
-        if attribute is not None and claim.attribute.value != attribute:
-            continue
-        rows.append(claim.model_dump(mode="json"))
+    return known
+
+
+def _claim_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
     frame = pd.DataFrame(rows, columns=list(Claim.model_fields))
     for column in _DATETIME_COLUMNS:
         frame[column] = pd.to_datetime(frame[column], utc=True).astype("datetime64[ns, UTC]")

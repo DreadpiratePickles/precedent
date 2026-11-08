@@ -5,9 +5,10 @@ For session `t` the steps are: (1) build rule claims from the records and links 
 cutoff and append the new ones; (2) expire the claims that have run past the dated rule;
 (3) run the tension and shift detectors as of the cutoff and store what they found (a tension is
 its group: new, restated members, or reopened; D72); (4) close the tensions that no longer hold,
-each by its kind's own test; (5) write `dreams/dream_<t>.md` and `.jsonl`. The note is read back from the
-stores, never from what this run appended, so a re-run, or a backfill of an old session, gives
-the same bytes. No wall-clock time reaches any output: stored times are session cutoffs.
+each by its kind's own test; (5) write `dreams/dream_<t>.md` and `.jsonl`. The note is read back
+from the stores, never from what this run appended, so a re-run, or a backfill of an old
+session, gives the same bytes. No wall-clock time reaches any output: stored times are session
+cutoffs.
 """
 
 from __future__ import annotations

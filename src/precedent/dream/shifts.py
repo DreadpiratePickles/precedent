@@ -4,7 +4,8 @@ No model runs here. `event_rate_shift` tests the last `window` sessions' event c
 preceding `baseline` sessions, `direction_drift` runs a two-sided CUSUM over a subject's
 `event_direction` claims, and `link_churn` compares a subject's link set now with an earlier one.
 `run_shift_detectors` runs all three for one session as of its cutoff and appends nothing to any
-store; a shift's id is one per kind and subject, so a later session re-fires it in place.
+store; a shift's id is one per kind and subject, so a later session re-fires it in place (when it
+grew, a new episode began, or a drift changed sign).
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from precedent.dream.claim_schema import Shift, ShiftKind
-from precedent.dream.claim_store import claims_asof
+from precedent.dream.claim_store import claims_history_asof
 from precedent.dream.detectors import _standalone_recorded_utc
 from precedent.dream.inputs import DreamStores, documents_per_session
 from precedent.ripple.link_store import GRAPH_COLUMNS, graph_asof
@@ -158,12 +159,12 @@ def direction_drift(
     """A two-sided CUSUM over the subject's `event_direction` claims; fires when either sum
     exceeds `h`.
 
-    `claims` is the `claims_asof` frame at the session's cutoff, so the sums are recomputed from
-    what was visible then and a backfill agrees with a live run. The sequence is ordered by
-    `valid_from_utc` then `claim_id` and mapped positive +1, neutral 0, negative -1. The CUSUM
-    runs on each value's deviation from the mean of the values before it (the first deviation is
-    0), so a steady direction never fires and a flip does: `S+ = max(0, S+ + d - k)` and
-    `S- = max(0, S- - d - k)` start at zero. `statistic` is the larger sum, negative when it is
+    `claims` is the `claims_history_asof` frame at the session's cutoff (D71), so the sums are
+    recomputed from what was recorded by then and a backfill agrees with a live run. The sequence
+    is ordered by `valid_from_utc` then `claim_id` and mapped positive +1, neutral 0, negative -1.
+    The CUSUM runs on each value's deviation from the mean of the values before it (the first
+    deviation is 0), so a steady direction never fires and a flip does: `S+ = max(0, S+ + d - k)`
+    and `S- = max(0, S- - d - k)` start at zero. `statistic` is the larger sum, negative when it is
     `S-`; `window_sessions` is the sessions from the first claim in the sequence to `session`,
     inclusive.
     """
@@ -262,13 +263,33 @@ def _events_frame(stores: DreamStores, cutoffs: pd.Series) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["subject", "session"])
 
 
-def _latest_stored_statistic(stores: DreamStores, recorded_by: datetime) -> dict[str, float]:
-    """The statistic of the last stored record per shift id that was recorded by `recorded_by`."""
-    latest: dict[str, float] = {}
+def _latest_stored(stores: DreamStores, recorded_by: datetime) -> dict[str, Shift]:
+    """The last stored record per shift id that was recorded by `recorded_by`."""
+    latest: dict[str, Shift] = {}
     for shift in stores.shift_store.read_all():
         if shift.recorded_utc <= recorded_by:
-            latest[shift.shift_id] = shift.statistic
+            latest[shift.shift_id] = shift
     return latest
+
+
+def _is_new_report(
+    found: Shift, stored: Shift | None, sessions: pd.DatetimeIndex, here: int, growth: float
+) -> bool:
+    """Whether `found` is to be reported given the last report of the same id (D73).
+
+    A shift never reported before is reported. One that was is reported again when its statistic
+    grew by more than `growth`, or when the last report is more than `window_sessions` positions
+    old (a new episode), or when a `direction_drift` changed sign. All three read the store as of
+    the cutoff, so no state is carried between runs.
+    """
+    if stored is None:
+        return True
+    if abs(found.statistic) > abs(stored.statistic) * (1.0 + growth):
+        return True
+    last = int(sessions.searchsorted(pd.Timestamp(stored.detected_session), side="left"))
+    if here - last > found.window_sessions:
+        return True
+    return found.kind is ShiftKind.direction_drift and found.statistic * stored.statistic < 0.0
 
 
 def run_shift_detectors(
@@ -283,8 +304,9 @@ def run_shift_detectors(
     rate test when fewer than `window` sessions precede; `ShiftReport.skipped` counts each.
     `cutoffs` must be indexed by `stores.sessions` (ValueError otherwise). A shift
     whose id already has a stored record, recorded by this cutoff, is returned only when its
-    statistic grew by more than `shift_rereport_growth` of the stored one; the caller then uses
-    `ShiftStore.refire`.
+    statistic grew by more than `shift_rereport_growth` of the stored one, when that record is
+    more than `window_sessions` positions old (a new episode), or when a `direction_drift`
+    changed sign (D73); the caller then uses `ShiftStore.refire`.
     """
     sessions = stores.sessions
     if not cutoffs.index.equals(sessions):
@@ -307,7 +329,12 @@ def run_shift_detectors(
     events = _events_frame(stores, cutoffs)
     span = set(sessions[[*baseline_range, *window_range]]) if enough_history else set()
     rate_subjects = sorted(set(events.loc[events["session"].isin(span), "subject"]))
-    claims = claims_asof(stores.claim_store, recorded, attribute="event_direction")
+    # The CUSUM needs the history, not the claims still valid (an event_direction claim lives a
+    # few sessions): every claim that began in the baseline span, recorded by the cutoff (D71).
+    lookback_start = cutoffs.iloc[max(0, here - baseline)].to_pydatetime()
+    claims = claims_history_asof(
+        stores.claim_store, recorded, lookback_start, attribute="event_direction"
+    )
     drift_subjects = sorted(set(claims["subject"]))
 
     found: list[Shift] = []
@@ -359,13 +386,12 @@ def run_shift_detectors(
             if shift is not None:
                 found.append(shift)
 
-    stored = _latest_stored_statistic(stores, recorded)
+    stored = _latest_stored(stores, recorded)
     growth = params["shift_rereport_growth"]
     reported = [
         shift
         for shift in found
-        if shift.shift_id not in stored
-        or abs(shift.statistic) > abs(stored[shift.shift_id]) * (1.0 + growth)
+        if _is_new_report(shift, stored.get(shift.shift_id), sessions, here, growth)
     ]
     by_kind = {kind.value: sum(s.kind is kind for s in reported) for kind in ShiftKind}
     subjects = set(rate_subjects) | set(drift_subjects) | set(churn_subjects)
