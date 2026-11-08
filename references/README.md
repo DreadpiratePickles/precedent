@@ -13,3 +13,7 @@ This folder ships inside the wheel as `precedent/references/` (see `pyproject.to
 - `precedent_params.json`: tunable parameters, one section per user; the `gdelt` section holds the GDELT filter, severity and latency values, all proposed (decision B4).
 - Citation terms, from the GDELT Project's terms page (`gdeltproject.org/about.html`, read 2026-11-07): the data may be used without fee for academic, commercial or governmental use, and may be redistributed, rehosted or mirrored in any form, but any use or redistribution "must include a citation to the GDELT Project" and a link to `https://www.gdeltproject.org/`.
 - Citation wording used here, for any surface that shows GDELT-derived events or code descriptions: `Source: the GDELT Project, https://www.gdeltproject.org/`. No GDELT export row or article text is committed.
+
+## Ablation rungs
+
+- `rungs/*.yaml`: one file per rung of the ablation ladder, read by `load_rungs`; each has a `name` and the `panel_prefixes` of the factor panels it adds to the price features. `m2_precedent.yaml` adds `prec_` to the `news_` columns of `m1_news.yaml`; it is proposed and has never been run.

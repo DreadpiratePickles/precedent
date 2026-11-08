@@ -37,7 +37,8 @@ def read_ciks(path: Path) -> list[CikEntry]:
     """Parse `cik,symbol` lines; blank lines, `#` comments and a `cik,symbol` header are skipped.
 
     Lines are grouped by CIK in first-seen order, so GOOG and GOOGL under one CIK make one entry
-    with two symbols (and one fetch). A repeated (cik, symbol) pair is kept once.
+    with two symbols (and one fetch). A repeated (cik, symbol) pair is kept once. Symbols within a
+    CIK are sorted, so record bytes do not depend on the line order of the file.
     """
     symbols_by_cik: dict[int, list[str]] = {}
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
@@ -50,7 +51,7 @@ def read_ciks(path: Path) -> list[CikEntry]:
         symbols = symbols_by_cik.setdefault(int(cik_text), [])
         if symbol not in symbols:
             symbols.append(symbol)
-    return [CikEntry(cik, tuple(symbols)) for cik, symbols in symbols_by_cik.items()]
+    return [CikEntry(cik, tuple(sorted(symbols))) for cik, symbols in symbols_by_cik.items()]
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
