@@ -119,3 +119,73 @@ def test_system_clock_is_utc_aware_and_monotonic():
     first = clock.monotonic()
     clock.sleep(0)
     assert clock.monotonic() >= first
+
+
+@pytest.mark.parametrize(("max_requests", "per_seconds", "acquisitions", "expected_sleep"), [
+    (1, 0.1, 50, 4.9),
+    (2, 0.7, 10, 0.7 * 4),
+    (1, 0.3, 20, 0.3 * 19),
+    (1, 1 / 3, 30, 29 / 3),
+])
+def test_rate_limiter_terminates_with_non_dyadic_periods(
+    max_requests, per_seconds, acquisitions, expected_sleep
+):
+    clock = FakeClock()
+    limiter = RateLimiter(max_requests, per_seconds, clock)
+    for _ in range(acquisitions):
+        limiter.acquire()
+    assert clock.slept_seconds == pytest.approx(expected_sleep)
+
+
+def test_httpx_transport_wraps_transport_errors_as_status_zero():
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        raise httpx.ConnectError("refused", request=request)
+
+    transport = HttpxTransport(httpx.Client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(HttpError) as raised:
+        transport.send(HttpRequest("GET", "https://example.test/x", {}))
+    assert raised.value.status == 0
+    assert "https://example.test/x" in str(raised.value)
+    assert "ConnectError" in str(raised.value)
+    assert isinstance(raised.value.__cause__, httpx.ConnectError)
+
+
+def test_status_zero_is_retried_like_a_5xx_then_succeeds():
+    transport, clock = FakeTransport([status(0), status(0), ok({"a": 1})]), FakeClock()
+    response = send_with_retries(
+        transport, clock, HttpRequest("GET", "https://example.test/x", {}), rng=random.Random(0)
+    )
+    assert response.json() == {"a": 1}
+    assert len(transport.requests) == 3
+    assert clock.slept_seconds > 0
+
+
+def test_exhausted_status_zero_raises_a_plain_http_error():
+    transport = FakeTransport([status(0)] * 4)
+    with pytest.raises(HttpError) as raised:
+        send_with_retries(
+            transport, FakeClock(), HttpRequest("GET", "https://example.test/x", {}), max_retries=3
+        )
+    assert not isinstance(raised.value, RateLimitError)
+    assert raised.value.status == 0
+    assert len(transport.requests) == 4
+
+
+def test_a_real_transport_failure_is_retried_end_to_end():
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request)
+        if len(attempts) < 3:
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(200, json={"ok": True})
+
+    transport = HttpxTransport(httpx.Client(transport=httpx.MockTransport(handler)))
+    response = send_with_retries(
+        transport, FakeClock(), HttpRequest("GET", "https://example.test/x", {}), max_retries=3
+    )
+    assert response.json() == {"ok": True}
+    assert len(attempts) == 3

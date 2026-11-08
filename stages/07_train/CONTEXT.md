@@ -37,7 +37,7 @@ A failed trial is logged with its error line and counted as a trial; it is never
 
 ## Loop
 Kind: ratchet
-Oracle: mean validation rank IC across purged folds, computed by the fold scorer; a trial is kept only when it beats the best-so-far beyond the noise tolerance recorded in the results table. Green is not acceptance.
+Oracle: mean validation rank IC across purged folds, computed by the fold scorer; a trial is kept only when it beats the best-so-far by more than the noise tolerance of 0.005 mean validation rank IC. Green is not acceptance.
 Oracle protection: the fold generator, scorer, labels and test-period boundary are read-only to the worker; a change stops the loop and goes to a human.
 Held-out check: the final test period, touched once, at acceptance in `08_evaluate`.
 Unit per iteration: one hyperparameter configuration (one logged trial).
@@ -48,6 +48,6 @@ Worker / judge: a script proposes configurations; no model judge.
 Runner: a script counts trials, enforces the budget and the stops, and keeps or reverts the configuration.
 State: `stages/07_train/output/results.tsv` and git commits; read first, updated last.
 Context: one session per run, since each trial is a script call and the state is the table.
-Stop: 30 logged trials; or no improvement in mean validation rank IC after 6 trials; or the same first error line 3 times in a row; or blocked (a valid exit).
+Stop: 30 logged trials; or 12 hours wall time; or any spend (the cost budget is zero: local compute only, and renting compute needs the owner's yes); or no improvement in mean validation rank IC after 6 trials; or the same first error line 3 times in a row; or blocked (a valid exit).
 On stop: the best-so-far configuration is kept, the trial count is recorded in the results table and `docs/STATUS.md`, and the owner is told.
 Single-pass baseline: the default LightGBM configuration scored once under the same folds, recorded before the first trial.

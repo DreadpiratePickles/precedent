@@ -15,6 +15,7 @@ import httpx
 
 RETRYABLE_STATUS_MIN_5XX = 500
 STATUS_TOO_MANY_REQUESTS = 429
+STATUS_TRANSPORT_FAILURE = 0
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,7 @@ class Clock(Protocol):
 
 
 class HttpError(RuntimeError):
-    """A non-2xx response. `status` is the final HTTP status code."""
+    """A non-2xx response. `status` is the HTTP status code, or 0 when no response arrived."""
 
     def __init__(self, message: str, status: int) -> None:
         super().__init__(message)
@@ -69,14 +70,20 @@ class HttpxTransport:
         self._client = client if client is not None else httpx.Client()
 
     def send(self, request: HttpRequest) -> HttpResponse:
-        response = self._client.request(
-            request.method,
-            request.url,
-            headers=dict(request.headers),
-            params=dict(request.params) if request.params is not None else None,
-            json=request.json_body,
-            timeout=request.timeout_s,
-        )
+        try:
+            response = self._client.request(
+                request.method,
+                request.url,
+                headers=dict(request.headers),
+                params=dict(request.params) if request.params is not None else None,
+                json=request.json_body,
+                timeout=request.timeout_s,
+            )
+        except httpx.TransportError as error:
+            raise HttpError(
+                f"{request.method} {request.url} failed: {type(error).__name__}: {error}",
+                STATUS_TRANSPORT_FAILURE,
+            ) from error
         return HttpResponse(response.status_code, dict(response.headers), response.content)
 
 
@@ -92,7 +99,25 @@ class SystemClock:
 
 
 def _is_retryable(status: int) -> bool:
-    return status == STATUS_TOO_MANY_REQUESTS or status >= RETRYABLE_STATUS_MIN_5XX
+    return (
+        status in (STATUS_TOO_MANY_REQUESTS, STATUS_TRANSPORT_FAILURE)
+        or status >= RETRYABLE_STATUS_MIN_5XX
+    )
+
+
+_Attempt = tuple[int, HttpResponse | None, HttpError | None]
+
+
+def _send_once(transport: Transport, request: HttpRequest) -> _Attempt:
+    """Return (status, response, transport_error). A transport that raises HttpError with
+    status 0 is treated like a status-0 response, so both are retried the same way."""
+    try:
+        response = transport.send(request)
+    except HttpError as error:
+        if error.status != STATUS_TRANSPORT_FAILURE:
+            raise
+        return error.status, None, error
+    return response.status, response, None
 
 
 def send_with_retries(
@@ -103,24 +128,21 @@ def send_with_retries(
     base_delay_s: float = 0.5,
     rng: random.Random | None = None,
 ) -> HttpResponse:
-    """Send, retrying 429 and 5xx only, with exponential backoff and full jitter."""
+    """Send, retrying 429, 5xx and transport failures (status 0) with exponential backoff
+    and full jitter. Any other non-2xx raises at once."""
     jitter = rng if rng is not None else random.Random()
     for attempt in range(max_retries + 1):
-        response = transport.send(request)
-        if 200 <= response.status < 300:
+        status, response, transport_error = _send_once(transport, request)
+        if response is not None and 200 <= status < 300:
             return response
-        if not _is_retryable(response.status):
-            raise HttpError(
-                f"{request.method} {request.url} returned {response.status}", response.status
-            )
+        if not _is_retryable(status):
+            raise HttpError(f"{request.method} {request.url} returned {status}", status)
         if attempt == max_retries:
-            is_rate_limited = response.status == STATUS_TOO_MANY_REQUESTS
-            error_type = RateLimitError if is_rate_limited else HttpError
+            error_type = RateLimitError if status == STATUS_TOO_MANY_REQUESTS else HttpError
             raise error_type(
-                f"{request.method} {request.url} returned {response.status} "
-                f"after {max_retries} retries",
-                response.status,
-            )
+                f"{request.method} {request.url} returned {status} after {max_retries} retries",
+                status,
+            ) from transport_error
         clock.sleep(jitter.uniform(0, base_delay_s * 2**attempt))
     raise AssertionError("unreachable: the loop returns or raises")  # pragma: no cover
 
@@ -139,9 +161,9 @@ class RateLimiter:
     def acquire(self) -> None:
         while True:
             now = self._clock.monotonic()
-            while self._stamps and self._stamps[0] <= now - self._per_seconds:
+            while self._stamps and self._stamps[0] + self._per_seconds <= now:
                 self._stamps.popleft()
             if len(self._stamps) < self._max_requests:
                 self._stamps.append(now)
                 return
-            self._clock.sleep(self._stamps[0] + self._per_seconds - now)
+            self._clock.sleep(self._stamps[0] + self._per_seconds - now)  # always > 0 here
