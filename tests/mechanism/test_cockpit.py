@@ -5,7 +5,6 @@ import re
 import shutil
 import subprocess
 import sys
-import types
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -31,7 +30,6 @@ from precedent.mechanism.graph_schema import (
     CausalGraph,
     Edge,
     Node,
-    _default_vocabulary,
     derive_kind,
 )
 from precedent.mechanism.simulate import Intervention, fan, simulate
@@ -468,17 +466,21 @@ def template_fitted(graph: CausalGraph) -> FittedSEM:
 
 @pytest.fixture
 def stubbed_data_step(monkeypatch):
-    """Replace the 7b data step so the renderers and flag handling run end to end."""
+    """Replace the data step (loader and fit) so the renderers and flag handling run end to end."""
     seen = {}
 
-    def fake(key, graph, asof_utc, horizon, data_dir):
-        seen.update(key=key, asof=asof_utc, horizon=horizon, data_dir=data_dir)
+    def fake_inputs(directory):
+        seen["data_dir"] = directory
+
+    def fake(key, graph, asof_utc, horizon, inputs, params):
+        seen.update(key=key, asof=asof_utc, horizon=horizon)
         bands = [
             BandRow(asset="TLT", horizon=horizon, p10=-0.01, median=-0.002, p90=0.006,
                     n=12, n_eff=8.0, refused=False),
         ]  # fmt: skip
         return template_fitted(graph), bands
 
+    monkeypatch.setattr(cli, "_load_inputs", fake_inputs)
     monkeypatch.setattr(cli, "_fit_and_band", fake)
     return seen
 
@@ -532,18 +534,6 @@ def test_bad_key_flags_exit_2_naming_the_value(capsys, flags, bad):
     assert run(flags) == 2
     err = capsys.readouterr().err
     assert bad in err and "Traceback" not in err
-
-
-def test_engine_present_but_data_step_unwritten_exits_2_with_its_message(capsys, monkeypatch):
-    engine = types.ModuleType("precedent.engine")
-    engine.__path__ = []
-    retrieval = types.ModuleType("precedent.engine.retrieval")
-    engine.retrieval = retrieval
-    monkeypatch.setitem(sys.modules, "precedent.engine", engine)
-    monkeypatch.setitem(sys.modules, "precedent.engine.retrieval", retrieval)
-    assert run(KEY_FLAGS) == 2
-    err = capsys.readouterr().err
-    assert "Task 7b" in err and "not built yet" not in err
 
 
 def test_do_on_an_event_node_exits_2_and_points_at_the_key_flag(capsys):
@@ -601,10 +591,13 @@ def test_event_type_without_a_template_exits_2(capsys):
 
 
 def test_key_path_without_the_engine_says_not_built_yet(capsys, monkeypatch):
-    monkeypatch.setitem(sys.modules, "precedent.engine", None)
+    monkeypatch.setitem(sys.modules, "precedent.engine.retrieval", None)
+    monkeypatch.setattr(cli, "_load_inputs", lambda directory: None)
     assert run(KEY_FLAGS) == 2
     err = capsys.readouterr().err
-    assert "not built yet: mechanism needs the Precedent engine (Precedent Tasks 2 to 8)" in err
+    assert err.strip() == (
+        "not built yet: mechanism needs precedent.engine.retrieval from the Precedent track"
+    )
 
 
 def test_parse_do_flags_checks_nodes_and_floats():
@@ -654,5 +647,5 @@ def test_data_dir_defaults_to_the_config_default(monkeypatch, tmp_path, stubbed_
 
 
 def test_template_graphs_have_event_nodes_the_cli_can_value():
-    templates = load_templates(references_dir() / "mechanism" / "templates", _default_vocabulary())
+    templates = load_templates(references_dir() / "mechanism" / "templates", cli._vocabulary())
     assert all(g.event_node_ids for g in templates.values())
