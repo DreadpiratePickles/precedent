@@ -1,0 +1,31 @@
+{
+  "event_type": "earnings",
+  "graph_version": "template-v1",
+  "rationale": "direction_sign is the spine's sign: 1 favourable, -1 unfavourable for risk appetite or the named entity (references/typing_prompt_v1.txt rule 8). Textbook earnings channel. A beat is favourable (+1): it lifts risk_appetite (+) and broad equity indices (SPY +, QQQ +, IWM +). Sector and company effects are not modelled here, because the key does not name the sector. Documentation, not data.",
+  "edges": [
+    {
+      "source": "event:earnings:direction_sign",
+      "target": "risk_appetite",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "SPY",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "QQQ",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "IWM",
+      "sign": 1,
+      "lag_band": "same_session"
+    }
+  ]
+}

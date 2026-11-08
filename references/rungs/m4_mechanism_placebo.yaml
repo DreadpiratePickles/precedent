@@ -1,0 +1,4 @@
+name: m4_mechanism_placebo
+panel_prefixes: [mech_]
+# Rung M-P: degree-preserving placebo of the template graph; must lose to M-T or the structure
+# earned nothing. A comment, not a `notes` key: spine/ablation.py's Rung model forbids extra keys.

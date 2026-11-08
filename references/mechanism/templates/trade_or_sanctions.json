@@ -1,0 +1,61 @@
+{
+  "event_type": "trade_or_sanctions",
+  "graph_version": "template-v1",
+  "rationale": "direction_sign is the spine's sign: 1 favourable, -1 unfavourable for risk appetite or the named entity (references/typing_prompt_v1.txt rule 8). Textbook trade-restriction channel. Escalation of restrictions is unfavourable (-1): it lowers risk_appetite (+ edge; SPY +, EEM +, EFA +), raises usd_demand as a funding and safe currency (- edge; UUP +) which in turn weighs on emerging-market equities (EEM -), and lowers industrial demand over days (sector_demand:XLI +, then XLI +). Documentation, not data.",
+  "edges": [
+    {
+      "source": "event:trade_or_sanctions:direction_sign",
+      "target": "risk_appetite",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "event:trade_or_sanctions:direction_sign",
+      "target": "usd_demand",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "event:trade_or_sanctions:direction_sign",
+      "target": "sector_demand:XLI",
+      "sign": 1,
+      "lag_band": "days"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "SPY",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "EEM",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "EFA",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "usd_demand",
+      "target": "UUP",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "usd_demand",
+      "target": "EEM",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "sector_demand:XLI",
+      "target": "XLI",
+      "sign": 1,
+      "lag_band": "days"
+    }
+  ]
+}

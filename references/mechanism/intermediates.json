@@ -1,0 +1,34 @@
+{
+  "notes": {
+    "status": "Proposed list; the owner approves changes. A node id outside this list, the event ids and the asset panel is rejected, never added.",
+    "placeholder": "An id containing a <name> placeholder expands once per value in `values`."
+  },
+  "intermediates": [
+    {
+      "id": "rates_expectation",
+      "definition": "Where the market expects policy rates and short yields to go."
+    },
+    {
+      "id": "risk_appetite",
+      "definition": "Willingness of investors to hold risky assets over safe ones."
+    },
+    {
+      "id": "oil_supply",
+      "definition": "Available crude oil supply relative to demand."
+    },
+    {
+      "id": "usd_demand",
+      "definition": "Demand to hold US dollars, as a safe or funding currency."
+    },
+    {
+      "id": "credit_spread",
+      "definition": "Extra yield investors require to hold corporate debt over government debt."
+    },
+    {
+      "id": "sector_demand:<sector>",
+      "definition": "Demand for the goods and services of one US equity sector, named by its SPDR sector fund.",
+      "placeholder": "sector",
+      "values": ["XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY"]
+    }
+  ]
+}

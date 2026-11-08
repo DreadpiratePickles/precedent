@@ -1,0 +1,55 @@
+{
+  "event_type": "armed_conflict",
+  "graph_version": "template-v1",
+  "rationale": "direction_sign is the spine's sign: 1 favourable, -1 unfavourable for risk appetite or the named entity (references/typing_prompt_v1.txt rule 8). Textbook geopolitical-shock channel. Escalation is unfavourable (-1): it lowers risk_appetite (+ edge; SPY +), cuts oil_supply (+ edge, so a negative sign cuts it; oil_supply -> USO -, oil_supply -> XLE -) and raises usd_demand (- edge; UUP +). Gold is routed through risk_appetite (GLD -, the safe-haven relation: gold rises when risk appetite falls), not through usd_demand. Documentation, not data.",
+  "edges": [
+    {
+      "source": "event:armed_conflict:direction_sign",
+      "target": "risk_appetite",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "event:armed_conflict:direction_sign",
+      "target": "oil_supply",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "event:armed_conflict:direction_sign",
+      "target": "usd_demand",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "SPY",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "GLD",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "oil_supply",
+      "target": "USO",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "oil_supply",
+      "target": "XLE",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "usd_demand",
+      "target": "UUP",
+      "sign": 1,
+      "lag_band": "same_session"
+    }
+  ]
+}

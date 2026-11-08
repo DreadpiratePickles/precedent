@@ -1,0 +1,43 @@
+{
+  "event_type": "central_bank",
+  "graph_version": "template-v1",
+  "rationale": "direction_sign is the spine's sign: 1 favourable, -1 unfavourable for risk appetite or the named entity (references/typing_prompt_v1.txt rule 8). Textbook monetary transmission. A hawkish surprise is unfavourable (-1) and raises rates_expectation (- edge, so a negative sign raises it); higher expected rates lower long-duration bond prices (rates_expectation -> TLT -), tighten risk_appetite (-) and strengthen the dollar (UUP +); risk appetite moves equities and high-yield credit in the same direction (SPY +, HYG +). Documentation, not data.",
+  "edges": [
+    {
+      "source": "event:central_bank:direction_sign",
+      "target": "rates_expectation",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "rates_expectation",
+      "target": "TLT",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "rates_expectation",
+      "target": "risk_appetite",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "SPY",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "HYG",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "rates_expectation",
+      "target": "UUP",
+      "sign": 1,
+      "lag_band": "same_session"
+    }
+  ]
+}

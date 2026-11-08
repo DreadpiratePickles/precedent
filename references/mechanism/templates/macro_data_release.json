@@ -1,0 +1,31 @@
+{
+  "event_type": "macro_data_release",
+  "graph_version": "template-v1",
+  "rationale": "direction_sign is the spine's sign: 1 favourable, -1 unfavourable for risk appetite or the named entity (references/typing_prompt_v1.txt rule 8). Textbook data-release channel. A favourable release lifts risk_appetite (+; SPY +, IWM +, HYG +). There is no rates edge: growth and inflation surprises move rates in the same direction from opposite signs, so no single signed edge serves both; a growth/inflation split is a later refinement. Documentation, not data.",
+  "edges": [
+    {
+      "source": "event:macro_data_release:direction_sign",
+      "target": "risk_appetite",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "SPY",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "IWM",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "HYG",
+      "sign": 1,
+      "lag_band": "same_session"
+    }
+  ]
+}

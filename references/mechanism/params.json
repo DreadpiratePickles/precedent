@@ -1,0 +1,11 @@
+{
+  "notes": {
+    "n_paths": "Proposed (owner gate): the number of simulated paths per graph.",
+    "asset_panel": "Design 8.5 is the source of this list. Once the Precedent track's engine.asset_panel exists in references/precedent_params.json, that value is authoritative and this one is replaced by it."
+  },
+  "n_paths": 10000,
+  "asset_panel": [
+    "SPY", "QQQ", "IWM", "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU",
+    "XLV", "XLY", "TLT", "IEF", "HYG", "GLD", "USO", "UUP", "EEM", "EFA"
+  ]
+}
