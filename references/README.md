@@ -13,3 +13,9 @@ This folder ships inside the wheel as `precedent/references/` (see `pyproject.to
 - `precedent_params.json`: tunable parameters, one section per user; the `gdelt` section holds the GDELT filter, severity and latency values, all proposed (decision B4).
 - Citation terms, from the GDELT Project's terms page (`gdeltproject.org/about.html`, read 2026-11-07): the data may be used without fee for academic, commercial or governmental use, and may be redistributed, rehosted or mirrored in any form, but any use or redistribution "must include a citation to the GDELT Project" and a link to `https://www.gdeltproject.org/`.
 - Citation wording used here, for any surface that shows GDELT-derived events or code descriptions: `Source: the GDELT Project, https://www.gdeltproject.org/`. No GDELT export row or article text is committed.
+
+## Dream files
+
+- `dream/claim_vocabulary.json`: the claim attribute, period and value lists, the conflicting value pairs and the proposed 8-K item map (all proposed until the owner approves).
+- `dream/detector_params.json`: detector windows and thresholds, review sample size and the precision a detector must keep, all proposed.
+- `dream/claim_schema_v1.json`: the JSON Schema of a stored claim, generated from `claim_json_schema()`; a test keeps the two equal.
