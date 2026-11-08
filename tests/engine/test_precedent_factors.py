@@ -18,6 +18,9 @@ SPACING = 12
 N_EVENTS = 12
 HORIZON = 5
 CUT_SESSIONS = [SESSIONS[100], SESSIONS[130], SESSIONS[170]]
+DENSE_SPACING = 4  # below HORIZON + 1: responses complete between later events' query and session
+DENSE_N_EVENTS = 24
+DENSE_CUT_SESSIONS = [SESSIONS[55], SESSIONS[70], SESSIONS[85], SESSIONS[110]]
 
 
 def event_record(event_id, key, position, *, story=None, is_first=True):
@@ -65,6 +68,18 @@ def rows_of(records):
     return validate_library_rows(pd.DataFrame(records))
 
 
+def placebo_of(records):
+    """Placebo rows: (outcome_key, horizon, value, complete_position) tuples."""
+    return pd.DataFrame(
+        {
+            "outcome_key": [r[0] for r in records],
+            "horizon": [r[1] for r in records],
+            "value": [float(r[2]) for r in records],
+            "response_complete_session": [SESSIONS[r[3]] for r in records],
+        }
+    )
+
+
 @pytest.fixture
 def panel_inputs():
     rng = np.random.default_rng(11)
@@ -86,13 +101,46 @@ def panel_inputs():
 
 def truncate_inputs(inputs, cut):
     effective = pd.to_datetime(inputs["events"]["effective_session"])
-    return {
+    cut_inputs = {
         **inputs,
         "events": inputs["events"].loc[effective <= cut].reset_index(drop=True),
         "rows": inputs["rows"]
         .loc[inputs["rows"]["response_complete_session"] <= cut]
         .reset_index(drop=True),
     }
+    placebo = inputs.get("placebo_asset")
+    if placebo is not None:
+        done = placebo["response_complete_session"] <= cut
+        cut_inputs["placebo_asset"] = placebo.loc[done].reset_index(drop=True)
+    return cut_inputs
+
+
+def dense_inputs(spacing=DENSE_SPACING, n_events=DENSE_N_EVENTS, with_placebo=True):
+    """Events closer together than `HORIZON + 1` sessions: precedent responses complete between
+    a later event's query time and its session, so a bypassed time guard changes the panel."""
+    rng = np.random.default_rng(23)
+    events, rows = [], []
+    for number in range(n_events):
+        position = FIRST_POSITION + spacing * number
+        event_id = f"d{number:02d}"
+        events.append(event_record(event_id, KEY, position))
+        rows += asset_rows(
+            event_id, position, {name: rng.normal(0.0, 0.02) for name in INSTRUMENTS}
+        )
+    inputs = {
+        "events": events_of(events),
+        "rows": rows_of(rows),
+        "session_cutoffs_utc": CUTOFFS,
+        "sessions": SESSIONS,
+    }
+    if with_placebo:
+        records = [
+            (name, HORIZON, rng.normal(0.0, 0.01), 20 + 3 * k)
+            for k in range(60)
+            for name in INSTRUMENTS
+        ]
+        inputs["placebo_asset"] = placebo_of(records)
+    return inputs
 
 
 def test_precedent_panel_passes_truncation_invariance(panel_inputs):
@@ -101,6 +149,25 @@ def test_precedent_panel_passes_truncation_invariance(panel_inputs):
         truncated = build_precedent_factor_panel(**truncate_inputs(panel_inputs, cut)).loc[:cut]
         assert not full.empty
         pd.testing.assert_frame_equal(full, truncated)
+
+
+def test_truncation_invariance_with_responses_completing_inside_the_event_gap():
+    """Spacing 4 < horizon + 1: a bypassed `response_complete_session` guard changes the panel."""
+    inputs = dense_inputs(with_placebo=False)
+    for cut in DENSE_CUT_SESSIONS:
+        full = build_precedent_factor_panel(**inputs).loc[:cut]
+        truncated = build_precedent_factor_panel(**truncate_inputs(inputs, cut)).loc[:cut]
+        assert not full.empty
+        pd.testing.assert_frame_equal(full, truncated)
+
+
+def test_truncation_invariance_with_the_placebo_input_included():
+    inputs = dense_inputs()
+    for cut in DENSE_CUT_SESSIONS:
+        full = build_precedent_factor_panel(**inputs).loc[:cut]
+        truncated = build_precedent_factor_panel(**truncate_inputs(inputs, cut)).loc[:cut]
+        pd.testing.assert_frame_equal(full, truncated)
+    assert (full["prec_placebo_z"] != 0.0).any()  # the last cut has summarised cells with placebo
 
 
 def test_every_column_carries_the_prefix(panel_inputs):
@@ -135,6 +202,89 @@ def test_the_panel_has_the_declared_index_and_float_columns(panel_inputs):
     assert (panel.dtypes == "float64").all()
     assert panel.index.is_monotonic_increasing
     assert (panel["prec_placebo_z"] == 0.0).all()
+
+
+def _last_cell(panel):
+    position = FIRST_POSITION + (N_EVENTS - 1) * SPACING
+    return panel.loc[(SESSIONS[position], "SPY")]
+
+
+def test_placebo_z_is_the_median_less_the_placebo_mean_over_the_placebo_sd(panel_inputs):
+    placebo = placebo_of(
+        [("SPY", HORIZON, value, 100) for value in (0.00, 0.02, 0.04, 0.06)]
+        # other horizon, other instrument: ignored for (SPY, 5)
+        + [("SPY", 20, 9.0, 100), ("QQQ", HORIZON, 7.0, 100), ("QQQ", HORIZON, 8.0, 101)]
+    )
+    plain = build_precedent_factor_panel(**panel_inputs)
+    panel = build_precedent_factor_panel(**panel_inputs, placebo_asset=placebo)
+    mean, sd = 0.03, np.sqrt((2 * 0.03**2 + 2 * 0.01**2) / 3)  # sample sd, ddof=1
+    cell, plain_cell = _last_cell(panel), _last_cell(plain)
+    assert plain_cell["prec_placebo_z"] == 0.0
+    assert cell["prec_placebo_z"] == pytest.approx((cell["prec_car5_med"] - mean) / sd)
+    assert cell["prec_placebo_z"] != 0.0
+    qqq = panel.loc[(SESSIONS[FIRST_POSITION + (N_EVENTS - 1) * SPACING], "QQQ")]
+    q_mean, q_sd = 7.5, np.sqrt(0.5)
+    assert qqq["prec_placebo_z"] == pytest.approx((qqq["prec_car5_med"] - q_mean) / q_sd)
+    # nothing else moves
+    others = [name for name in PANEL_COLUMNS if name != "prec_placebo_z"]
+    pd.testing.assert_frame_equal(panel[others], plain[others])
+
+
+def test_a_refused_cell_keeps_a_zero_placebo_z_even_with_placebo(panel_inputs):
+    placebo = placebo_of([("SPY", HORIZON, v, 100) for v in (0.0, 0.02, 0.04)])
+    panel = build_precedent_factor_panel(**panel_inputs, placebo_asset=placebo)
+    assert panel.loc[(SESSIONS[FIRST_POSITION + 2 * SPACING], "SPY")]["prec_placebo_z"] == 0.0
+
+
+@pytest.mark.parametrize(
+    "records",
+    [
+        [],
+        [("SPY", HORIZON, 0.01, 100)],  # fewer than 2 values
+        [("SPY", HORIZON, 0.02, 100), ("SPY", HORIZON, 0.02, 101)],  # sd 0
+        [("SPY", 20, 0.01, 100), ("SPY", 20, 0.03, 100)],  # wrong horizon only
+    ],
+)
+def test_placebo_z_is_zero_without_a_usable_placebo(panel_inputs, records):
+    panel = build_precedent_factor_panel(**panel_inputs, placebo_asset=placebo_of(records))
+    assert (panel["prec_placebo_z"] == 0.0).all()
+
+
+def test_a_placebo_row_completing_after_the_event_is_ignored(panel_inputs):
+    """Rows completing after an event's query time must not move that event's cell."""
+    last = FIRST_POSITION + (N_EVENTS - 1) * SPACING
+    visible = [("SPY", HORIZON, v, 100) for v in (0.00, 0.02, 0.04, 0.06)]
+    late = [("SPY", HORIZON, v, last) for v in (5.0, -5.0)]  # cutoff of `last` is after the query
+    just_after = [("SPY", HORIZON, 9.0, last + 3)]
+    base = build_precedent_factor_panel(**panel_inputs, placebo_asset=placebo_of(visible))
+    guarded = build_precedent_factor_panel(
+        **panel_inputs, placebo_asset=placebo_of(visible + late + just_after)
+    )
+    pd.testing.assert_frame_equal(base, guarded)
+    assert (base["prec_placebo_z"] != 0.0).any()
+
+
+def test_a_placebo_row_completing_before_the_event_counts(panel_inputs):
+    last = FIRST_POSITION + (N_EVENTS - 1) * SPACING
+    base = placebo_of([("SPY", HORIZON, v, 100) for v in (0.00, 0.02, 0.04, 0.06)])
+    more = pd.concat([base, placebo_of([("SPY", HORIZON, 0.5, last - 1)])], ignore_index=True)
+    a = build_precedent_factor_panel(**panel_inputs, placebo_asset=base)
+    b = build_precedent_factor_panel(**panel_inputs, placebo_asset=more)
+    cell = (SESSIONS[last], "SPY")
+    assert a.loc[cell, "prec_placebo_z"] != b.loc[cell, "prec_placebo_z"]
+
+
+def test_a_malformed_placebo_is_rejected(panel_inputs):
+    with pytest.raises(ValueError, match="placebo_asset"):
+        build_precedent_factor_panel(
+            **panel_inputs,
+            placebo_asset=placebo_of([("SPY", HORIZON, 0.1, 100)]).drop(columns=["value"]),
+        )
+    with pytest.raises(ValueError, match="placebo_asset"):
+        build_precedent_factor_panel(
+            **panel_inputs,
+            placebo_asset=placebo_of([("SPY", HORIZON, float("nan"), 100)]),
+        )
 
 
 def test_empty_inputs_give_an_empty_panel_with_the_same_shape(panel_inputs):
@@ -299,6 +449,27 @@ def test_an_event_position_outside_the_calendar_is_rejected(panel_inputs):
     events.loc[0, "effective_position"] = len(SESSIONS)
     with pytest.raises(ValueError, match="effective_position"):
         build_precedent_factor_panel(**{**panel_inputs, "events": events})
+
+
+def test_empty_inputs_still_check_the_columns(panel_inputs):
+    with pytest.raises(ValueError, match="missing columns"):
+        build_precedent_factor_panel(
+            panel_inputs["events"].iloc[0:0].drop(columns=["key"]),
+            panel_inputs["rows"],
+            CUTOFFS,
+            SESSIONS,
+        )
+    with pytest.raises(ValueError, match="columns"):
+        build_precedent_factor_panel(
+            panel_inputs["events"],
+            panel_inputs["rows"].iloc[0:0].drop(columns=["value"]),
+            CUTOFFS,
+            SESSIONS,
+        )
+    nulls = panel_inputs["events"].copy().astype({"is_first_report": "object"})
+    nulls.loc[0, "is_first_report"] = None
+    with pytest.raises(ValueError, match="is_first_report"):
+        build_precedent_factor_panel(nulls, panel_inputs["rows"].iloc[0:0], CUTOFFS, SESSIONS)
 
 
 def test_bad_arguments_are_rejected(panel_inputs):
