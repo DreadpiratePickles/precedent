@@ -222,7 +222,12 @@ def _link_rows(
     """The links whose source is `instrument`, grouped by channel and sorted for display."""
     grouped: dict[str, list[LinkRow]] = {}
     for row_id, row in graph[graph["source_node"] == instrument].iterrows():
-        channel = CHANNEL_OF_RELATION.get(row["relation"], COUNTRY_CHANNEL)
+        if row["relation"] == COUNTRY_CHANNEL:
+            channel = COUNTRY_CHANNEL
+        elif row["relation"] in CHANNEL_OF_RELATION:
+            channel = CHANNEL_OF_RELATION[row["relation"]]
+        else:
+            raise DataError(f"unknown link relation {row['relation']!r}")
         move = moves.get(row["receiver_node"])
         grouped.setdefault(channel, []).append(
             LinkRow(
@@ -305,25 +310,31 @@ def _build_map(session: date, top: int, cutoff_utc: pd.Timestamp) -> str:
     if not manifest_path.exists():
         return "\n".join(
             [
-                f"NO LIVE RUN — no Ripple data has been built under {ripple_dir}.",
+                "NO LIVE RUN — no Ripple data has been built under the configured data directory.",
                 "",
                 f"# Ripple map for {session.isoformat()}",
                 "",
-                "No Ripple data has been built, so there is nothing to map.",
+                f"No Ripple data has been built under {ripple_dir}, so there is nothing to map.",
                 "",
             ]
         )
     manifest = _read_manifest(manifest_path)
     banner = _banner_for(manifest)
+    links_path = LinkStore(ripple_dir / _LINKS_DIR).path
+    if not links_path.is_file():  # an absent store would read as "no links"
+        raise DataError(f"the link store {links_path} is missing")
     stamp = pd.Timestamp(session)
     shocks = _session_shocks(_read_checked_parquet(ripple_dir, _SHOCK_FILE, manifest), stamp)
     moves = _session_moves(_read_checked_parquet(ripple_dir, _ABNORMAL_FILE, manifest), stamp)
     try:
         graph = graph_asof(LinkStore(ripple_dir / _LINKS_DIR), cutoff_utc)
-        alpha = float(load_ripple_params()["alpha"])
-        return render_map(banner, session, cutoff_utc, shocks, top, graph, moves, alpha)
     except (OSError, ValueError) as error:
-        raise DataError(f"cannot read the link store or parameters: {error}") from error
+        raise DataError(f"cannot read the link store {links_path}: {error}") from error
+    try:
+        alpha = float(load_ripple_params()["alpha"])
+    except (OSError, ValueError, KeyError) as error:
+        raise DataError(f"cannot read the Ripple parameters: {error}") from error
+    return render_map(banner, session, cutoff_utc, shocks, top, graph, moves, alpha)
 
 
 def run(argv: list[str]) -> int:
@@ -350,6 +361,10 @@ def run(argv: list[str]) -> int:
     if args.out is None:
         sys.stdout.write(text)
     else:
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        write_text_atomically(args.out, text)
+        try:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            write_text_atomically(args.out, text)
+        except OSError as error:
+            print(f"data error: cannot write {args.out}: {error}", file=sys.stderr)
+            return DATA_ERROR
     return OK

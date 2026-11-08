@@ -15,7 +15,7 @@ from precedent import cli  # noqa: E402
 from precedent.config import data_dir  # noqa: E402
 from precedent.ripple.graph_builders import write_ripple_ledger  # noqa: E402
 from precedent.ripple.link_store import Link, LinkStore, Relation  # noqa: E402
-from precedent.ripple.report import run  # noqa: E402
+from precedent.ripple.report import DataError, _link_rows, run  # noqa: E402
 
 MAP_DATE = "2024-06-03"
 QUIET_DATE = "2024-06-04"
@@ -57,6 +57,12 @@ def populated_ripple_stores(tmp_path, monkeypatch):
                   "DDD supplies AAA", "llm-v1"),
             _link("AAA", "EEE", Relation.PEER_OF, 0.4, "sector-map-1", None, "rules-sector-v1"),
             _link("BBB", "EEE", Relation.PEER_OF, 0.4, "sector-map-1", None, "rules-sector-v1"),
+            _link("AAA", "III", Relation.INPUT_COMMODITY, 0.3, "sec-10k-0021",
+                  "III burns the metal AAA mines", "llm-v1"),
+            _link("AAA", "III", Relation.OUTPUT_COMMODITY, 0.1, "sec-10k-0022",
+                  "III sells the grade AAA mines", "llm-v1"),
+            _link("BBB", "III", Relation.INPUT_COMMODITY, 0.2, "sec-10k-0023",
+                  "III also burns BBB's output", "llm-v1"),
             _link("AAA", "FFF", Relation.COUNTRY_EXPOSURE, 0.3, "sec-10k-0009",
                   "FFF earns most revenue where AAA operates", "llm-v1"),
             # known only after the 2024-06-03 cutoff (20:00 UTC): must not appear
@@ -139,6 +145,17 @@ def test_link_rows_carry_size_move_and_evidence(tmp_path, populated_ripple_store
     assert "HHH" not in text  # HHH is not shocked, so its links are not on the map
 
 
+def test_two_relations_of_one_channel_split_the_pair_term_by_weight(
+    tmp_path, populated_ripple_stores
+):
+    text = _render(tmp_path)
+    # commodity channel: A[III, AAA] = (0.3 + 0.1) / (0.3 + 0.1 + 0.2) = 2/3, pair term
+    # 0.5 * 2/3 * 0.08 = 0.026667, split 0.3 : 0.1 -> 0.02 and 0.006667; BBB: 0.5 * 1/3 * -0.05
+    assert "| -> III | input_commodity | +0.0200 | n/a | doc: sec-10k-0021 |" in text
+    assert "| -> III | output_commodity | +0.0067 | n/a | doc: sec-10k-0022 |" in text
+    assert "| -> III | input_commodity | -0.0083 | n/a | doc: sec-10k-0023 |" in text
+
+
 def test_channels_are_ordered_and_country_exposure_has_no_size(tmp_path, populated_ripple_stores):
     text = _render(tmp_path)
     aaa = text.split("## AAA shock")[1].split("## BBB shock")[0]
@@ -146,6 +163,7 @@ def test_channels_are_ordered_and_country_exposure_has_no_size(tmp_path, populat
         aaa.index("customer"),
         aaa.index("supplier"),
         aaa.index("peer"),
+        aaa.index("ripple_commodity"),
         aaa.index("country_exposure"),
     ]
     assert order == sorted(order)
@@ -199,9 +217,41 @@ def test_an_unknown_label_stops_with_exit_1(tmp_path, populated_ripple_stores, c
 def test_without_a_manifest_the_map_says_no_live_run(tmp_path, populated_ripple_stores):
     (populated_ripple_stores / "MANIFEST.json").unlink()
     text = _render(tmp_path)
-    assert text.splitlines()[0].startswith("NO LIVE RUN —")
-    assert "No Ripple data has been built" in text
+    first_line = text.splitlines()[0]
+    assert first_line.startswith("NO LIVE RUN —") and "/" not in first_line  # no absolute path
+    assert "No Ripple data has been built" in text and str(populated_ripple_stores) in text
     assert "| ->" not in text
+
+
+def test_a_missing_link_store_is_a_data_error_not_an_empty_graph(
+    tmp_path, populated_ripple_stores, capsys
+):
+    (populated_ripple_stores / "links" / "links.jsonl").unlink()
+    out = tmp_path / "map.md"
+    assert run(["--date", MAP_DATE, "--out", str(out)]) == 1
+    assert "links.jsonl" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_an_unknown_relation_is_a_data_error():
+    graph = pd.DataFrame(
+        [
+            {
+                "source_node": "AAA", "receiver_node": "CCC", "relation": "mystery_of",
+                "weight": 0.5, "source_doc_id": "d", "evidence_span": "x",
+                "extractor_version": "llm-v1",
+            }
+        ]
+    )
+    with pytest.raises(DataError, match="mystery_of"):
+        _link_rows(graph, "AAA", {}, pd.Series(dtype="float64"))
+
+
+def test_an_unwritable_out_path_exits_1(tmp_path, populated_ripple_stores, capsys):
+    blocker = tmp_path / "file"
+    blocker.write_text("not a directory", encoding="utf-8")
+    assert run(["--date", MAP_DATE, "--out", str(blocker / "map.md")]) == 1
+    assert "cannot write" in capsys.readouterr().err
 
 
 def test_a_tampered_parquet_file_is_a_data_error(tmp_path, populated_ripple_stores, capsys):
