@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 from fakes import make_event_record
 
+from precedent.dream import detectors as detectors_module
 from precedent.dream.claim_schema import Claim, claim_id_for, link_id_for
 from precedent.dream.claim_store import (
     ClaimStore,
@@ -199,8 +200,12 @@ def test_started_ended_and_positive_negative_also_conflict():
 
 
 def test_tension_id_is_stable_across_sessions():
-    a = detect_value_conflicts(CONFLICT_FRAME, SESSIONS[10].date())
-    b = detect_value_conflicts(CONFLICT_FRAME, SESSIONS[11].date())
+    a = detect_value_conflicts(
+        CONFLICT_FRAME, SESSIONS[10].date(), recorded_utc=CUTOFFS.iloc[10].to_pydatetime()
+    )
+    b = detect_value_conflicts(
+        CONFLICT_FRAME, SESSIONS[11].date(), recorded_utc=CUTOFFS.iloc[11].to_pydatetime()
+    )
     assert a[0].tension_id == b[0].tension_id and a[0].opened_session == SESSIONS[10].date()
 
 
@@ -283,7 +288,8 @@ def test_text_vs_price_is_quiet_on_stationary_data():
                 "source_doc_id": [f"doc-{session:%Y%m%d}-{n}" for n in names],
             }
         )
-        fired += len(detect_text_vs_price(claims, panel, session.date()))
+        recorded = CUTOFFS[session].to_pydatetime()  # the synthetic axis keeps market holidays
+        fired += len(detect_text_vs_price(claims, panel, session.date(), recorded_utc=recorded))
     elapsed = wall_clock.perf_counter() - started
     rate = fired / (200 * 50)
     print(f"quiet-case rate {rate:.4f} ({fired}/10000) in {elapsed:.1f}s")
@@ -667,3 +673,98 @@ def test_run_detectors_reads_links_through_the_link_store(tmp_path):
     assert [t.kind.value for t in tensions] == ["asymmetric_link"]
     assert report.by_kind["asymmetric_link"] == 1 and report.skipped_without_claim == 1
     assert claims_asof(stores.claim_store, cutoff).shape[0] == 1
+
+
+# --- carried from the Task 3 review (rulings D43 and D44) -----------------------------------
+
+
+def test_run_detectors_uses_a_supplied_panel_and_never_rebuilds_one(tmp_path, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise AssertionError("the panel must not be rebuilt when one is supplied")
+
+    monkeypatch.setattr(detectors_module, "abnormal_returns_panel", refuse)
+    planted = claim_valid_before(
+        SESSION,
+        subject="ACME",
+        attribute="event_direction",
+        value="positive",
+        period="unspecified",
+        doc="g:9",
+    )
+    stores = make_stores(tmp_path, records=[record_on(SESSION)], claims=[planted])
+    panel = abnormal_frame({(SESSION, "ACME"): (-0.04, 0.01)})
+    tensions, report = run_detectors(stores, SESSION, CUTOFFS, PARAMS, abnormal_returns=panel)
+    assert [t.kind.value for t in tensions] == ["text_vs_price"]
+    assert report.skipped_no_prices == 0  # stores.returns is None, the supplied panel is enough
+
+
+def test_panel_raises_when_the_returns_share_no_session_with_the_axis():
+    elsewhere = returns_frame()
+    elsewhere.index = pd.bdate_range("2030-01-01", periods=len(elsewhere))
+    with pytest.raises(ValueError, match="no session in common"):
+        abnormal_returns_panel(elsewhere, "MKT", SESSIONS, EST_WINDOW, MIN_OBS)
+
+
+def test_a_claim_on_a_conflicting_side_joins_the_tension_even_if_its_document_also_agrees():
+    claims = frame(
+        [claim(value="up", doc="A"), claim(value="down", doc="A"), claim(value="down", doc="B")]
+    )
+    [tension] = detect_value_conflicts(claims, SESSION)
+    assert set(tension.claim_ids) == set(claims.claim_id)  # down(A) is on the conflicting side
+
+
+def test_a_claim_outside_every_conflicting_pair_stays_out_of_the_tension():
+    claims = frame(
+        [
+            claim(value="up", doc="A"),
+            claim(value="down", doc="B"),
+            claim(value="flat", doc="C"),
+        ]
+    )
+    [tension] = detect_value_conflicts(claims, SESSION)
+    assert len(tension.claim_ids) == 2 and set(tension.claim_ids) < set(claims.claim_id)
+
+
+def test_a_pair_present_in_one_document_only_is_not_a_conflict_even_with_a_third_value():
+    claims = frame(
+        [claim(value="up", doc="A"), claim(value="down", doc="A"), claim(value="flat", doc="B")]
+    )
+    assert detect_value_conflicts(claims, SESSION) == []
+
+
+def test_standalone_recorded_utc_is_the_sessions_cutoff_from_the_calendar():
+    [tension] = detect_value_conflicts(CONFLICT_FRAME, SESSION)
+    assert tension.recorded_utc == CUTOFFS[pd.Timestamp(SESSION)].to_pydatetime()
+    assert tension.recorded_utc == utc("2023-12-18T21:00:00Z")  # 16:00 New York in winter
+    given = utc("2023-12-18T22:00:00Z")
+    [stamped] = detect_value_conflicts(CONFLICT_FRAME, SESSION, recorded_utc=given)
+    assert stamped.recorded_utc == given
+
+
+@pytest.mark.parametrize(
+    "not_a_session", [date(2023, 12, 24), date(2023, 12, 25), date(2031, 1, 6)]
+)
+def test_standalone_default_refuses_a_date_that_is_not_a_calendar_session(not_a_session):
+    with pytest.raises(ValueError, match=f"{not_a_session}.*recorded_utc"):
+        detect_value_conflicts(CONFLICT_FRAME, not_a_session)
+
+
+def test_run_detectors_stamps_the_cutoff_even_on_a_date_the_calendar_does_not_know(tmp_path):
+    holiday = SESSIONS[10].date()  # 2023-01-16, a market holiday that this synthetic axis keeps
+    stores = make_stores(
+        tmp_path,
+        records=[record_on(holiday)],
+        claims=[
+            claim_valid_before(holiday, value="up", doc="A"),
+            claim_valid_before(holiday, doc="B", value="down"),
+        ],
+        with_link_store=False,
+    )
+    [tension], _ = run_detectors(stores, holiday, CUTOFFS, PARAMS)
+    assert tension.recorded_utc == CUTOFFS[pd.Timestamp(holiday)].to_pydatetime()
+
+
+def test_run_detectors_refuses_cutoffs_that_do_not_match_the_sessions_axis(tmp_path):
+    stores = make_stores(tmp_path, records=[record_on(SESSION)], with_link_store=False)
+    with pytest.raises(ValueError, match="cutoffs"):
+        run_detectors(stores, SESSION, CUTOFFS.iloc[:-1], PARAMS)

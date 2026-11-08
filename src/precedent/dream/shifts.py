@@ -27,7 +27,13 @@ _DIRECTION_STEP = {"positive": 1.0, "neutral": 0.0, "negative": -1.0}
 SKIP_NO_LINK_STORE = "no_link_store"
 SKIP_SHORT_HISTORY = "short_history"
 SKIP_NO_BASELINE_EVENTS = "no_baseline_events"
-SKIP_REASONS = (SKIP_NO_LINK_STORE, SKIP_SHORT_HISTORY, SKIP_NO_BASELINE_EVENTS)
+SKIP_NO_LIVE_SESSIONS = "no_live_sessions"
+SKIP_REASONS = (
+    SKIP_NO_LINK_STORE,
+    SKIP_SHORT_HISTORY,
+    SKIP_NO_BASELINE_EVENTS,
+    SKIP_NO_LIVE_SESSIONS,
+)
 
 
 def _position_of(session: date, sessions: pd.DatetimeIndex) -> int:
@@ -87,8 +93,8 @@ def _rate_z(
     """The Poisson z of the window against the baseline, or None and the reason it is undefined.
 
     Reasons are `short_history` (fewer than `window` positions end at `here`, or none precede
-    the window) and `no_baseline_events`; a window or baseline made only of feed gaps has no
-    reason to report and gives (None, None).
+    the window), `no_live_sessions` (the window or the baseline is made only of feed gaps) and
+    `no_baseline_events`.
     """
     if here < window:
         return None, SKIP_SHORT_HISTORY
@@ -96,7 +102,7 @@ def _rate_z(
     window_live = [p for p in window_range if not gap[p]]
     baseline_live = [p for p in baseline_range if not gap[p]]
     if not window_live or not baseline_live:
-        return None, None
+        return None, SKIP_NO_LIVE_SESSIONS
     baseline_events = int(per_position[baseline_live].sum())
     if baseline_events == 0:
         return None, SKIP_NO_BASELINE_EVENTS
@@ -227,9 +233,11 @@ def link_churn(
 class ShiftReport:
     """What one shift run saw and set aside, so no silence is mistaken for a clean session.
 
-    `skipped` maps each reason in `SKIP_REASONS` to a count: `no_link_store` and `short_history`
-    count detectors not run (one each; the rate test and link churn can each lack history), and
-    `no_baseline_events` counts subjects whose baseline held no event, so no rate was tested.
+    `skipped` maps each reason in `SKIP_REASONS` to a count (zero included): `no_link_store` and
+    `short_history` count detectors not run (one each; the rate test and link churn can each lack
+    history), `no_baseline_events` counts subjects whose baseline held no event, and
+    `no_live_sessions` counts subjects whose window or baseline was made only of feed gaps, so no
+    rate was tested.
     """
 
     by_kind: dict[str, int]
@@ -272,12 +280,15 @@ def run_shift_detectors(
     instruments with an event in the baseline and window, the instruments with an
     `event_direction` claim, and every node of the link graph now or `baseline` sessions ago;
     churn is skipped without a link store or when fewer than `baseline` sessions precede, and the
-    rate test when fewer than `window` sessions precede; `ShiftReport.skipped` counts each. A shift
+    rate test when fewer than `window` sessions precede; `ShiftReport.skipped` counts each.
+    `cutoffs` must be indexed by `stores.sessions` (ValueError otherwise). A shift
     whose id already has a stored record, recorded by this cutoff, is returned only when its
     statistic grew by more than `shift_rereport_growth` of the stored one; the caller then uses
     `ShiftStore.refire`.
     """
     sessions = stores.sessions
+    if not cutoffs.index.equals(sessions):
+        raise ValueError("cutoffs must be indexed by the same sessions as stores.sessions")
     here = _position_of(session, sessions)
     cutoff = cutoffs[pd.Timestamp(session)]
     recorded = cutoff.to_pydatetime()

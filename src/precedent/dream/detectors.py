@@ -12,7 +12,7 @@ from __future__ import annotations
 import itertools
 import json
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime
 from functools import lru_cache
 from typing import Any
 
@@ -24,6 +24,11 @@ from precedent.dream.claim_schema import Tension, TensionKind, claim_id_for, lin
 from precedent.dream.claim_store import claims_asof
 from precedent.dream.inputs import DreamStores, documents_per_session
 from precedent.ripple.link_store import GRAPH_COLUMNS, graph_asof
+from precedent.spine.session_calendar import (
+    NyseCalendar,
+    default_cutoffs_for,
+    load_nyse_calendar,
+)
 
 DETECTOR_VERSION = "dream-detect-v1"
 ASYMMETRIC_LINK_NOTE = (
@@ -49,9 +54,27 @@ def _conflicting_pairs() -> frozenset[tuple[str, str]]:
     return frozenset(pairs | {(b, a) for a, b in pairs})
 
 
+@lru_cache(maxsize=1)
+def _calendar() -> NyseCalendar:
+    return load_nyse_calendar()
+
+
 def _standalone_recorded_utc(session: date) -> datetime:
-    """Stand-in `recorded_utc` for a detector called outside `run_detectors` (midnight UTC)."""
-    return datetime.combine(session, time.min, tzinfo=UTC)
+    """Stand-in `recorded_utc` for a detector called outside `run_detectors`: the session's
+    cutoff on the committed NYSE calendar, so a tension is never recorded before its evidence.
+
+    A date that is not a calendar session (a weekend, a holiday, a year the calendar does not
+    cover) raises ValueError; the caller passes `recorded_utc=` for such a date.
+    """
+    day = pd.Timestamp(session).date()
+    try:
+        cutoffs = default_cutoffs_for([day], _calendar(), 0)
+        return cutoffs.loc[pd.Timestamp(day)].to_pydatetime()
+    except (KeyError, ValueError) as error:
+        raise ValueError(
+            f"{day} is not a session on the committed NYSE calendar; pass recorded_utc= "
+            "for a date the calendar does not know"
+        ) from error
 
 
 def _tension(
@@ -87,11 +110,17 @@ def detect_value_conflicts(
         ["subject", "attribute", "period"], sort=True
     ):
         members = list(zip(group["claim_id"], group["value"], group["source_doc_id"], strict=True))
+        present = sorted({value for _, value, _ in members})
         involved: set[str] = set()
         values: set[str] = set()
-        for (id_a, value_a, doc_a), (id_b, value_b, doc_b) in itertools.combinations(members, 2):
-            if doc_a != doc_b and (value_a, value_b) in pairs:
-                involved.update((id_a, id_b))
+        for value_a, value_b in itertools.combinations(present, 2):
+            if (value_a, value_b) not in pairs:
+                continue
+            # Both values stand in the group; the pair conflicts when the claims that hold either
+            # one come from at least two documents. Every such claim is on a conflicting side.
+            sides = [(i, d) for i, value, d in members if value in (value_a, value_b)]
+            if len({doc for _, doc in sides}) >= 2:
+                involved.update(claim_id for claim_id, _ in sides)
                 values.update((value_a, value_b))
         if involved:
             details: dict[str, float | str] = {
@@ -192,6 +221,8 @@ def abnormal_returns_panel(
         raise ValueError(f"min_obs must be at least 2, got {min_obs}")
     if market not in returns.columns:
         raise ValueError(f"market column {market!r} is not in returns")
+    if returns.index.intersection(sessions).empty:
+        raise ValueError("returns and sessions have no session in common; the panel would be empty")
     aligned = returns.reindex(sessions).astype(float)
     x_all = aligned[market].to_numpy()
     assets = aligned.drop(columns=[market])
@@ -333,13 +364,23 @@ class DetectReport:
 
 
 def run_detectors(
-    stores: DreamStores, session: date, cutoffs: pd.Series, params: dict[str, Any]
+    stores: DreamStores,
+    session: date,
+    cutoffs: pd.Series,
+    params: dict[str, Any],
+    *,
+    abnormal_returns: pd.DataFrame | None = None,
 ) -> tuple[list[Tension], DetectReport]:
     """All four detectors for `session`, read as of its cutoff; nothing is appended to a store.
 
     A session with no documents is a feed gap and skips text-vs-price (a missing feed is not
     evidence of a quiet market). Without returns the detector is skipped and counted instead.
+    `abnormal_returns`, a panel from `abnormal_returns_panel`, is used as it is when given, so a
+    caller that runs many sessions builds it once; otherwise it is built from `stores.returns`.
+    `cutoffs` must be indexed by `stores.sessions` (ValueError otherwise).
     """
+    if not cutoffs.index.equals(stores.sessions):
+        raise ValueError("cutoffs must be indexed by the same sessions as stores.sessions")
     cutoff = cutoffs[pd.Timestamp(session)]
     recorded = cutoff.to_pydatetime()
     claims = claims_asof(stores.claim_store, recorded)
@@ -353,9 +394,8 @@ def run_detectors(
     tensions = detect_value_conflicts(claims, session, recorded_utc=recorded)
     skipped_no_prices = 0
     if not feed_gap:
-        if stores.returns is None or stores.market is None:
-            skipped_no_prices = 1
-        else:
+        panel = abnormal_returns
+        if panel is None and stores.returns is not None and stores.market is not None:
             window = params["abnormal_returns"]
             panel = abnormal_returns_panel(
                 stores.returns,
@@ -364,6 +404,9 @@ def run_detectors(
                 tuple(window["est_window"]),
                 window["min_obs"],
             )
+        if panel is None:
+            skipped_no_prices = 1
+        else:
             tensions += detect_text_vs_price(
                 claims,
                 panel,
