@@ -24,11 +24,16 @@ TEMPLATE_PATH = Path(__file__).with_name("cockpit_template.html")
 _LOW, _MEDIAN, _HIGH = "0.1", "0.5", "0.9"
 _NO_AGREEMENT = "n/a"
 _DISAGREE = "no (median outside the other's band)"
-_ASSET_WIDTH, _WINDOW_WIDTH, _MECHANISM_WIDTH, _PRECEDENT_WIDTH = 8, 9, 30, 27
+_ASSET_WIDTH, _WINDOW_WIDTH, _MECHANISM_WIDTH, _PRECEDENT_WIDTH = 8, 9, 30, 34
 
 
 class BandRow(BaseModel):
-    """Precedent's p10/median/p90 for one asset and window, with its sample sizes."""
+    """Precedent's p10/median/p90 for one asset and window, with its sample sizes.
+
+    `basis` is `abnormal_return` for every asset but the market: the library has no market
+    row, so the market's band is computed from its own cumulative return (raw), while all
+    other bands and every fitted equation are abnormal returns against the market model.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -40,6 +45,7 @@ class BandRow(BaseModel):
     n: int
     n_eff: float
     refused: bool
+    basis: Literal["abnormal_return", "raw_return"] = "abnormal_return"
 
 
 class InterventionRow(BaseModel):
@@ -53,7 +59,12 @@ class MechanismResult(BaseModel):
     """Everything one mechanism run reports; the three outputs are views of this value.
 
     `fitted` is `FittedSEM.to_json_dict()` and `rollout_fan` maps asset -> quantile (as the
-    string `fan()` columns print, e.g. "0.1") -> simulated value.
+    string `fan()` columns print, e.g. "0.1") -> simulated value. `no_data_assets` names the
+    graph's assets the library holds no rows for: they are simulated like every other node
+    (dropping them after the simulation keeps the counter-based PRNG draws identical) but
+    their fitted equation is all zeros, so they carry no band and no row in any output; the
+    JSON field is the one place they are listed. `precedent[].basis` marks the market row's
+    band as computed on raw market returns (see `BandRow`).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -64,6 +75,7 @@ class MechanismResult(BaseModel):
     interventions: list[InterventionRow]
     rollout_fan: dict[str, dict[str, float]]
     precedent: list[BandRow]
+    no_data_assets: list[str] = []
     seed: int
     n_paths: int
     asof_utc: AwareDatetime
@@ -89,14 +101,24 @@ def build_result(
     event_values: dict[str, float],
     interventions: tuple[Intervention, ...],
     precedent: list[BandRow],
+    no_data_assets: tuple[str, ...] = (),
     seed: int,
     n_paths: int,
     asof_utc: Any,
     code_commit: str | None,
 ) -> MechanismResult:
-    """Simulate the fitted graph and bundle the fan with its inputs."""
+    """Simulate the fitted graph and bundle the fan with its inputs.
+
+    The simulation always covers every graph asset — dropping `no_data_assets` only when
+    the fan is read out keeps the counter-based PRNG draws identical for the assets that
+    have data, in Python and in the page's JavaScript twin.
+    """
     rollout = simulate(fitted, graph, event_values, interventions, n_paths=n_paths, seed=seed)
     table = fan(rollout, DEFAULT_QUANTILES)
+    suppressed = set(no_data_assets)
+    unknown = suppressed - set(rollout.assets)
+    if unknown:
+        raise ValueError(f"no_data_assets are not asset nodes with a fan: {sorted(unknown)}")
     return MechanismResult(
         graph=graph,
         fitted=fitted.to_json_dict(),
@@ -105,8 +127,10 @@ def build_result(
         rollout_fan={
             asset: {str(q): float(table.loc[asset, q]) for q in DEFAULT_QUANTILES}
             for asset in rollout.assets
+            if asset not in suppressed
         },
         precedent=precedent,
+        no_data_assets=[asset for asset in rollout.assets if asset in suppressed],
         seed=seed,
         n_paths=n_paths,
         asof_utc=asof_utc,
@@ -145,7 +169,8 @@ def _precedent_cell(band: BandRow | None) -> str:
     if band.refused or None in (band.p10, band.median, band.p90):
         return f"refused: n_eff={band.n_eff:.1f}"
     assert band.p10 is not None and band.median is not None and band.p90 is not None
-    return _triple(band.p10, band.median, band.p90)
+    cell = _triple(band.p10, band.median, band.p90)
+    return cell + " (raw)" if band.basis == "raw_return" else cell
 
 
 def _row(asset: str, result: MechanismResult, band: BandRow | None) -> str:
@@ -171,7 +196,12 @@ def _disagreement_line(result: MechanismResult) -> str:
 
 
 def render_text(result: MechanismResult) -> str:
-    """The plain-text block: header, one row per asset, disagreeing edges, disclaimer last."""
+    """The plain-text block: header, one row per asset, disagreeing edges, disclaimer last.
+
+    Rows cover the assets that have data (`rollout_fan`); `no_data_assets` carry no row —
+    naming them is the JSON output's job — but the market row, whose band and fan are raw
+    cumulative returns, is labelled `(raw)` and explained once.
+    """
     fitted = result.fitted
     bands = {(b.asset, b.horizon): b for b in result.precedent}
     lines = [
@@ -185,8 +215,15 @@ def render_text(result: MechanismResult) -> str:
         f"{'precedent p10/median/p90':<{_PRECEDENT_WIDTH}}agree?",
     ]
     lines += [
-        _row(asset, result, bands.get((asset, fitted["horizon"]))) for asset in fitted["assets"]
+        _row(asset, result, bands.get((asset, fitted["horizon"])))
+        for asset in result.rollout_fan
     ]
+    raw = sorted(b.asset for b in result.precedent if b.basis == "raw_return")
+    if raw:
+        lines.append(
+            f"{', '.join(raw)}: the market's own cumulative return (raw), not an abnormal "
+            "return; every other row is abnormal against the market model."
+        )
     lines.append(_disagreement_line(result))
     lines += [
         f"intervention on {node} reaches no asset; the fan equals the no-intervention fan."

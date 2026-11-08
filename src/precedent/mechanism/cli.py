@@ -50,14 +50,39 @@ _PRECEDENT_PACKAGES = ("precedent.engine", "precedent.libraries")
 
 
 class MechanismRefused(Exception):
-    """The fit has too few effective precedents: below Precedent's `min_neff` nothing is shown."""
+    """Too few effective precedents to show anything: for the fit or the exact-key band.
 
-    def __init__(self, n_eff: float, min_neff: float) -> None:
+    With `band=False` the direction-free fit is below Precedent's `min_neff`; with
+    `band=True` Precedent's exact-key band for the query is refused (no exact-key precedent,
+    or a data-having asset's band below `min_neff`) — either way nothing is shown, because a
+    mechanism result without its Precedent band is not reported.
+    """
+
+    def __init__(self, n_eff: float, min_neff: float, *, band: bool = False) -> None:
         self.n_eff = n_eff
         self.min_neff = min_neff
+        self.band = band
+        subject = "Precedent's exact-key band has" if band else "the fit has"
         super().__init__(
-            f"refused: the fit has n_eff={n_eff:.1f} below min_neff={min_neff:.1f}; "
+            f"refused: {subject} n_eff={n_eff:.1f} below min_neff={min_neff:.1f}; "
             "no mechanism is shown"
+        )
+
+
+class NoDataAssets(Exception):
+    """Every asset of the graph lacks library rows at this horizon: there is nothing to show.
+
+    Distinct from `MechanismRefused`, which needs precedents but too few of them; here the
+    library may hold plenty of events and simply no rows for any of the graph's assets.
+    """
+
+    def __init__(self, assets: list[str], horizon: int) -> None:
+        self.assets = list(assets)
+        self.horizon = horizon
+        names = ", ".join(self.assets)
+        super().__init__(
+            f"no data: none of the graph's assets has a library row at horizon {horizon} "
+            f"({names}); no mechanism is shown"
         )
 
 
@@ -232,7 +257,11 @@ def _band_rows(
     horizon: int,
     params: EngineParams,
 ) -> list[BandRow]:
-    """Precedent's band per asset from one guarded panel: `summarize_responses` per column."""
+    """Precedent's band per asset from one guarded panel: `summarize_responses` per column.
+
+    Every band is abnormal returns against the market model except the market's own: the
+    library has no market row, so its band is the raw cumulative return (`basis` says so).
+    """
     from precedent.engine.aggregate import summarize_responses
 
     rows = []
@@ -259,17 +288,10 @@ def _band_rows(
                 n=summary.n,
                 n_eff=summary.n_eff,
                 refused=summary.refused,
+                basis="raw_return" if asset == params.market else "abnormal_return",
             )
         )
     return rows
-
-
-def _refused_rows(assets: list[str], horizon: int) -> list[BandRow]:
-    return [
-        BandRow(asset=a, horizon=horizon, p10=None, median=None, p90=None, n=0, n_eff=0.0,
-                refused=True)
-        for a in assets
-    ]  # fmt: skip
 
 
 def _fit_and_band(
@@ -279,14 +301,22 @@ def _fit_and_band(
     horizon: int,
     inputs: MechanismInputs,
     params: EngineParams,
-) -> tuple[FittedSEM, list[BandRow]]:
+) -> tuple[FittedSEM, list[BandRow], list[str]]:
     """Fit the graph on the guarded panel and read Precedent's band for the same key.
 
     Pure given its inputs. `asof_utc` is the query time: the fit and the band see only what was
     available at that instant. The fit's query leaves `direction_sign` free (`mechanism_query`,
     so the direction column varies); Precedent's band keeps the exact key. Below `min_neff` the
-    fit is refused (`MechanismRefused`); a band with no exact-key precedent is a refused band
-    row, not a refusal of the command.
+    fit is refused (`MechanismRefused`). The band gates the command too (ruling I-2, recorded
+    in `docs/verification/2026-11-08-owner-rulings.md`): no exact-key precedent, or any
+    data-having asset's band below `min_neff`, refuses the whole command — a mechanism result
+    without its Precedent band is not reported.
+
+    An asset the library holds no rows for (an all-NaN panel column) is not banded or
+    rendered; it is returned as `no_data_assets` and named in the JSON output. Its fitted
+    equation is all zeros, and the simulation still covers it — dropping it when the fan is
+    read out keeps the PRNG draws identical — but no band or row is shown for it. When no
+    asset survives, `NoDataAssets`.
     """
     from precedent.engine.aggregate import effective_sample_size
     from precedent.engine.retrieval import PrecedentQuery
@@ -319,11 +349,22 @@ def _fit_and_band(
     if n_eff < params.min_neff:
         raise MechanismRefused(n_eff, params.min_neff)
     fitted = fit_sem(graph, panel)
+    no_data_assets = [a for a in assets if panel.asset_returns[a].isna().all()]
+    surviving = [a for a in assets if a not in no_data_assets]
+    if not surviving:
+        raise NoDataAssets(list(no_data_assets), horizon)
+    band_shared = {**shared, "assets": surviving}
     try:
-        band_panel = build_guarded_panel(PrecedentQuery(key, available), **shared)
+        band_panel = build_guarded_panel(PrecedentQuery(key, available), **band_shared)
     except NoPrecedentError:
-        return fitted, _refused_rows(assets, horizon)
-    return fitted, _band_rows(band_panel.asset_returns, positions, assets, horizon, params)
+        raise MechanismRefused(0.0, params.min_neff, band=True) from None
+    bands = _band_rows(band_panel.asset_returns, positions, surviving, horizon, params)
+    refused = [b for b in bands if b.refused]
+    if refused:
+        raise MechanismRefused(
+            max(b.n_eff for b in refused), params.min_neff, band=True
+        )  # fmt: skip
+    return fitted, bands, no_data_assets
 
 
 def _code_commit() -> str | None:
@@ -373,18 +414,30 @@ def _result_for(args: argparse.Namespace, key: EventKey, graph: CausalGraph) -> 
     from precedent.engine.params import load_engine_params
 
     inputs = _load_inputs(args.data_dir or data_dir())
-    fitted, bands = _fit_and_band(key, graph, asof_utc, args.horizon, inputs, load_engine_params())
+    fitted, bands, no_data_assets = _fit_and_band(
+        key, graph, asof_utc, args.horizon, inputs, load_engine_params()
+    )
     return build_result(
         graph=graph,
         fitted=fitted,
         event_values=_event_values(key, graph),
         interventions=interventions,
         precedent=bands,
+        no_data_assets=tuple(no_data_assets),
         seed=args.seed,
         n_paths=load_params().n_paths if args.n_paths is None else args.n_paths,
         asof_utc=asof_utc,
         code_commit=_code_commit(),
     )
+
+
+def _library_integrity_errors() -> tuple[type[Exception], ...]:
+    """The corrupt-library error, when the libraries package this loader needs is importable."""
+    try:
+        from precedent.libraries.manifest import LibraryIntegrityError
+    except ImportError:
+        return ()  # spine-only checkout: the loader reports "not built yet" instead
+    return (LibraryIntegrityError,)
 
 
 def run(argv: list[str]) -> int:
@@ -408,6 +461,10 @@ def run(argv: list[str]) -> int:
         parse_do_flags(args.do, graph)  # fail on a bad --do before any data is read
         result = _result_for(args, key, graph)
     except MechanismRefused as error:
+        return _usage_error(str(error))
+    except NoDataAssets as error:
+        return _usage_error(str(error))
+    except _library_integrity_errors() as error:
         return _usage_error(str(error))
     except (ConfigError, FileNotFoundError) as error:
         return _usage_error(str(error))

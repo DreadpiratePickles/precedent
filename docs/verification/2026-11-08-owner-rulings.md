@@ -15,4 +15,8 @@ Still open, and not decidable by the controller:
 - the securities-lawyer hour (thesis T5);
 - every live run and model call (separate go-ahead).
 
+## Mechanism fix wave, 2026-11-08 — ruling I-2 (source: independent Opus review, relayed by the owner)
+
+I-2: The cockpit requirement changes (plan GC list, `docs/superpowers/plans/2026-11-07-mechanism.md`: "A mechanism result without its Precedent band is not reported. Below Precedent's `min_neff` the mechanism also refuses"). Where Precedent's exact-key band for the query is refused — no exact-key precedent at all, or the band of any asset that has data falls below `min_neff` — the `precedent mechanism` command refuses (exit 2) instead of printing the mechanism fan beside a refused band. A graph asset the library holds no rows for is not banded and not fitted: it is suppressed from the text, JSON and HTML (a zero equation would render as "+0.0%"), named in the JSON `no_data_assets` field, and when no asset survives suppression the command exits 2 with a `no data` message distinct from the `min_neff` refusal. Cost if wrong: a thin or young library refuses the command more often, and a partially-covered asset panel refuses where per-asset suppression would have shown the covered rows; the owner can soften either rule later, and the change is visible in the first live run's exit codes.
+
 The facts the owner approved for checking (the MSCI developed-market list, the NYSE 2010-2014 holidays and the special closures, and the EDGAR `acceptanceDateTime` time zone) are recorded in the project once checked: `references/country_groups.json`, `references/nyse_holidays.json` and `stages/01_ingest/CONTEXT.md`.

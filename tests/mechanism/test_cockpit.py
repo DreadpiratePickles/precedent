@@ -165,6 +165,33 @@ def simulated_result(interventions=(), bands=(), n_paths=4000, seed=0) -> Mechan
     )
 
 
+NO_DATA_ASSET = "XLE"
+
+
+def no_data_fixture() -> tuple[MechanismResult, FittedSEM, CausalGraph]:
+    """A result whose XLE node has no library data: a zero equation and zero residual
+    variance, so unsuppressed its fan prints exactly "+0.0% / +0.0% / +0.0%"."""
+    graph = make_graph(edges=EDGES + [(RISK, NO_DATA_ASSET, 1)])
+    fitted = make_fitted(
+        graph,
+        coefficients={**COEFFICIENTS, NO_DATA_ASSET: {RISK: 0.0}},
+        cov=np.diag([0.04, 0.09, 0.0625, 0.0]),
+    )
+    result = build_result(
+        graph=graph,
+        fitted=fitted,
+        event_values={SIGN: -1.0},
+        interventions=(),
+        precedent=[],
+        no_data_assets=(NO_DATA_ASSET,),
+        seed=0,
+        n_paths=500,
+        asof_utc=ASOF,
+        code_commit=None,
+    )
+    return result, fitted, graph
+
+
 # --- render_text ----------------------------------------------------------------------------
 
 
@@ -203,6 +230,25 @@ def test_text_agree_is_symmetric_one_median_outside_is_a_no():
     assert "no (median outside the other's band)" in tlt
 
 
+def test_text_marks_the_market_row_raw():
+    """The market's band and fan are its own cumulative return, not an abnormal return: the
+    row carries `(raw)` and one note line explains it (verifier finding V-9)."""
+    rows = [
+        BandRow(asset="SPY", horizon=5, p10=-0.020, median=-0.010, p90=0.005,
+                n=30, n_eff=20.0, refused=False, basis="raw_return"),
+    ]  # fmt: skip
+    base = hand_result()
+    result = hand_result(precedent=rows, rollout_fan=base.rollout_fan)
+    lines = render_text(result).splitlines()
+    spy = next(line for line in lines if line.startswith("SPY"))
+    assert "-2.0% / -1.0% / +0.5% (raw)" in spy
+    assert any(
+        line.startswith("SPY: the market's own cumulative return (raw)") for line in lines
+    )
+    normal = render_text(hand_result()).splitlines()
+    assert not any("(raw)" in line for line in normal)
+
+
 def test_text_lists_edges_the_data_disagrees_with():
     text = render_text(hand_result())
     assert (
@@ -238,6 +284,29 @@ def test_json_round_trips_and_carries_interventions_and_manifest():
     assert payload["fitted"]["graph_version"] == "template-v1"
     assert {"seed", "n_paths", "code_commit", "disclaimer"} <= payload.keys()
     assert payload["fitted"]["fitted_asof_utc"].startswith("2026-11-07")
+
+
+def test_a_no_data_asset_never_renders_a_zero_fan():
+    """XLE has no library data: unsuppressed its zero equation prints "+0.0% / +0.0% / +0.0%".
+    As a no-data asset it renders no row and no zero fan in the text, the JSON or the page
+    (ruling I-2); the JSON names it in `no_data_assets`."""
+    result, fitted, graph = no_data_fixture()
+    unsuppressed = fan(simulate(fitted, graph, {SIGN: -1.0}, n_paths=500, seed=0))
+    assert unsuppressed.loc[NO_DATA_ASSET].abs().max() == pytest.approx(0.0)
+
+    text = render_text(result)
+    assert "+0.0%" not in text
+    assert not any(line.startswith(NO_DATA_ASSET) for line in text.splitlines())
+
+    payload = json.loads(render_json(result))
+    assert payload["no_data_assets"] == [NO_DATA_ASSET]
+    assert NO_DATA_ASSET not in payload["rollout_fan"]
+
+    html = render_html(result)
+    assert "+0.0%" not in html
+    embedded = json.loads(re.search(r'id="payload">(.*?)</script>', html, re.S).group(1))
+    assert embedded["no_data_assets"] == [NO_DATA_ASSET]
+    assert NO_DATA_ASSET not in embedded["rollout_fan"]
 
 
 def test_result_rejects_unknown_fields_and_naive_timestamps():
@@ -439,6 +508,26 @@ def test_js_falls_back_to_the_diagonal_like_python():
     assert out["SPY"]["0.9"] == pytest.approx(table.loc["SPY", 0.9], abs=5e-4)
 
 
+@needs_node
+def test_js_twin_suppresses_no_data_assets_and_keeps_the_surviving_fan():
+    """Simulate-then-drop: XLE sits in the residual draw, so dropping it after the simulation
+    keeps the surviving fans bit-identical between the page and Python."""
+    result, fitted, graph = no_data_fixture()
+    html = render_html(result)
+    program = """
+    const payload = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    const out = window.mechanismSimulate(payload, payload.event_values, [], payload.n_paths, payload.seed);
+    console.log(JSON.stringify({keys: Object.keys(out), out}));
+    """
+    got = run_node(html, program, render_json(result))
+    assert got["keys"] == list(result.rollout_fan)
+    assert NO_DATA_ASSET not in got["out"]
+    table = fan(simulate(fitted, graph, {SIGN: -1.0}, n_paths=500, seed=0))
+    for asset in result.rollout_fan:
+        for q in ("0.1", "0.5", "0.9"):
+            assert got["out"][asset][q] == pytest.approx(table.loc[asset, float(q)], abs=5e-4)
+
+
 # --- the command ----------------------------------------------------------------------------
 
 
@@ -478,7 +567,7 @@ def stubbed_data_step(monkeypatch):
             BandRow(asset="TLT", horizon=horizon, p10=-0.01, median=-0.002, p90=0.006,
                     n=12, n_eff=8.0, refused=False),
         ]  # fmt: skip
-        return template_fitted(graph), bands
+        return template_fitted(graph), bands, []
 
     monkeypatch.setattr(cli, "_load_inputs", fake_inputs)
     monkeypatch.setattr(cli, "_fit_and_band", fake)

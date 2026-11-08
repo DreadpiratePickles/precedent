@@ -38,6 +38,10 @@ needs_node = pytest.mark.skipif(NODE is None, reason="node not on PATH")
 REFUSED_LINE = re.compile(
     r"^refused: the fit has n_eff=(\d+\.\d) below min_neff=8\.0; no mechanism is shown$"
 )
+BAND_REFUSED_LINE = re.compile(
+    r"^refused: Precedent's exact-key band has n_eff=(\d+\.\d) below min_neff=8\.0; "
+    r"no mechanism is shown$"
+)
 
 
 @pytest.fixture(scope="module")
@@ -105,11 +109,17 @@ def test_do_flag_is_applied_and_named(capsys, world, loaded):
     payload = json.loads(capsys.readouterr().out)
     assert payload["interventions"] == [{"node": "rates_expectation", "value": 0.0}]
     bands = {band["asset"]: band for band in payload["precedent"]}
-    assert set(world.assets) <= set(bands)
+    assert set(bands) == set(world.assets)  # only assets with data are banded and shown
     assert all(not bands[a]["refused"] for a in world.assets)
-    # a graph asset the library holds no rows for (the world has four assets) is refused, n=0
-    absent = [band for asset, band in bands.items() if asset not in world.assets]
-    assert absent and all(b["refused"] and b["n"] == 0 for b in absent)
+    # the market's band is its own cumulative return; every other band is abnormal
+    assert bands["SPY"]["basis"] == "raw_return"
+    assert all(
+        bands[a]["basis"] == "abnormal_return" for a in world.assets if a != "SPY"
+    )
+    # a graph asset the library holds no rows for (the world has four assets) is suppressed
+    # and named in no_data_assets, in graph order
+    asset_ids = [n.id for n in graph_of(world).nodes if n.kind is NodeKind.ASSET]
+    assert payload["no_data_assets"] == [a for a in asset_ids if a not in world.assets]
 
 
 def test_html_is_self_contained(tmp_path, world, loaded):
@@ -161,7 +171,7 @@ def test_band_uses_the_exact_key_and_the_fit_uses_direction_zero(world):
     """The fit sees both signs (its n_obs is larger); the band sees only the queried sign."""
     key, graph, params = world.key(1), graph_of(world), load_engine_params()
     asof = pd.Timestamp(asof_at(world, 700), tz="UTC")
-    fitted, bands = cli._fit_and_band(key, graph, asof, HORIZON, inputs_of(world), params)
+    fitted, bands, no_data = cli._fit_and_band(key, graph, asof, HORIZON, inputs_of(world), params)
     events = world.events
     cutoffs = world.session_cutoffs_utc
     finished = events["effective_position"].map(lambda p: cutoffs.iloc[p + 1 + HORIZON] <= asof)
@@ -173,20 +183,28 @@ def test_band_uses_the_exact_key_and_the_fit_uses_direction_zero(world):
     expected = int(finished[same_sign.index].sum())
     assert 8 <= expected < fitted.n_obs
     asset_ids = [n.id for n in graph.nodes if n.kind is NodeKind.ASSET]
-    assert [b.asset for b in bands] == asset_ids
-    assert all(b.refused and b.n == 0 for b in bands if b.asset not in world.assets)
-    for band in (b for b in bands if b.asset in world.assets):
+    # assets without library rows are suppressed, in graph order; the band covers the rest
+    assert no_data == [a for a in asset_ids if a not in world.assets]
+    assert [b.asset for b in bands] == [a for a in asset_ids if a in world.assets]
+    for band in bands:
         assert band.horizon == HORIZON and not band.refused
         assert band.n == expected and band.n_eff == pytest.approx(float(expected))
         assert band.p10 < band.median < band.p90
         assert band.median == pytest.approx(world.planted_car(band.asset), abs=0.006)
+        expected_basis = "raw_return" if band.asset == params.market else "abnormal_return"
+        assert band.basis == expected_basis
 
 
 def test_a_zero_direction_key_gives_the_band_the_fits_precedents(world):
     graph, params = graph_of(world), load_engine_params()
     asof = pd.Timestamp(asof_at(world, 700), tz="UTC")
-    fitted, bands = cli._fit_and_band(world.key(0), graph, asof, HORIZON, inputs_of(world), params)
-    assert all(b.n == fitted.n_obs for b in bands if b.asset in world.assets)
+    fitted, bands, no_data = cli._fit_and_band(
+        world.key(0), graph, asof, HORIZON, inputs_of(world), params
+    )
+    asset_ids = [n.id for n in graph.nodes if n.kind is NodeKind.ASSET]
+    assert no_data == [a for a in asset_ids if a not in world.assets]
+    assert {b.asset for b in bands} == set(world.assets)
+    assert all(b.n == fitted.n_obs for b in bands)
 
 
 def test_asof_is_midnight_utc_of_the_day_so_that_days_close_is_not_seen(world):
@@ -241,10 +259,11 @@ def test_a_horizon_the_library_does_not_hold_is_a_usage_error(capsys, world, loa
     assert "horizon 7" in err and "1, 5, 20" in err and "n_eff" not in err
 
 
-def test_an_exact_key_with_no_precedent_refuses_every_band_but_not_the_command(world):
-    """No exact-key precedent is a refused band row, not a refusal of the mechanism."""
-    graph, params = graph_of(world), load_engine_params()
-    asof = pd.Timestamp(asof_at(world, 700), tz="UTC")
+def test_an_exact_key_with_no_precedent_refuses_the_command(capsys, world, monkeypatch):
+    """Requirement change, ruling I-2 (recorded in docs/verification/2026-11-08-owner-rulings.md
+    and docs/STATUS.md): with no exact-key precedent the command refuses — the fan is never
+    printed beside a refused band. The fit itself still sees the -1 precedents, which is why
+    the refusal names the band (n_eff=0.0), not the fit."""
     # drop every +1 event: the fit (direction 0) keeps the -1 events, the exact +1 key has none
     events = world.events[
         world.events["key"].map(lambda k: EventKey.from_string(k).direction_sign == -1)
@@ -255,10 +274,70 @@ def test_an_exact_key_with_no_precedent_refuses_every_band_but_not_the_command(w
         session_cutoffs_utc=world.session_cutoffs_utc,
         returns=world.returns,
     )
-    fitted, bands = cli._fit_and_band(world.key(1), graph, asof, HORIZON, inputs, params)
-    assert fitted.n_obs >= 8
-    assert all(b.refused and b.n == 0 and b.n_eff == 0.0 for b in bands)
-    assert all(b.p10 is None and b.median is None and b.p90 is None for b in bands)
+    params = load_engine_params()
+    with pytest.raises(MechanismRefused) as excinfo:
+        cli._fit_and_band(
+            world.key(1), graph_of(world),
+            pd.Timestamp(asof_at(world, 700), tz="UTC"), HORIZON, inputs, params,
+        )
+    assert excinfo.value.band is True  # the fit passed; the band refused
+    assert (excinfo.value.n_eff, excinfo.value.min_neff) == (0.0, params.min_neff)
+
+    monkeypatch.setattr(cli, "_load_inputs", lambda directory: inputs)
+    assert run(key_flags(world)) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip() == str(excinfo.value)
+
+
+def test_the_command_refuses_when_the_exact_key_band_is_thin(capsys, world, loaded):
+    """The fit passes (it is direction-free) but every data-having asset's exact-key band is
+    below min_neff at this as-of: the whole command refuses (ruling I-2) rather than printing
+    fans beside refused bands."""
+    assert run(key_flags(world, position=430)) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    line = captured.err.strip()
+    match = BAND_REFUSED_LINE.match(line)
+    assert match, line
+    assert 0.0 < float(match.group(1)) < load_engine_params().min_neff
+
+
+def test_every_asset_without_rows_refuses_with_its_own_message(world):
+    """NoDataAssets is distinct from MechanismRefused: the library holds events and simply
+    no rows for any of the graph's assets."""
+    from precedent.mechanism.graph_schema import CausalGraph, Edge, Node, derive_kind
+
+    node_ids = ["event:central_bank:direction_sign", "GLD"]
+    graph = CausalGraph(
+        graph_id="g-no-data",
+        graph_version="template-v1",
+        event_key=world.key(1),
+        nodes=[Node(id=i, kind=derive_kind(i)) for i in node_ids],
+        edges=[Edge(
+            source=node_ids[0], target="GLD", sign=-1, lag_band="same_session",
+            source_doc_id=None, evidence_span=None,
+        )],
+    )
+    with pytest.raises(cli.NoDataAssets) as excinfo:
+        cli._fit_and_band(
+            world.key(1), graph, pd.Timestamp(asof_at(world, 700), tz="UTC"),
+            HORIZON, inputs_of(world), load_engine_params(),
+        )
+    assert excinfo.value.assets == ["GLD"]
+    assert excinfo.value.horizon == HORIZON
+    assert "no data:" in str(excinfo.value) and "n_eff" not in str(excinfo.value)
+
+
+def test_no_data_assets_exit_2_with_their_own_message(capsys, monkeypatch, tmp_path, world):
+    def fake(key, graph, asof_utc, horizon, inputs, params):
+        raise cli.NoDataAssets(["XLE", "GLD"], horizon)
+
+    monkeypatch.setattr(cli, "_load_inputs", lambda directory: inputs_of(world))
+    monkeypatch.setattr(cli, "_fit_and_band", fake)
+    assert run([*key_flags(world), "--data-dir", str(tmp_path)]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("no data:") and "XLE, GLD" in err and "n_eff" not in err
 
 
 # --- the loader -----------------------------------------------------------------------------
@@ -327,6 +406,21 @@ def test_missing_prices_exit_2_and_a_missing_library_is_reported(
     monkeypatch.setitem(sys.modules, "precedent.libraries.bundle", module)
     assert run([*key_flags(world), "--data-dir", str(tmp_path)]) == 2
     assert f"no library at {tmp_path / 'library'}" in capsys.readouterr().err
+
+
+def test_a_corrupt_library_exits_2_without_a_traceback(capsys, monkeypatch, tmp_path, world):
+    """Ruling T7B-8: a bundle whose manifest fails verification is a clean exit 2 (V-10)."""
+    from precedent.libraries.manifest import LibraryIntegrityError
+
+    def corrupt(library_dir: Path):
+        raise LibraryIntegrityError("MANIFEST.json", "sha256 mismatch")
+
+    module = types.ModuleType("precedent.libraries.bundle")
+    module.load_bundle = corrupt
+    monkeypatch.setitem(sys.modules, "precedent.libraries.bundle", module)
+    assert run([*key_flags(world), "--data-dir", str(tmp_path)]) == 2
+    err = capsys.readouterr().err
+    assert "MANIFEST.json" in err and "sha256 mismatch" in err and "Traceback" not in err
 
 
 # --- one asset panel -------------------------------------------------------------------------
