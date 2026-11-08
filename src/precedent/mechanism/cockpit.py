@@ -13,7 +13,7 @@ from datetime import UTC
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, model_validator
 
 from precedent.mechanism.fit_sem import FittedSEM
 from precedent.mechanism.graph_schema import CausalGraph
@@ -71,6 +71,15 @@ class MechanismResult(BaseModel):
     diagonal_fallback: bool
     code_commit: str | None
     disclaimer: Literal[DISCLAIMER] = DISCLAIMER
+
+    @model_validator(mode="after")
+    def _no_do_on_an_event_variable(self) -> MechanismResult:
+        """do() is for intermediate and asset nodes; an event variable is set by its key."""
+        events = set(self.graph.event_node_ids)
+        bad = [i.node for i in self.interventions if i.node in events]
+        if bad:
+            raise ValueError(f"interventions on event nodes are not allowed: {bad}")
+        return self
 
 
 def build_result(

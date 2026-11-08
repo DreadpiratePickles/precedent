@@ -204,7 +204,8 @@ footer { padding-bottom: 28px; font-size: 13px; }
 
   const EVENT_RANGES = { direction_sign: [-1, 1, 1], severity_band: [0, 2, 1], is_scheduled: [0, 1, 1] };
   // The page starts from the query: its event values and every do() it was run with, whatever
-  // the node's kind (an asset or event node has no slider but its intervention still applies).
+  // the node's kind (an asset has no slider but its intervention still applies). Event nodes are
+  // never intervened on: their sliders set the event value and the payload cannot carry a do().
   function mechanismInitialState(payload) {
     const forced = {};
     payload.interventions.forEach((i) => { forced[i.node] = i.value; });

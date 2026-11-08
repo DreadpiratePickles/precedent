@@ -68,8 +68,9 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def parse_do_flags(flags: list[str], graph: CausalGraph) -> tuple[Intervention, ...]:
-    """`NODE=VALUE` strings to interventions; the node must be in the graph, the value a float."""
+    """`NODE=VALUE` strings to interventions on intermediate or asset nodes with a finite value."""
     node_ids = {node.id for node in graph.nodes}
+    event_ids = set(graph.event_node_ids)
     parsed = []
     for flag in flags:
         node, separator, raw = flag.rpartition("=")
@@ -77,6 +78,11 @@ def parse_do_flags(flags: list[str], graph: CausalGraph) -> tuple[Intervention, 
             raise ValueError(f"--do {flag!r}: expected NODE=VALUE")
         if node not in node_ids:
             raise ValueError(f"--do {flag!r}: {node!r} is not a node of the graph")
+        if node in event_ids:
+            raise ValueError(
+                f"--do {flag!r}: {node!r} is an event variable, which is set by its key flag "
+                "(for example --direction), not by do()"
+            )
         try:
             value = float(raw)
         except ValueError as error:

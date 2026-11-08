@@ -19,6 +19,7 @@ from precedent.mechanism.cli import parse_do_flags, run
 from precedent.mechanism.cockpit import (
     DISCLAIMER,
     BandRow,
+    InterventionRow,
     MechanismResult,
     build_result,
     render_html,
@@ -543,6 +544,21 @@ def test_engine_present_but_data_step_unwritten_exits_2_with_its_message(capsys,
     assert run(KEY_FLAGS) == 2
     err = capsys.readouterr().err
     assert "Task 7b" in err and "not built yet" not in err
+
+
+def test_do_on_an_event_node_exits_2_and_points_at_the_key_flag(capsys):
+    assert run([*KEY_FLAGS, "--do", f"{SIGN}=0"]) == 2
+    err = capsys.readouterr().err
+    assert SIGN in err and "event variable" in err and "--direction" in err
+    with pytest.raises(ValueError, match="event variable"):
+        parse_do_flags([f"{SIGN}=1"], make_graph())
+
+
+def test_result_rejects_an_intervention_on_an_event_node():
+    bad = [InterventionRow(node=SIGN, value=0.0)]
+    with pytest.raises(ValueError, match="event nodes"):
+        hand_result(interventions=bad)
+    assert hand_result(interventions=[InterventionRow(node=RATES, value=0.0)])
 
 
 def test_do_value_must_be_finite(capsys):
