@@ -1,0 +1,4 @@
+name: m4_mechanism_template
+panel_prefixes: [mech_]
+# Rung M-T: template graph (template-v1) fitted under the time guard; scored beside P-B1 in Task 5b.
+# A comment, not a `notes` key: spine/ablation.py's Rung model forbids extra keys.

@@ -14,6 +14,7 @@ from precedent.mechanism.graph_schema import (
     NodeKind,
     derive_kind,
     graph_json_schema,
+    is_acyclic,
     load_params,
     node_vocabulary,
 )
@@ -153,6 +154,29 @@ def test_model_graph_needs_evidence_on_every_edge():
         graph(edges=[("event:central_bank", "rates_expectation", "  ")], version="llm-graph-v1")
     graph(edges=[("event:central_bank", "rates_expectation", "rates fell")], version="llm-graph-v1")
     graph(edges=[("event:central_bank", "rates_expectation", None)], version="template-v1")
+
+
+def test_placebo_graph_is_exempt_from_the_evidence_rule():
+    graph(edges=[("event:central_bank", "rates_expectation", None)], version="placebo-3")
+    with pytest.raises(ValidationError, match="evidence"):
+        graph(edges=[("event:central_bank", "rates_expectation", None)], version="llm-graph-v1")
+
+
+def test_is_acyclic_reports_cycles():
+    ids = ["rates_expectation", "risk_appetite"]
+
+    def edge(source: str, target: str) -> Edge:
+        return Edge(
+            source=source,
+            target=target,
+            sign=1,
+            lag_band="days",
+            source_doc_id=None,
+            evidence_span=None,
+        )
+
+    assert is_acyclic(ids, [edge(ids[0], ids[1])])
+    assert not is_acyclic(ids, [edge(ids[0], ids[1]), edge(ids[1], ids[0])])
 
 
 def test_edge_rejects_unknown_fields_and_enum_values():

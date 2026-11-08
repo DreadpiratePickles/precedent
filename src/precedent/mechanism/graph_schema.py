@@ -17,6 +17,7 @@ from precedent.spine.event_schema import EventType
 _EVENT_PREFIX = "event:"
 _EVENT_FIELDS = ("severity_band", "direction_sign", "is_scheduled")
 _TEMPLATE_PREFIX = "template-"
+_PLACEBO_PREFIX = "placebo-"
 
 
 class NodeKind(StrEnum):
@@ -122,6 +123,11 @@ def _kahn_order(node_ids: list[str], edges: list[Edge]) -> list[str]:
     return order
 
 
+def is_acyclic(node_ids: list[str], edges: list[Edge]) -> bool:
+    """True when the edges over these nodes form a DAG (every node reaches Kahn's order)."""
+    return len(_kahn_order(node_ids, edges)) == len(node_ids)
+
+
 def _event_type_of(node_id: str) -> str:
     return node_id.removeprefix(_EVENT_PREFIX).split(":")[0]
 
@@ -167,7 +173,7 @@ class CausalGraph(BaseModel):
         self._check_events()
         if len(_kahn_order(ids, self.edges)) < len(ids):
             raise ValueError("graph has a cycle")
-        if not self.graph_version.startswith(_TEMPLATE_PREFIX):
+        if not self.graph_version.startswith((_TEMPLATE_PREFIX, _PLACEBO_PREFIX)):
             for edge in self.edges:
                 if not edge.source_doc_id or not (edge.evidence_span or "").strip():
                     raise ValueError(
