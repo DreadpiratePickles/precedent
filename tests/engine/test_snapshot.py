@@ -5,6 +5,8 @@ from __future__ import annotations
 import datetime as dt
 import io
 import json
+import shutil
+import warnings
 import zipfile
 from dataclasses import dataclass, field
 
@@ -14,6 +16,7 @@ import pytest
 from engine_synthetic import CUTOFFS, SESSIONS
 
 from precedent import config
+from precedent.engine import snapshot
 from precedent.engine.snapshot import (
     SnapshotFetchError,
     build_snapshot,
@@ -146,16 +149,36 @@ class SnapshotServer:
     manifest_bytes: bytes
     entries: dict[str, bytes]
     outer_manifest: bytes = field(init=False)
+    raw_zip: bytes | None = None
+    repeated: list[tuple[str, bytes]] = field(default_factory=list)
+    attributes: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.outer_manifest = self.manifest_bytes
 
     def _zip(self) -> bytes:
+        if self.raw_zip is not None:
+            return self.raw_zip
         buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
-            for name, data in self.entries.items():
-                archive.writestr(zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0)), data)
+        with (
+            warnings.catch_warnings(),
+            zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive,
+        ):
+            warnings.simplefilter("ignore")
+            for name, data in [*self.entries.items(), *self.repeated]:
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                info.external_attr = self.attributes.get(name, 0o100644 << 16)
+                archive.writestr(info, data)
         return buffer.getvalue()
+
+    def flip_served_byte(self, name: str) -> None:
+        """Flip one byte inside the stored data of `name` in the zip bytes as they are served."""
+        served = bytearray(self._zip())
+        with zipfile.ZipFile(io.BytesIO(bytes(served))) as archive:
+            info = archive.getinfo(name)
+        data_start = info.header_offset + 30 + len(info.filename.encode()) + len(info.extra)
+        served[data_start + info.file_size // 2] ^= 0xFF
+        self.raw_zip = bytes(served)
 
     def flip_byte(self, name: str) -> None:
         data = bytearray(self.entries[name])
@@ -211,6 +234,13 @@ def test_a_path_escaping_entry_is_refused(tmp_path, snapshot_server):
     with pytest.raises(LibraryIntegrityError):
         fetch_snapshot("v0.1.0", tmp_path / "d", snapshot_server.transport, BASE)
     assert not (tmp_path / "evil.txt").exists()
+    assert list((tmp_path / "d").iterdir()) == []
+
+
+def test_an_absolute_entry_leaves_dest_empty(tmp_path, snapshot_server):
+    snapshot_server.add_entry("/abs.txt", b"x")
+    with pytest.raises(LibraryIntegrityError):
+        fetch_snapshot("v0.1.0", tmp_path / "d", snapshot_server.transport, BASE)
     assert list((tmp_path / "d").iterdir()) == []
 
 
@@ -320,3 +350,169 @@ def test_fetch_run_exits_2_on_a_failed_download(tmp_path, snapshot_server, capsy
     )
     assert run(["--version", "v9.9.9", "--data-dir", str(tmp_path / "dd")]) == 2
     assert "error:" in capsys.readouterr().err
+
+
+def _assert_nothing_left(dest) -> None:
+    assert not dest.exists() or list(dest.iterdir()) == []
+
+
+def test_a_byte_flipped_in_the_served_zip_is_refused_and_nothing_is_left(tmp_path, snapshot_server):
+    snapshot_server.flip_served_byte("rows_event_sequence.parquet")
+    with pytest.raises(LibraryIntegrityError, match="rows_event_sequence.parquet"):
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    _assert_nothing_left(tmp_path)
+
+
+def test_run_reports_a_corrupt_download_as_one_error_line(
+    tmp_path, snapshot_server, capsys, monkeypatch
+):
+    monkeypatch.setattr(config, "release_base_url", lambda: BASE)
+    monkeypatch.setattr(snapshot.httpx, "HTTPTransport", lambda: snapshot_server.transport)
+    snapshot_server.flip_served_byte("rows_event_sequence.parquet")
+    assert run(["--version", TAG, "--data-dir", str(tmp_path / "dd")]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: rows_event_sequence.parquet") and err.count("\n") == 1
+    assert "Traceback" not in err
+
+
+def test_an_entry_over_the_entry_cap_is_refused(tmp_path, snapshot_server, monkeypatch):
+    monkeypatch.setattr(snapshot, "MAX_ENTRY_BYTES", 100)
+    with pytest.raises(LibraryIntegrityError, match="larger than"):
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    _assert_nothing_left(tmp_path)
+
+
+def test_a_snapshot_over_the_total_cap_is_refused(tmp_path, snapshot_server, monkeypatch):
+    largest = max(len(data) for data in snapshot_server.entries.values())
+    monkeypatch.setattr(snapshot, "MAX_ENTRY_BYTES", largest)
+    monkeypatch.setattr(snapshot, "MAX_TOTAL_UNCOMPRESSED_BYTES", largest + 1)
+    with pytest.raises(LibraryIntegrityError, match="total"):
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    _assert_nothing_left(tmp_path)
+
+
+def test_the_copy_stops_at_the_cap_even_when_the_header_understates(
+    tmp_path, snapshot_server, monkeypatch
+):
+    real_infolist = zipfile.ZipFile.infolist
+
+    def understating(self):
+        infos = real_infolist(self)
+        for info in infos:
+            info.file_size = 1
+        return infos
+
+    monkeypatch.setattr(zipfile.ZipFile, "infolist", understating)
+    monkeypatch.setattr(snapshot, "MAX_ENTRY_BYTES", 100)
+    with pytest.raises(LibraryIntegrityError):
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    _assert_nothing_left(tmp_path)
+
+
+def test_a_download_over_the_size_limit_is_a_fetch_error(tmp_path, snapshot_server, monkeypatch):
+    monkeypatch.setattr(snapshot, "MAX_SNAPSHOT_BYTES", 100)
+    with pytest.raises(SnapshotFetchError, match="larger than"):
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+
+
+def test_an_oversized_body_is_cut_off_while_streaming(tmp_path, monkeypatch):
+    monkeypatch.setattr(snapshot, "MAX_MANIFEST_BYTES", 10)
+    pulled: list[int] = []
+
+    def chunks():
+        for _ in range(1000):
+            pulled.append(1)
+            yield b"x" * 8
+
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=chunks()))
+    with pytest.raises(SnapshotFetchError, match="larger than"):
+        fetch_snapshot("v0.1.0", tmp_path, transport, BASE)
+    assert len(pulled) < 10
+
+
+def test_a_failure_removing_the_old_library_after_install_is_ignored(
+    tmp_path, snapshot_server, monkeypatch
+):
+    fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    real_rmtree = shutil.rmtree
+
+    def failing_for_old(path, ignore_errors=False, **kwargs):
+        if str(path).endswith(".old") and not ignore_errors:
+            raise OSError("cannot remove")
+        real_rmtree(path, ignore_errors=ignore_errors, **kwargs)
+
+    monkeypatch.setattr(snapshot.shutil, "rmtree", failing_for_old)
+    manifest = fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    assert load_bundle(tmp_path / "library").manifest == manifest
+
+
+def test_dot_slash_and_plain_names_are_duplicates(tmp_path, snapshot_server):
+    snapshot_server.repeated.append(("./events.parquet", b"x"))
+    with pytest.raises(LibraryIntegrityError, match="repeated"):
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    _assert_nothing_left(tmp_path)
+
+
+def test_a_repeated_entry_name_is_refused(tmp_path, snapshot_server):
+    snapshot_server.repeated.append(("events.parquet", b"x"))
+    with pytest.raises(LibraryIntegrityError, match="repeated"):
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    _assert_nothing_left(tmp_path)
+
+
+def test_a_symbolic_link_entry_is_refused(tmp_path, snapshot_server):
+    snapshot_server.add_entry("link.parquet", b"events.parquet")
+    snapshot_server.attributes["link.parquet"] = 0o120777 << 16
+    with pytest.raises(LibraryIntegrityError, match="link.parquet"):
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    _assert_nothing_left(tmp_path)
+
+
+def test_a_backslash_entry_name_is_refused(tmp_path, snapshot_server):
+    snapshot_server.add_entry("sub\\evil.txt", b"x")
+    with pytest.raises(LibraryIntegrityError):
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    _assert_nothing_left(tmp_path)
+
+
+def test_a_payload_that_is_not_a_zip_is_refused(tmp_path, snapshot_server):
+    snapshot_server.raw_zip = b"this is not a zip file"
+    with pytest.raises(LibraryIntegrityError, match="not a valid zip"):
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    _assert_nothing_left(tmp_path)
+
+
+def test_a_zip_without_its_inner_manifest_is_refused(tmp_path, snapshot_server):
+    del snapshot_server.entries["MANIFEST.json"]
+    with pytest.raises(LibraryIntegrityError, match="MANIFEST.json"):
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    _assert_nothing_left(tmp_path)
+
+
+def test_an_unsupported_compression_is_refused(tmp_path, snapshot_server):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_BZIP2) as archive:
+        for name, data in snapshot_server.entries.items():
+            archive.writestr(name, data)
+    served = bytearray(buffer.getvalue())
+    # Rewrite every compress_type field (central directory, offset 10) to an unknown method.
+    marker = b"PK\x01\x02"
+    start = 0
+    while (at := bytes(served).find(marker, start)) != -1:
+        served[at + 10 : at + 12] = (99).to_bytes(2, "little")
+        start = at + 4
+    snapshot_server.raw_zip = bytes(served)
+    with pytest.raises(LibraryIntegrityError):
+        fetch_snapshot("v0.1.0", tmp_path, snapshot_server.transport, BASE)
+    _assert_nothing_left(tmp_path)
+
+
+def test_run_exits_2_with_one_line_for_every_integrity_failure(
+    tmp_path, snapshot_server, capsys, monkeypatch
+):
+    monkeypatch.setattr(config, "release_base_url", lambda: BASE)
+    monkeypatch.setattr(snapshot.httpx, "HTTPTransport", lambda: snapshot_server.transport)
+    snapshot_server.raw_zip = b"this is not a zip file"
+    assert run(["--version", TAG, "--data-dir", str(tmp_path / "dd")]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error:") and err.count("\n") == 1

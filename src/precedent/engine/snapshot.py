@@ -20,6 +20,7 @@ import shutil
 import stat
 import sys
 import zipfile
+import zlib
 from pathlib import Path, PurePosixPath
 
 import httpx
@@ -46,8 +47,15 @@ _TAG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 _FILE_MODE = 0o100644
 _REQUEST_TIMEOUT_S = 60.0
-_MAX_MANIFEST_BYTES = 1 << 20
-_MAX_SNAPSHOT_BYTES = 1 << 31
+_COPY_CHUNK_BYTES = 1 << 20
+MAX_MANIFEST_BYTES = 1 << 20
+"""Largest manifest download accepted."""
+MAX_SNAPSHOT_BYTES = 1 << 31
+"""Largest zip download accepted (2 GiB; the library is far smaller)."""
+MAX_ENTRY_BYTES = 1 << 31
+"""Largest single entry once extracted (2 GiB), checked on the header and while copying."""
+MAX_TOTAL_UNCOMPRESSED_BYTES = 1 << 31
+"""Largest sum of extracted entries (2 GiB), checked on the headers and while copying."""
 _LIBRARY_DIR = "library"
 
 
@@ -107,24 +115,47 @@ def build_snapshot(library_dir: Path, out_dir: Path, tag: str) -> Path:
 
 
 def _get(client: httpx.Client, url: str, limit_bytes: int) -> bytes:
+    """GET `url`, reading the body in chunks and stopping as soon as it passes `limit_bytes`."""
     try:
-        response = client.get(url)
+        with client.stream("GET", url) as response:
+            if response.status_code != 200:
+                raise SnapshotFetchError(f"{url}: HTTP {response.status_code}")
+            body = bytearray()
+            for chunk in response.iter_bytes():
+                body.extend(chunk)
+                if len(body) > limit_bytes:
+                    raise SnapshotFetchError(f"{url}: response larger than {limit_bytes} bytes")
     except httpx.TimeoutException as error:
         raise SnapshotFetchError(f"{url}: timed out") from error
     except httpx.HTTPError as error:
         raise SnapshotFetchError(f"{url}: {type(error).__name__}") from error
-    if response.status_code != 200:
-        raise SnapshotFetchError(f"{url}: HTTP {response.status_code}")
-    if len(response.content) > limit_bytes:
-        raise SnapshotFetchError(f"{url}: response larger than {limit_bytes} bytes")
-    return response.content
+    return bytes(body)
 
 
-def _safe_member_path(name: str) -> str:
+def _safe_member_path(raw_name: str) -> str:
+    """The entry name in normal form, or `LibraryIntegrityError` when it leaves the library."""
+    name = raw_name.removesuffix("/")
     parts = PurePosixPath(name).parts
-    if not name or "\\" in name or name.startswith("/") or ".." in parts or "." in parts:
-        raise LibraryIntegrityError(name, "zip entry path leaves the library directory")
-    return name
+    if not parts or "\\" in name or name.startswith("/") or ".." in parts:
+        raise LibraryIntegrityError(raw_name, "zip entry path leaves the library directory")
+    return PurePosixPath(name).as_posix()
+
+
+def _copy_entry(archive: zipfile.ZipFile, info: zipfile.ZipInfo, name: str, target: Path) -> int:
+    """Copy one entry in chunks, stopping at `MAX_ENTRY_BYTES`; return the bytes written."""
+    written = 0
+    try:
+        with archive.open(info) as source, target.open("wb") as sink:
+            while chunk := source.read(_COPY_CHUNK_BYTES):
+                written += len(chunk)
+                if written > MAX_ENTRY_BYTES:
+                    raise LibraryIntegrityError(
+                        name, f"expands to more than {MAX_ENTRY_BYTES} bytes"
+                    )
+                sink.write(chunk)
+    except (zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError, RuntimeError) as error:
+        raise LibraryIntegrityError(name, f"cannot be read from the zip: {error}") from error
+    return written
 
 
 def _extract(archive_bytes: bytes, into: Path) -> None:
@@ -134,17 +165,30 @@ def _extract(archive_bytes: bytes, into: Path) -> None:
         raise LibraryIntegrityError("snapshot zip", "is not a valid zip file") from error
     with archive:
         infos = archive.infolist()
-        names = [_safe_member_path(info.filename.removesuffix("/")) for info in infos]
+        names = [_safe_member_path(info.filename) for info in infos]
         if len(set(names)) != len(names):
             raise LibraryIntegrityError("snapshot zip", "contains a repeated entry name")
-        for info, name in zip(infos, names, strict=True):
-            if info.is_dir():
-                continue
+        files = [(info, name) for info, name in zip(infos, names, strict=True) if not info.is_dir()]
+        for info, name in files:
+            if info.file_size > MAX_ENTRY_BYTES:
+                raise LibraryIntegrityError(
+                    name, f"is larger than {MAX_ENTRY_BYTES} bytes once extracted"
+                )
+        if sum(info.file_size for info, _ in files) > MAX_TOTAL_UNCOMPRESSED_BYTES:
+            raise LibraryIntegrityError(
+                "snapshot zip", f"total size exceeds {MAX_TOTAL_UNCOMPRESSED_BYTES} bytes"
+            )
+        total = 0
+        for info, name in files:
             if stat.S_ISLNK(info.external_attr >> 16):
                 raise LibraryIntegrityError(name, "is a symbolic link in the zip")
             destination = into / name
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(archive.read(info))
+            total += _copy_entry(archive, info, name, destination)
+            if total > MAX_TOTAL_UNCOMPRESSED_BYTES:
+                raise LibraryIntegrityError(
+                    "snapshot zip", f"total size exceeds {MAX_TOTAL_UNCOMPRESSED_BYTES} bytes"
+                )
 
 
 def _swap_into_place(temp: Path, target: Path) -> None:
@@ -160,12 +204,10 @@ def _swap_into_place(temp: Path, target: Path) -> None:
             old.rename(target)
         raise
     if replaced:
-        shutil.rmtree(old)
+        shutil.rmtree(old, ignore_errors=True)
 
 
-def fetch_snapshot(
-    tag: str, dest: Path, transport: httpx.BaseTransport, base_url: str
-) -> Manifest:
+def fetch_snapshot(tag: str, dest: Path, transport: httpx.BaseTransport, base_url: str) -> Manifest:
     """Download release `tag`, verify it and install it as `<dest>/library`; return its manifest.
 
     Raises `SnapshotFetchError` for a failed download and `LibraryIntegrityError` for any
@@ -176,9 +218,9 @@ def fetch_snapshot(
     _checked_tag(tag)
     release_url = f"{base_url.rstrip('/')}/{tag}"
     with httpx.Client(transport=transport, timeout=_REQUEST_TIMEOUT_S) as client:
-        manifest_bytes = _get(client, f"{release_url}/{MANIFEST_NAME}", _MAX_MANIFEST_BYTES)
+        manifest_bytes = _get(client, f"{release_url}/{MANIFEST_NAME}", MAX_MANIFEST_BYTES)
         manifest = _read_manifest_bytes(manifest_bytes, "the downloaded manifest")
-        archive_bytes = _get(client, f"{release_url}/{snapshot_name(tag)}", _MAX_SNAPSHOT_BYTES)
+        archive_bytes = _get(client, f"{release_url}/{snapshot_name(tag)}", MAX_SNAPSHOT_BYTES)
 
     dest.mkdir(parents=True, exist_ok=True)
     temp = dest / f".{_LIBRARY_DIR}.tmp-{os.getpid()}"
