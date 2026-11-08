@@ -5,6 +5,7 @@ import pytest
 pytest.importorskip("lightgbm")
 pytest.importorskip("qlib")
 pytest.importorskip("scipy")
+pytest.importorskip("yaml")
 
 import datetime as dt  # noqa: E402
 import hashlib  # noqa: E402
@@ -229,6 +230,36 @@ def test_true_graph_beats_its_shuffle_on_planted_spillover(planted_market):
     assert means["true"] == pytest.approx(ic["true"]) and means["placebo"] == pytest.approx(
         ic["placebo"]
     )
+
+
+def test_an_empty_ripple_panel_raises_in_the_ladder_and_the_spine_handler_zero_fills_it(
+    planted_market, tmp_path
+):
+    """Pins what the code does: the ladder refuses a graph that reached no receiver (scoring it
+    would read as "the graph carried nothing"), while the spine's dataset layer, given an empty
+    ripple panel, zero-fills every ripple column. Ripple's choice is the raise."""
+    from qlib.data.dataset.handler import DataHandlerLP
+
+    from precedent.ripple.ripple_factors import PANEL_COLUMNS, build_ripple_factor_panel
+    from precedent.spine.qlib_dataset import make_alpha_handler
+
+    no_links = graph_function([], tmp_path / "no_links")
+    with pytest.raises(ValueError, match="no ripple factor rows"):
+        evaluate_graph_ladder({"empty": no_links}, **planted_market.kwargs, horizons=(1,))
+    assert not (planted_market.kwargs["out_dir"] / "ladder.csv").exists()
+
+    kwargs = planted_market.kwargs
+    panel = build_ripple_factor_panel(
+        kwargs["shocks"], no_links, CUTOFFS, SESSIONS, kwargs["abnormal_returns"]
+    )
+    assert panel.empty and list(panel.columns) == PANEL_COLUMNS
+    start, end = SESSIONS[100].date().isoformat(), SESSIONS[110].date().isoformat()
+    handler, report = make_alpha_handler(price_loader_for_horizon(1), {"ripple_": panel}, start, end)
+    frame = handler.fetch(col_set="feature", data_key=DataHandlerLP.DK_I)
+    ripple = frame.filter(like="ripple_")
+    assert sorted(ripple.columns) == sorted(PANEL_COLUMNS) and len(frame) > 0
+    assert (ripple == 0.0).all().all()
+    assert report.events_without_price_row == 0
 
 
 def test_ladder_records_every_rung_with_the_horizon_label_and_calls_folds_per_horizon(

@@ -2,7 +2,7 @@
 
 **Written:** 2026-11-07, from the code in this checkout and the documents under `docs/`.
 **For:** the owner, as a developer new to this codebase and to event-study ideas.
-**Status of what it describes:** the spine (spine plan Tasks 1 to 16) is built and tested on synthetic data only. Nothing has run end to end on live data or with a live model. The Precedent product track (libraries, card, `ask`, snapshot, MCP server) and the Dream, Ripple and Mechanism tracks are **planned**, not built. Every section below says which it is.
+**Status of what it describes:** the spine (spine plan Tasks 1 to 16) is built and tested on synthetic data only. Nothing has run end to end on live data or with a live model. The Ripple track (Ripple plan Tasks 1 to 9) is also built and tested, on synthetic data and fakes only; its live runs, the embedding download and model extraction are owner gates that have not been made. The Precedent product track (libraries, card, `ask`, snapshot, MCP server) and the Dream and Mechanism tracks are **planned**, not built. Every section below says which it is.
 
 Where this manual gives a market fact, it comes from the product thesis (`docs/2026-11-07-product-thesis.md`) and is attributed to it. It contains no benchmark or result that the repository has not produced.
 
@@ -86,7 +86,7 @@ Four tracks share one spine (amendment A1, thesis section 3):
 | Spine | Ingest, type, align, price, leak-test | `precedent.spine` | Built (Tasks 1 to 16) |
 | Precedent | The product: libraries, engine, card, MCP | `precedent.libraries`, `precedent.engine`, `precedent.mcp_server` | Planned |
 | Dream | Overnight contradiction diff; content engine for the brief | `precedent.dream` | Planned |
-| Ripple | Shocks along a dated company-link graph; gated on a price licence | `precedent.ripple` | Planned |
+| Ripple | Shocks along a dated company-link graph, each graph beside a shuffled placebo; gated on a price licence | `precedent.ripple` | Built (Tasks 1 to 9) on synthetic data and fakes; live runs, embeddings and model extraction are owner gates |
 | Mechanism | Small causal graphs and what-if rollouts; research and content only | `precedent.mechanism` | Planned |
 
 Data flow from sources to the card:
@@ -283,7 +283,8 @@ Qlib cannot short, so `long_short_returns` does the long-short accounting outsid
 | `prices` | `precedent.spine.prices_cli:run` | yes |
 | `typers` | `precedent.spine.typers.cli:run` | yes |
 | `ask`, `fetch`, `build`, `evaluate`, `mcp` | `precedent.engine.*`, `precedent.libraries.build`, `precedent.mcp_server` | no |
-| `dream`, `ripple`, `mechanism` | the track packages | no |
+| `ripple` | `precedent.ripple.report:run`, the daily map (research extra) | yes |
+| `dream`, `mechanism` | the track packages | no |
 
 `config.py` is the only module allowed to name a model id, a base URL or a data-dir default (a test greps for it).
 
@@ -295,6 +296,27 @@ Qlib cannot short, so `long_short_returns` does the long-short accounting outsid
 | `ANTHROPIC_API_KEY` | `AnthropicTyper` | none |
 | `PRECEDENT_OLLAMA_BASE_URL`, `PRECEDENT_OLLAMA_MODEL` | `OllamaTyper` | none |
 | `PRECEDENT_MODEL_BASE_URL` | the llama.cpp parser runtime | reserved; its module (spine Task 18) is not built |
+
+### 4.17 Ripple, a track on the spine — `src/precedent/ripple/`, `scripts/run_ripple_m1.py`
+
+Built and tested on synthetic data and fakes only (STATUS labels `SYNTHETIC` and `NO LIVE RUN`). The owner gates are the live ladder run on real prices and 8-K events, the embedding model download for G3, and model extraction and gold labelling for G4. Ripple answers one question: does a price shock at one company, carried along a *dated* link to another company, say anything about that company's later returns beyond what its own price features say, and does a graph beat its own shuffled version? It reports history on past data, not a forecast. A link is valid only from the acceptance time of the document that states it, and `graph_asof` is the only way code reads links.
+
+| Module | What it does | Needs the research extra? |
+|---|---|---|
+| `link_store.py`, `params.py` | The dated `Link` schema (a model-extracted link must quote evidence), the append-only JSON Lines store, `graph_asof`; the proposed parameters from `references/ripple_params.json` | no |
+| `control_graphs.py` | G1 sector graph, G2 residual-correlation graph, and the degree-preserving placebo (shuffled within each relation, so per-relation degrees are kept; a relation no swap can change is left as it is and counted) | no |
+| `peer_links.py`, `filing_text.py` | G3: Item 1 of 10-Ks, embedded through an injected embedder, point-in-time top-k peers (a later, more similar filer displaces an earlier link when it is filed) | no |
+| `link_extraction.py` | G4: a model (injected, faked in tests) proposes counterparties and quotes; code keeps a link only if the quote is in the passage, the counterparty resolves, and the counterparty is named inside the quote | no |
+| `shocks.py` | Price shocks (the market-model abnormal return on an 8-K's effective session) and text shocks | no |
+| `graph_builders.py` | The abnormal-return frame, the rolling G2 snapshots, the cached `graph_asof` reader, the placebo reader, and the ledger writer (shocks, abnormal returns, one graph's links, manifest with hashes) | no |
+| `ladder_report.py` | The rank-IC table, each graph beside its placebo, the tolerance rule and verdict lines, the comparison count | no |
+| `propagate.py` | Adjacency (each receiver's incoming weights sum to 1) and `sum_k alpha^k A^k shock` for alpha 0.5, hops 2 | yes (scipy) |
+| `ripple_factors.py` | The `ripple_` factor panel per (session, instrument): five propagated columns decayed by age, plus `ripple_unabsorbed` | yes (scipy) |
+| `evaluate.py` | The ladder: for each graph and horizon (1, 5, 20, 60) the spine ablation on the baseline rung and the baseline plus `ripple_` rung | yes (Qlib, LightGBM, PyYAML) |
+| `report.py` | `precedent ripple --date`: the daily map of the largest shocks, what the dated graph says they reach, with evidence per link | yes (scipy, through `propagate`) |
+| `scripts/run_ripple_m1.py` | Wires the above; `--dry-run` checks inputs (including that the Qlib calendar equals the price sessions); `--publish --publish-graph g1\|g2` writes the ledger the map reads | at run time |
+
+Channels name where the shock comes from: `customer_of` feeds `ripple_customer`, `supplier_of` `ripple_supplier`, `peer_of` `ripple_peer`, the two commodity relations `ripple_commodity`; `country_exposure` has no factor column and appears only in the map. In this milestone shocks come only from company 8-Ks, so the commodity channel cannot fire and a zero `ripple_commodity` column is not a finding. A graph's placebo is the same graph with who-links-to-whom shuffled; it is never reported without it, and a graph "beats" its placebo only when the margin exceeds the larger of 0.01 rank IC and 2 standard errors of the per-fold difference.
 
 ---
 
@@ -320,7 +342,7 @@ Source: `docs/superpowers/plans/2026-11-06-precedent.md`. Nothing in this sectio
 
 **Committed sample (Task 15, owner gate).** About two months of real GDELT events and resolved markets under `data/sample/`, under 2 MB, cited, with no prices and no question text, so the offline demo runs and mostly refuses.
 
-**Dream, Ripple, Mechanism (planned, separate plans).** Dream builds a bi-temporal claim layer and a nightly diff of tensions and silent shifts for the brief. Ripple propagates shocks along dated company links and must beat a shuffled-graph placebo. Mechanism fits small template causal graphs and shows a fan chart beside Precedent's band. All three reuse the spine's clocks and time guard.
+**Dream and Mechanism (planned, separate plans).** Dream builds a bi-temporal claim layer and a nightly diff of tensions and silent shifts for the brief. Mechanism fits small template causal graphs and shows a fan chart beside Precedent's band. Both reuse the spine's clocks and time guard. **Ripple is built** (section 4.17): it propagates shocks along dated company links and reports every graph beside a shuffled-graph placebo; only its live runs are not made.
 
 ---
 
@@ -407,6 +429,9 @@ A model typer always needs an explicit `--max-calls`; `--dry-run` opens no socke
 | Vintage | One `parser_version`'s set of records; re-parsing creates a new vintage. |
 | Oracle | The external check a loop is judged by. |
 | Owner gate | A step that waits for the owner's explicit yes. |
+| Link (Ripple) | A dated, directed relation between two names (customer, supplier, peer, commodity, country), valid from its document's acceptance time and read only through `graph_asof`. |
+| Ripple factor | A receiver's propagated shock: `sum_k alpha^k A^k shock` over the links known at the shock session's cutoff. |
+| Degree-preserving placebo | A graph with every name's in- and out-links kept per relation but different partners; the control each graph must beat. |
 
 ## 9. Read next, in order
 
