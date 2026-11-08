@@ -1,0 +1,31 @@
+{
+  "event_type": "earnings",
+  "graph_version": "template-v1",
+  "rationale": "Textbook earnings-surprise channel. The direction sign is the typer's sign for the surprise (positive = beat). A beat lifts risk_appetite (+) and broad equity indices (SPY +, QQQ +, IWM +). Sector and company effects are not modelled here. Documentation, not data.",
+  "edges": [
+    {
+      "source": "event:earnings:direction_sign",
+      "target": "risk_appetite",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "SPY",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "QQQ",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "IWM",
+      "sign": 1,
+      "lag_band": "same_session"
+    }
+  ]
+}

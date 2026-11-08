@@ -1,0 +1,55 @@
+{
+  "event_type": "macro_data_release",
+  "graph_version": "template-v1",
+  "rationale": "Textbook data-surprise channel. The direction sign is the typer's sign for the surprise (positive = stronger than expected growth or inflation). A stronger surprise raises rates_expectation (TLT -, IEF -, UUP +) and, through growth, risk_appetite (SPY +, IWM +, HYG +). Documentation, not data.",
+  "edges": [
+    {
+      "source": "event:macro_data_release:direction_sign",
+      "target": "rates_expectation",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "event:macro_data_release:direction_sign",
+      "target": "risk_appetite",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "rates_expectation",
+      "target": "TLT",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "rates_expectation",
+      "target": "IEF",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "rates_expectation",
+      "target": "UUP",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "SPY",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "IWM",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "HYG",
+      "sign": 1,
+      "lag_band": "same_session"
+    }
+  ]
+}

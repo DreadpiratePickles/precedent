@@ -1,0 +1,43 @@
+{
+  "event_type": "central_bank",
+  "graph_version": "template-v1",
+  "rationale": "Textbook monetary transmission. The direction sign is the typer's sign for the policy-rate surprise (positive = tighter than expected). A tighter surprise raises rates_expectation; higher expected rates lower long-duration bond prices (TLT -), tighten risk appetite (risk_appetite -) and strengthen the dollar (UUP +); risk appetite moves equities and high-yield credit in the same direction (SPY +, HYG +). Documentation, not data.",
+  "edges": [
+    {
+      "source": "event:central_bank:direction_sign",
+      "target": "rates_expectation",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "rates_expectation",
+      "target": "TLT",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "rates_expectation",
+      "target": "risk_appetite",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "SPY",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "HYG",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "rates_expectation",
+      "target": "UUP",
+      "sign": 1,
+      "lag_band": "same_session"
+    }
+  ]
+}

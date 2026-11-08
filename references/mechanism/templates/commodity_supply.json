@@ -1,0 +1,37 @@
+{
+  "event_type": "commodity_supply",
+  "graph_version": "template-v1",
+  "rationale": "Textbook oil-supply channel. The direction sign is the typer's sign for the change in supply (positive = more supply). More supply lowers oil prices (oil_supply -> USO -, oil_supply -> XLE -) and, as an input-cost relief, lifts risk_appetite (+) and so SPY (+). Documentation, not data.",
+  "edges": [
+    {
+      "source": "event:commodity_supply:direction_sign",
+      "target": "oil_supply",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "oil_supply",
+      "target": "USO",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "oil_supply",
+      "target": "XLE",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "oil_supply",
+      "target": "risk_appetite",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "SPY",
+      "sign": 1,
+      "lag_band": "same_session"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "event_type": "guidance",
+  "graph_version": "template-v1",
+  "rationale": "Textbook guidance channel. The direction sign is the typer's sign for the revision (positive = raised guidance). Raised guidance lifts risk_appetite (+; SPY +, IWM +) and narrows credit_spread (- edge from risk_appetite; HYG - on the spread). Documentation, not data.",
+  "edges": [
+    {
+      "source": "event:guidance:direction_sign",
+      "target": "risk_appetite",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "SPY",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "IWM",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "credit_spread",
+      "sign": -1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "credit_spread",
+      "target": "HYG",
+      "sign": -1,
+      "lag_band": "same_session"
+    }
+  ]
+}

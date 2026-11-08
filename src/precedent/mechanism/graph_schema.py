@@ -208,3 +208,18 @@ class CausalGraph(BaseModel):
 def graph_json_schema() -> dict:
     """The JSON Schema of a causal graph; `references/mechanism/graph_schema_v1.json` copies it."""
     return CausalGraph.model_json_schema()
+
+
+def descendants(graph: CausalGraph, node_id: str) -> set[str]:
+    """Every node reachable from `node_id` along edges, excluding `node_id` itself."""
+    children: dict[str, list[str]] = {}
+    for edge in graph.edges:
+        children.setdefault(edge.source, []).append(edge.target)
+    reached: set[str] = set()
+    frontier = [node_id]
+    while frontier:
+        for child in children.get(frontier.pop(), []):
+            if child not in reached:
+                reached.add(child)
+                frontier.append(child)
+    return reached

@@ -9,6 +9,7 @@ Produce one validated causal graph per event key, from event variable to asset p
 | `references/mechanism/intermediates.json` | 3 | Authoritative for the intermediate node vocabulary | Yes | All entries |
 | `references/mechanism/params.json` | 3 | Authoritative for the asset panel until `engine.asset_panel` exists in `references/precedent_params.json` | Yes | `asset_panel` |
 | `references/mechanism/graph_schema_v1.json` | 3 | Authoritative for the graph shape; generated from `graph_json_schema()` | Yes | All |
+| `references/mechanism/templates/<event_type>.json` | 3 | Authoritative for the hand-written template edges of one event type; `rationale` is documentation | Yes | `edges` |
 | `references/mechanism/graph_prompt_v*.txt` | 3 | Authoritative for the graph proposer's instructions (Task 8) | Model phase only | Latest version |
 | Event keys from the Precedent track or the spine | 4 | Authoritative for which graphs to build | Yes | `EventKey` |
 | Gold set (40 development and 20 held-out passages) | 3 | Authoritative for scoring; read-only to the worker | Model phase only | Design Mechanism section |

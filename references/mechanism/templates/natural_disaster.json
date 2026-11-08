@@ -1,0 +1,37 @@
+{
+  "event_type": "natural_disaster",
+  "graph_version": "template-v1",
+  "rationale": "Textbook disaster channel. The direction sign is the typer's sign for risk appetite (negative = damaging disaster). A damaging disaster lowers risk_appetite (+ edge; SPY +, IWM +) and, over days, demand for the financial sector through insured losses (sector_demand:XLF +, then XLF +). Documentation, not data.",
+  "edges": [
+    {
+      "source": "event:natural_disaster:direction_sign",
+      "target": "risk_appetite",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "event:natural_disaster:direction_sign",
+      "target": "sector_demand:XLF",
+      "sign": 1,
+      "lag_band": "days"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "SPY",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "risk_appetite",
+      "target": "IWM",
+      "sign": 1,
+      "lag_band": "same_session"
+    },
+    {
+      "source": "sector_demand:XLF",
+      "target": "XLF",
+      "sign": 1,
+      "lag_band": "days"
+    }
+  ]
+}
