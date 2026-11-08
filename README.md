@@ -8,7 +8,8 @@ Precedent takes a new event (a headline, a filing, a market question) and shows 
 |---|---|---|
 | Spine (ingest, typing, point-in-time alignment, prices, factors, ablation machinery) | Built and tested on synthetic data and fakes | `SYNTHETIC` / `NO LIVE RUN` |
 | Product track (library build, `precedent ask`, the card, MCP server) | Not started; `precedent-mcp` is a stub that exits 2 | none |
-| Research tracks (Ripple, Dream, Mechanism) | Planned only | none |
+| Ripple research track (dated link graph, factors, graph ladder, daily map) | Built and tested on synthetic data and fakes; live runs and model extraction are owner gates | `SYNTHETIC` / `NO LIVE RUN` |
+| Research tracks (Dream, Mechanism) | Planned only | none |
 | Live data (GDELT download, EDGAR fetch, Polymarket and Kalshi crawls) | Owner gate not exercised | `NO LIVE RUN` |
 | Model calls (Anthropic, Ollama typers) | Owner gate not exercised | `NO LIVE RUN` |
 | Real price provider or vendor prices | Owner gate not exercised | `NO LIVE RUN` |
