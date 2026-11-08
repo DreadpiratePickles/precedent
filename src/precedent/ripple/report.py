@@ -4,9 +4,11 @@ For one NYSE session it lists the largest price shocks and, for each, the compan
 graph says it reaches, by channel, with the evidence for every link. It is history, not a forecast:
 only derived statistics (abnormal returns and propagated sizes) are shown, never a price.
 
-Reads `<data_dir>/ripple/`: `links/` (only through `graph_asof`), `shocks.parquet`,
+Reads `<data_dir>/ripple/`: `links/links.jsonl` (only through `graph_asof`; the one graph the
+run published, named in the manifest and in the map's header), `shocks.parquet`,
 `abnormal_returns.parquet` and `MANIFEST.json`, whose SHA-256 entries are checked before use.
-Exit codes: 0 rendered, 1 data error, 2 usage error (including a date that is not a session).
+Exit codes: 0 rendered, 1 data error (including a date outside the ledger's start to end),
+2 usage error (including a date that is not a session).
 """
 
 from __future__ import annotations
@@ -60,6 +62,7 @@ _BANNERS = {
 _SHOCK_FILE = "shocks.parquet"
 _ABNORMAL_FILE = "abnormal_returns.parquet"
 _LINKS_DIR = "links"
+_LINKS_FILE = "links/links.jsonl"
 _DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -124,7 +127,8 @@ def _banner_for(manifest: dict[str, Any]) -> str:
     return _BANNERS[label]
 
 
-def _read_checked_parquet(ripple_dir: Path, name: str, manifest: dict[str, Any]) -> pd.DataFrame:
+def _checked_bytes(ripple_dir: Path, name: str, manifest: dict[str, Any]) -> tuple[bytes, Any]:
+    """A listed file's bytes, after its presence and SHA-256 are checked; and its manifest entry."""
     entry = manifest["files"].get(name)
     if not isinstance(entry, dict) or "sha256" not in entry:
         raise DataError(f"{LEDGER_MANIFEST_NAME} does not list {name} with a sha256")
@@ -135,6 +139,41 @@ def _read_checked_parquet(ripple_dir: Path, name: str, manifest: dict[str, Any])
         raise DataError(f"{name} is listed in the manifest but cannot be read: {error}") from error
     if hashlib.sha256(content).hexdigest() != entry["sha256"]:
         raise DataError(f"{name} does not match the SHA-256 in {LEDGER_MANIFEST_NAME}")
+    return content, entry
+
+
+def _check_links_file(ripple_dir: Path, manifest: dict[str, Any]) -> str:
+    """Check the published link store against the manifest; return the published graph's name."""
+    content, entry = _checked_bytes(ripple_dir, _LINKS_FILE, manifest)
+    rows = sum(1 for line in content.decode("utf-8", errors="replace").splitlines() if line.strip())
+    if "rows" in entry and entry["rows"] != rows:
+        raise DataError(f"{_LINKS_FILE} has {rows} rows, the manifest says {entry['rows']}")
+    graph = manifest.get("published_graph")
+    if not isinstance(graph, str) or not graph.strip():
+        raise DataError(f"{LEDGER_MANIFEST_NAME} does not name the published graph")
+    return graph
+
+
+def _check_date_in_range(session: date, manifest: dict[str, Any]) -> None:
+    """A date outside the ledger's start to end would read as "no shocks": stop instead."""
+    start, end = manifest.get("start"), manifest.get("end")
+    if start is None and end is None:
+        return
+    try:
+        first, last = date.fromisoformat(str(start)), date.fromisoformat(str(end))
+    except ValueError as error:
+        raise DataError(
+            f"{LEDGER_MANIFEST_NAME} start and end must be YYYY-MM-DD: {error}"
+        ) from error
+    if not first <= session <= last:
+        raise DataError(
+            f"{session.isoformat()} is outside the Ripple ledger's range "
+            f"{first.isoformat()} to {last.isoformat()}"
+        )
+
+
+def _read_checked_parquet(ripple_dir: Path, name: str, manifest: dict[str, Any]) -> pd.DataFrame:
+    content, entry = _checked_bytes(ripple_dir, name, manifest)
     try:
         frame = pd.read_parquet(io.BytesIO(content))
     except (OSError, ValueError) as error:
@@ -277,8 +316,9 @@ def render_map(
     graph: pd.DataFrame,
     moves: pd.Series,
     alpha: float,
+    published_graph: str | None = None,
 ) -> str:
-    """The Markdown map; deterministic for the same inputs."""
+    """The Markdown map; deterministic for the same inputs. The header names `published_graph`."""
     header = [
         banner,
         "",
@@ -290,7 +330,8 @@ def render_map(
         "return on this session. No price is shown. The factor also carries a pooled hop-2 "
         "term that is not split per link here.",
         "",
-        f"Links known at the cutoff {cutoff_utc.isoformat()}; alpha {alpha}.",
+        f"Links known at the cutoff {cutoff_utc.isoformat()}; alpha {alpha}."
+        + (f" Link graph: {published_graph}." if published_graph else ""),
         "",
     ]
     if shocks.empty:
@@ -320,9 +361,11 @@ def _build_map(session: date, top: int, cutoff_utc: pd.Timestamp) -> str:
         )
     manifest = _read_manifest(manifest_path)
     banner = _banner_for(manifest)
+    _check_date_in_range(session, manifest)
     links_path = LinkStore(ripple_dir / _LINKS_DIR).path
     if not links_path.is_file():  # an absent store would read as "no links"
         raise DataError(f"the link store {links_path} is missing")
+    published_graph = _check_links_file(ripple_dir, manifest)
     stamp = pd.Timestamp(session)
     shocks = _session_shocks(_read_checked_parquet(ripple_dir, _SHOCK_FILE, manifest), stamp)
     moves = _session_moves(_read_checked_parquet(ripple_dir, _ABNORMAL_FILE, manifest), stamp)
@@ -334,7 +377,9 @@ def _build_map(session: date, top: int, cutoff_utc: pd.Timestamp) -> str:
         alpha = float(load_ripple_params()["alpha"])
     except (OSError, ValueError, KeyError) as error:
         raise DataError(f"cannot read the Ripple parameters: {error}") from error
-    return render_map(banner, session, cutoff_utc, shocks, top, graph, moves, alpha)
+    return render_map(
+        banner, session, cutoff_utc, shocks, top, graph, moves, alpha, published_graph
+    )
 
 
 def run(argv: list[str]) -> int:

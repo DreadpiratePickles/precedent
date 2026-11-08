@@ -85,7 +85,10 @@ def populated_ripple_stores(tmp_path, monkeypatch):
     abnormal = pd.DataFrame(
         {"CCC": [0.0123, 0.0], "DDD": [np.nan, 0.0], "EEE": [-0.0045, 0.0]}, index=sessions
     )
-    write_ripple_ledger(ripple_dir, shocks, abnormal, {"evidence_label": "SYNTHETIC"})
+    write_ripple_ledger(
+        ripple_dir, shocks, abnormal, {"evidence_label": "SYNTHETIC"},
+        links=store.read_all(), published_graph="g1",
+    )
     return ripple_dir
 
 
@@ -299,3 +302,84 @@ def test_the_console_script_reaches_the_report(tmp_path, populated_ripple_stores
     out = tmp_path / "map.md"
     assert cli.main(["ripple", "--date", MAP_DATE, "--out", str(out)]) == 0
     assert out.read_text(encoding="utf-8").startswith("SYNTHETIC —")
+
+
+def _edit_manifest(ripple_dir, **changes):
+    path = ripple_dir / "MANIFEST.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest.update(changes)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_the_header_names_the_published_graph(tmp_path, populated_ripple_stores):
+    text = _render(tmp_path)
+    assert "Link graph: g1." in text
+    manifest = json.loads((populated_ripple_stores / "MANIFEST.json").read_text())
+    assert manifest["published_graph"] == "g1"
+
+
+def test_a_tampered_link_store_is_a_data_error(tmp_path, populated_ripple_stores, capsys):
+    path = populated_ripple_stores / "links" / "links.jsonl"
+    path.write_bytes(path.read_bytes() + b"\n")
+    assert run(["--date", MAP_DATE, "--out", str(tmp_path / "map.md")]) == 1
+    assert "links/links.jsonl" in capsys.readouterr().err
+
+
+def test_a_link_store_the_manifest_does_not_list_is_a_data_error(
+    tmp_path, populated_ripple_stores, capsys
+):
+    manifest = json.loads((populated_ripple_stores / "MANIFEST.json").read_text(encoding="utf-8"))
+    del manifest["files"]["links/links.jsonl"]
+    (populated_ripple_stores / "MANIFEST.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert run(["--date", MAP_DATE, "--out", str(tmp_path / "map.md")]) == 1
+    assert "links/links.jsonl" in capsys.readouterr().err
+
+
+def test_a_manifest_without_the_published_graph_is_a_data_error(
+    tmp_path, populated_ripple_stores, capsys
+):
+    manifest = json.loads((populated_ripple_stores / "MANIFEST.json").read_text(encoding="utf-8"))
+    del manifest["published_graph"]
+    (populated_ripple_stores / "MANIFEST.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert run(["--date", MAP_DATE, "--out", str(tmp_path / "map.md")]) == 1
+    assert "published graph" in capsys.readouterr().err
+
+
+def test_an_empty_published_link_store_is_valid_and_renders_no_links(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PRECEDENT_DATA_DIR", str(tmp_path / "data"))
+    ripple_dir = data_dir() / "ripple"
+    shocks = pd.Series(
+        [0.08],
+        index=pd.MultiIndex.from_arrays(
+            [pd.DatetimeIndex(["2024-06-03"]).as_unit("ns"), ["AAA"]],
+            names=["datetime", "instrument"],
+        ),
+        name="shock",
+    )
+    abnormal = pd.DataFrame({"CCC": [0.01]}, index=pd.DatetimeIndex(["2024-06-03"]).as_unit("ns"))
+    write_ripple_ledger(
+        ripple_dir, shocks, abnormal, {"evidence_label": "SYNTHETIC"},
+        links=[], published_graph="g2",
+    )
+    assert (ripple_dir / "links" / "links.jsonl").read_bytes() == b""
+    text = _render(tmp_path)
+    assert "No links reach this name at the cutoff." in text and "Link graph: g2." in text
+
+
+def test_a_date_outside_the_ledger_range_exits_1_naming_the_range(
+    tmp_path, populated_ripple_stores, capsys
+):
+    _edit_manifest(populated_ripple_stores, start="2024-06-03", end="2024-06-04")
+    out = tmp_path / "map.md"
+    assert run(["--date", "2024-06-05", "--out", str(out)]) == 1
+    err = capsys.readouterr().err
+    assert "2024-06-05" in err and "2024-06-03" in err and "2024-06-04" in err
+    assert not out.exists()
+    assert run(["--date", "2024-05-31", "--out", str(out)]) == 1  # before the start, too
+    capsys.readouterr()
+    # both ends of the range are inside it
+    assert run(["--date", "2024-06-03", "--out", str(out)]) == 0
+    assert run(["--date", "2024-06-04", "--out", str(out)]) == 0
+    assert "No shocks on this session." in out.read_text(encoding="utf-8")

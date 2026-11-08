@@ -7,6 +7,7 @@ pytest.importorskip("qlib")
 pytest.importorskip("scipy")
 
 import datetime as dt  # noqa: E402
+import hashlib  # noqa: E402
 import importlib.util  # noqa: E402
 import json  # noqa: E402
 import subprocess  # noqa: E402
@@ -647,11 +648,33 @@ def test_script_main_writes_the_report_beside_the_placebo_and_publishes_only_whe
     assert (out_dir / "links" / "g2" / "links.jsonl").exists()
     assert not script_inputs.data_dir.exists()  # nothing is written to the ledger by default
 
+    # --publish with two graphs needs --publish-graph: a usage error, nothing written
+    for stray in (
+        ("--publish",),  # two graphs, no choice
+        ("--publish", "--publish-graph", "g1", "--graphs", "g2"),  # not among the graphs
+        ("--publish-graph", "g1"),  # without --publish
+    ):
+        arguments = script_inputs.arguments("--out-dir", str(script_inputs.root / "no_run"), *stray)
+        result = run_script(*arguments, cwd=script_inputs.root)
+        assert result.returncode == 2, stray
+    assert not (script_inputs.root / "no_run").exists()
+    assert not script_inputs.data_dir.exists()
+
+
+def test_publish_then_the_daily_map_runs_end_to_end(script_inputs, monkeypatch):
+    from precedent.ripple.report import run as run_map
+
+    script = load_script()
+
+    def small_loader_factory(horizon):
+        monkeypatch.setitem(C, "kernels", 1)  # called after Qlib is initialised
+        return price_loader_for_horizon(horizon)
+
     published = script_inputs.root / "run_published"
     exit_code = script.main(
         script_inputs.arguments(
             "--evidence-label", "SYNTHETIC", "--horizons", "1", "--graphs", "g1",
-            "--out-dir", str(published), "--publish",
+            "--out-dir", str(published), "--publish",  # one graph chosen: it is published
         ),
         price_loader_factory=small_loader_factory,
         lgb_params=LGB_PARAMS,
@@ -659,10 +682,28 @@ def test_script_main_writes_the_report_beside_the_placebo_and_publishes_only_whe
     assert exit_code == 0
     ripple_dir = script_inputs.data_dir / "ripple"
     assert {path.name for path in ripple_dir.iterdir()} == {
-        "shocks.parquet", "abnormal_returns.parquet", "MANIFEST.json",
+        "shocks.parquet", "abnormal_returns.parquet", "MANIFEST.json", "links",
     }
     manifest = json.loads((ripple_dir / "MANIFEST.json").read_text(encoding="utf-8"))
-    assert manifest["evidence_label"] == "SYNTHETIC"
+    assert manifest["evidence_label"] == "SYNTHETIC" and manifest["published_graph"] == "g1"
+    assert manifest["start"] == script_inputs.start and manifest["end"] == script_inputs.end
+    links_entry = manifest["files"]["links/links.jsonl"]
+    stored = ripple_dir / "links" / "links.jsonl"
+    assert links_entry["sha256"] == hashlib.sha256(stored.read_bytes()).hexdigest()
+    assert links_entry["rows"] > 0
+    # the published links are g1's, byte for byte, and no placebo was written
+    assert stored.read_bytes() == (published / "links" / "g1" / "links.jsonl").read_bytes()
+    assert not (published / "links" / "g1_placebo").exists()
     shocks = pd.read_parquet(ripple_dir / "shocks.parquet")
     assert len(shocks) > 0 and set(shocks["instrument"]) <= set(SOURCES[:10])
     assert (shocks["datetime"] >= SESSIONS[FIRST_EVENT_POSITION]).all()
+
+    session = pd.Timestamp(shocks["datetime"].iloc[0]).date().isoformat()
+    map_path = script_inputs.root / "map.md"
+    assert run_map(["--date", session, "--out", str(map_path)]) == 0
+    text = map_path.read_text(encoding="utf-8")
+    link_rows = [line for line in text.splitlines() if line.startswith("| ->")]
+    assert link_rows and all("doc:" in line for line in link_rows)
+    assert text.startswith("SYNTHETIC —") and "Link graph: g1." in text
+    # a session after the run's end is outside the ledger, not "no shocks"
+    assert run_map(["--date", "2024-06-03"]) == 1

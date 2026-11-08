@@ -41,6 +41,7 @@ from precedent.ripple.params import load_ripple_params
 from precedent.ripple.shocks import price_shocks
 from precedent.spine.edgar_8k_events import edgar_parser_version
 from precedent.spine.event_store import EventStore
+from precedent.spine.jsonl_io import atomic_write_lines
 from precedent.spine.price_provider import ParquetPriceProvider, load_returns
 from precedent.spine.session_calendar import calendar_cutoffs, load_nyse_calendar
 
@@ -114,8 +115,31 @@ def build_parser() -> argparse.ArgumentParser:
         parser.add_argument(f"--{name.replace('_', '-')}", type=_positive_int, default=default)
     parser.add_argument("--evidence-label", choices=EVIDENCE_LABELS, default="LIVE-DATA")
     parser.add_argument("--publish", action="store_true", help="write <data>/ripple/ ledger files")
+    parser.add_argument(
+        "--publish-graph",
+        choices=GRAPH_CHOICES,
+        help="the one graph whose links the daily map reads (never a placebo); needed with "
+        "--publish unless --graphs names a single graph",
+    )
     parser.add_argument("--dry-run", action="store_true", help="check inputs, write nothing")
     return parser
+
+
+def _choose_published_graph(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Fix `args.publish_graph`; a usage error (exit 2) when it is missing, stray or not run."""
+    if args.publish_graph is not None and not args.publish:
+        parser.error("--publish-graph only applies together with --publish")
+    if not args.publish:
+        return
+    if args.publish_graph is None:
+        if len(args.graphs) != 1:
+            parser.error(
+                f"--publish needs --publish-graph {{{','.join(GRAPH_CHOICES)}}} when --graphs "
+                f"names more than one graph ({','.join(args.graphs)})"
+            )
+        args.publish_graph = args.graphs[0]
+    if args.publish_graph not in args.graphs:
+        parser.error(f"--publish-graph {args.publish_graph} is not among --graphs")
 
 
 def _sha256(path: Path) -> str:
@@ -179,7 +203,8 @@ def check_inputs(args: argparse.Namespace) -> list[str]:
         f" (placebo seed {args.seed}; G2 window {args.corr_window}, top {args.corr_top_k},"
         f" rebuilt every {args.rebuild_every} sessions)",
         f"horizons (sessions): {', '.join(str(h) for h in args.horizons)}; baseline: M0 price only",
-        f"label: {args.evidence_label}; ledger files written: {'yes' if args.publish else 'no'}",
+        f"label: {args.evidence_label}; ledger files written: "
+        + (f"yes (links of {args.publish_graph})" if args.publish else "no"),
         f"output: {args.out_dir.name}/ (report.md, ladder.csv, ladder_folds.csv, links/, ...)",
     ]
 
@@ -216,6 +241,8 @@ def _build_graphs(
             )
             counts["g2 snapshots"] = len(changes)
         store.append(links)
+        if not store.path.exists():  # an empty graph still has a store, so it can be hashed
+            atomic_write_lines(store.path, [])
         counts[f"{name} links"] = len(links)
         store_hashes[name] = _sha256(store.path)
         base = snapshot_graph_for_cutoff(store, changes)
@@ -334,6 +361,7 @@ def run(
         "seed": args.seed,
         "horizons": list(args.horizons),
         "graphs": list(args.graphs),
+        "published_graph": args.publish_graph if args.publish else None,
         "counts": counts,
         "links_sha256": store_hashes,
         "events_file_sha256": _sha256(EventStore(args.events_dir).path_for(args.parser_version)),
@@ -343,8 +371,18 @@ def run(
         args.out_dir / "run_manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     )
     if args.publish:
-        ledger = write_ripple_ledger(config.data_dir() / "ripple", shocks, abnormal, manifest)
-        print(f"ledger written: {ledger.parent.name}/{ledger.name} and its parquet files")
+        ledger = write_ripple_ledger(
+            config.data_dir() / "ripple",
+            shocks,
+            abnormal,
+            {key: value for key, value in manifest.items() if key != "published_graph"},
+            links=LinkStore(args.out_dir / "links" / args.publish_graph).read_all(),
+            published_graph=args.publish_graph,
+        )
+        print(
+            f"ledger written: {ledger.parent.name}/{ledger.name}, its parquet files and the "
+            f"links of {args.publish_graph}"
+        )
     print(f"report: {args.out_dir.name}/report.md")
     return 0
 
@@ -356,7 +394,9 @@ def main(
     lgb_params: Mapping[str, Any] | None = None,
 ) -> int:
     """Run the milestone. The two keyword seams let tests use a small loader and few trees."""
-    args = build_parser().parse_args(argv)  # exits 2 on a usage error
+    parser = build_parser()
+    args = parser.parse_args(argv)  # exits 2 on a usage error
+    _choose_published_graph(parser, args)
     try:
         _resolve_defaults(args)
         return run(args, price_loader_factory, lgb_params)

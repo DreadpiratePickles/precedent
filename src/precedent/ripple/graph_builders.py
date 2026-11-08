@@ -27,6 +27,7 @@ from precedent.ripple.control_graphs import (
 )
 from precedent.ripple.link_store import Link, LinkStore, graph_asof
 from precedent.spine.abnormal_returns import abnormal_return_at
+from precedent.spine.jsonl_io import atomic_write_lines
 
 GraphForCutoff = Callable[[pd.Timestamp], pd.DataFrame]
 _PLACEBO_KEY_COLUMNS = ["source_node", "receiver_node", "relation", "weight"]
@@ -188,22 +189,35 @@ def write_text_atomically(path: Path, text: str) -> None:
     _write_atomically(path, lambda temporary: temporary.write_text(text, encoding="utf-8"))
 
 
+LEDGER_LINKS_NAME = "links/links.jsonl"
+
+
 def write_ripple_ledger(
     ripple_dir: Path,
     shocks: pd.Series,
     abnormal_returns: pd.DataFrame,
     manifest: Mapping[str, Any],
+    *,
+    links: Sequence[Link] | None = None,
+    published_graph: str | None = None,
 ) -> Path:
-    """Write `shocks.parquet`, `abnormal_returns.parquet` and `MANIFEST.json` under `ripple_dir`.
+    """Write `shocks.parquet`, `abnormal_returns.parquet`, the links and `MANIFEST.json`.
 
     The manifest is the caller's fields (`evidence_label`, which must be `LIVE-DATA` or
-    `SYNTHETIC`, plus whatever identifies the run) and a `files` entry per parquet file with its
-    SHA-256 and row count. Every file is written through a temporary sibling and replaced
-    atomically, the manifest last. Returns the manifest path. Nothing is written when the
-    label is invalid.
+    `SYNTHETIC`, plus whatever identifies the run) and a `files` entry per written file with its
+    SHA-256 and row count. `links` is the one graph the daily map reads (never a placebo); it is
+    written to `links/links.jsonl` in full, replacing any earlier store, and the file exists even
+    when `links` is empty. A graph must then be named in `published_graph`, which the manifest
+    records, because two graphs (G1 and G2 are both `peer_of`) must never share one store. Every
+    file is written through a temporary sibling and replaced atomically, the manifest last.
+    Returns the manifest path. Nothing is written when the label or the pairing is invalid.
     """
     if manifest.get("evidence_label") not in EVIDENCE_LABELS:
         raise ValueError(f"manifest evidence_label must be one of {EVIDENCE_LABELS}")
+    if (links is None) != (published_graph is None):
+        raise ValueError("links and published_graph must be given together")
+    if published_graph is not None and not published_graph.strip():
+        raise ValueError("published_graph must be a non-empty graph name")
     shock_table = shocks.rename("shock").reset_index()
     abnormal_table = abnormal_returns.rename_axis("datetime").reset_index()
     ripple_dir.mkdir(parents=True, exist_ok=True)
@@ -215,7 +229,16 @@ def write_ripple_ledger(
         path = ripple_dir / name
         _write_atomically(path, lambda temporary, frame=table: frame.to_parquet(temporary))
         files[name] = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "rows": len(table)}
+    extra: dict[str, Any] = {}
+    if links is not None:
+        links_path = ripple_dir / LEDGER_LINKS_NAME
+        atomic_write_lines(links_path, [link.model_dump_json() for link in links])
+        files[LEDGER_LINKS_NAME] = {
+            "sha256": hashlib.sha256(links_path.read_bytes()).hexdigest(),
+            "rows": len(links),
+        }
+        extra["published_graph"] = published_graph
     manifest_path = ripple_dir / LEDGER_MANIFEST_NAME
-    document = json.dumps({**manifest, "files": files}, indent=2, sort_keys=True) + "\n"
+    document = json.dumps({**manifest, **extra, "files": files}, indent=2, sort_keys=True) + "\n"
     write_text_atomically(manifest_path, document)
     return manifest_path

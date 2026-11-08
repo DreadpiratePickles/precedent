@@ -318,3 +318,81 @@ def test_ledger_writer_requires_an_evidence_label(tmp_path):
     with pytest.raises(ValueError, match="evidence_label"):
         write_ripple_ledger(tmp_path / "ripple", shocks, pd.DataFrame({"A": [0.0]}), {})
     assert not (tmp_path / "ripple").exists()
+
+
+def _ledger_inputs():
+    shocks = pd.Series(
+        [0.04],
+        index=pd.MultiIndex.from_arrays(
+            [pd.DatetimeIndex(["2021-06-01"]).as_unit("ns"), ["A"]],
+            names=["datetime", "instrument"],
+        ),
+        name="shock",
+    )
+    return shocks, pd.DataFrame({"A": [0.01]}, SESSIONS[:1])
+
+
+def _link(source, receiver):
+    return Link(
+        source_node=source,
+        receiver_node=receiver,
+        relation=Relation.PEER_OF,
+        weight=0.5,
+        valid_from_utc=dt.datetime(2021, 1, 1, tzinfo=dt.UTC),
+        valid_to_utc=dt.datetime(2022, 1, 1, tzinfo=dt.UTC),
+        source_doc_id="d",
+        evidence_span=None,
+        extractor_version="rules-test",
+    )
+
+
+def test_ledger_writer_publishes_one_graphs_links_with_a_hash_and_replaces_them(tmp_path):
+    import hashlib
+
+    shocks, abnormal = _ledger_inputs()
+    ripple_dir = tmp_path / "ripple"
+    write_ripple_ledger(
+        ripple_dir, shocks, abnormal, {"evidence_label": "SYNTHETIC"},
+        links=[_link("A", "B"), _link("B", "A")], published_graph="g2",
+    )
+    manifest = json.loads((ripple_dir / "MANIFEST.json").read_text(encoding="utf-8"))
+    path = ripple_dir / "links" / "links.jsonl"
+    assert manifest["published_graph"] == "g2"
+    assert manifest["files"]["links/links.jsonl"] == {
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "rows": 2,
+    }
+    assert len(LinkStore(ripple_dir / "links").read_all()) == 2
+    # a later publish replaces the store instead of appending to it
+    write_ripple_ledger(
+        ripple_dir, shocks, abnormal, {"evidence_label": "SYNTHETIC"},
+        links=[_link("A", "C")], published_graph="g1",
+    )
+    assert [(x.source_node, x.receiver_node) for x in LinkStore(ripple_dir / "links").read_all()] == [
+        ("A", "C")
+    ]
+    manifest = json.loads((ripple_dir / "MANIFEST.json").read_text(encoding="utf-8"))
+    assert manifest["published_graph"] == "g1" and manifest["files"]["links/links.jsonl"]["rows"] == 1
+
+
+def test_ledger_writer_makes_the_link_file_even_when_the_graph_is_empty(tmp_path):
+    shocks, abnormal = _ledger_inputs()
+    write_ripple_ledger(
+        tmp_path / "ripple", shocks, abnormal, {"evidence_label": "SYNTHETIC"},
+        links=[], published_graph="g1",
+    )
+    assert (tmp_path / "ripple" / "links" / "links.jsonl").read_bytes() == b""
+    manifest = json.loads((tmp_path / "ripple" / "MANIFEST.json").read_text(encoding="utf-8"))
+    assert manifest["files"]["links/links.jsonl"]["rows"] == 0
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"links": []}, {"published_graph": "g1"}, {"links": [], "published_graph": " "}]
+)
+def test_ledger_writer_needs_links_and_a_graph_name_together(tmp_path, kwargs):
+    shocks, abnormal = _ledger_inputs()
+    with pytest.raises(ValueError):
+        write_ripple_ledger(
+            tmp_path / "ripple", shocks, abnormal, {"evidence_label": "SYNTHETIC"}, **kwargs
+        )
+    assert not (tmp_path / "ripple").exists()
