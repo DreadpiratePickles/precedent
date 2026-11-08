@@ -13,3 +13,17 @@ This folder ships inside the wheel as `precedent/references/` (see `pyproject.to
 - `precedent_params.json`: tunable parameters, one section per user; the `gdelt` section holds the GDELT filter, severity and latency values, all proposed (decision B4).
 - Citation terms, from the GDELT Project's terms page (`gdeltproject.org/about.html`, read 2026-11-07): the data may be used without fee for academic, commercial or governmental use, and may be redistributed, rehosted or mirrored in any form, but any use or redistribution "must include a citation to the GDELT Project" and a link to `https://www.gdeltproject.org/`.
 - Citation wording used here, for any surface that shows GDELT-derived events or code descriptions: `Source: the GDELT Project, https://www.gdeltproject.org/`. No GDELT export row or article text is committed.
+
+## Dream files
+
+- `dream/claim_vocabulary.json`: the claim attribute, period and value lists, the conflicting value pairs and the proposed 8-K item map (all proposed until the owner approves).
+- `dream/detector_params.json`: detector windows and thresholds, review sample size and the precision a detector must keep, all proposed.
+- `dream/claim_schema_v1.json`: the JSON Schema of a stored claim, generated from `claim_json_schema()`; a test keeps the two equal.
+## Ripple
+
+- `ripple_params.json`: the Ripple propagation, decay, link-expiry and correlation-peer parameters (design section 9.5) and the placebo noise floor (`placebo_margin_floor`, `placebo_margin_se_multiple`: a graph beats its placebo only when the margin clears the larger of the floor and that many standard errors of the per-fold difference), all proposed; read by `load_ripple_params` in `precedent.ripple.params`.
+- `rungs/m3_ripple_*.yaml`: the Ripple ablation rungs (G1 sector, G2 correlation, G3 10-K text similarity, G4 model-extracted links, degree-preserving placebo), each `panel_prefixes: ["news_", "ripple_"]`; which graph builds the `ripple_` panel is decided by the caller, not by these files.
+- `link_prompt_v1.txt`: the prompt `parse_links` sends for the G4 model-extracted links (`{filer}` and `{passage}` placeholders, closed relation and kind lists); the owner approves it before any run, and the Loop in `stages/30_ripple_links/CONTEXT.md` may add `link_prompt_v<N>.txt` versions.
+## Ablation rungs
+
+- `rungs/*.yaml`: one file per rung of the ablation ladder, read by `load_rungs`; each has a `name` and the `panel_prefixes` of the factor panels it adds to the price features. `m2_precedent.yaml` adds `prec_` to the `news_` columns of `m1_news.yaml`; it is proposed and has never been run.

@@ -1,0 +1,149 @@
+{
+  "$defs": {
+    "Attribute": {
+      "description": "What a claim is about. A proposed first list, extended by the owner's approval.",
+      "enum": [
+        "guidance_direction",
+        "capex_direction",
+        "headcount_direction",
+        "capacity_direction",
+        "demand_direction",
+        "pricing_direction",
+        "credit_outlook",
+        "supplier_relationship",
+        "customer_relationship",
+        "regulatory_status",
+        "litigation_status",
+        "event_direction"
+      ],
+      "title": "Attribute",
+      "type": "string"
+    },
+    "Period": {
+      "enum": [
+        "current_quarter",
+        "next_quarter",
+        "fiscal_year",
+        "unspecified"
+      ],
+      "title": "Period",
+      "type": "string"
+    },
+    "Value": {
+      "enum": [
+        "up",
+        "down",
+        "flat",
+        "started",
+        "ended",
+        "ongoing",
+        "positive",
+        "negative",
+        "neutral"
+      ],
+      "title": "Value",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One statement a document makes about a subject, valid from when it became known.",
+  "properties": {
+    "attribute": {
+      "$ref": "#/$defs/Attribute"
+    },
+    "claim_id": {
+      "default": "",
+      "title": "Claim Id",
+      "type": "string"
+    },
+    "evidence_span": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Evidence Span"
+    },
+    "expiry_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expiry Reason"
+    },
+    "extractor_version": {
+      "title": "Extractor Version",
+      "type": "string"
+    },
+    "period": {
+      "$ref": "#/$defs/Period"
+    },
+    "recorded_utc": {
+      "format": "date-time",
+      "title": "Recorded Utc",
+      "type": "string"
+    },
+    "source_doc_id": {
+      "title": "Source Doc Id",
+      "type": "string"
+    },
+    "subject": {
+      "title": "Subject",
+      "type": "string"
+    },
+    "superseded_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Superseded By"
+    },
+    "valid_from_utc": {
+      "format": "date-time",
+      "title": "Valid From Utc",
+      "type": "string"
+    },
+    "valid_to_utc": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Valid To Utc"
+    },
+    "value": {
+      "$ref": "#/$defs/Value"
+    }
+  },
+  "required": [
+    "subject",
+    "attribute",
+    "period",
+    "value",
+    "valid_from_utc",
+    "recorded_utc",
+    "source_doc_id",
+    "extractor_version"
+  ],
+  "title": "Claim",
+  "type": "object"
+}

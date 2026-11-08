@@ -1,0 +1,29 @@
+{
+  "proposed": true,
+  "story_window_sessions": 3,
+  "annual_claim_expiry_months": 15,
+  "text_vs_price": {
+    "z_threshold": 2.0
+  },
+  "asymmetric_link": {
+    "lookback_months": 15
+  },
+  "stale_reliance": {
+    "max_age_sessions": 300
+  },
+  "event_rate": {
+    "window_sessions": 60,
+    "baseline_sessions": 250,
+    "z_threshold": 3.0
+  },
+  "direction_drift": {
+    "k": 0.5,
+    "h": 4.0
+  },
+  "link_churn": {
+    "jaccard_threshold": 0.5
+  },
+  "shift_rereport_growth": 0.5,
+  "review_sample_per_kind": 25,
+  "detector_keep_precision": 0.7
+}
