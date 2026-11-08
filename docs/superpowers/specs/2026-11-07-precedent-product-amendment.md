@@ -27,7 +27,7 @@ src/precedent/
   mcp_server.py          console script `precedent-mcp` (section 6)
   dream/  ripple/  mechanism/   research tracks, as their plans describe, under the new package name
 references/              Layer 3: schema JSON, typing rules, CAMEO map, country groups, params
-stages/                  ICM stage contracts (spine 01-09, Precedent 20-24, Dream 30s, Ripple 10s, Mechanism 40s as the plans number them)
+stages/                  ICM stage contracts (spine 01-09, Precedent 20-24, Ripple 30s, Mechanism 40s, Dream 50s, as the plans number them)
 data/sample/             a committed, small, labelled library slice for the offline demo (section 5)
 docs/examples/           run-produced evidence files, banner on line 1 (section 9)
 ```
