@@ -156,3 +156,60 @@ def test_the_loader_reads_a_given_path_and_rejects_a_bad_file(tmp_path) -> None:
     )
     with pytest.raises(ValueError):
         load_nyse_calendar(bad)
+
+
+def test_cutoffs_refuse_a_session_outside_the_calendar_years() -> None:
+    with pytest.raises(ValueError, match="2031-01-03"):
+        calendar_cutoffs(pd.DatetimeIndex(["2031-01-03"]), CALENDAR)
+    with pytest.raises(ValueError, match="2009-12-31"):
+        calendar_cutoffs(pd.DatetimeIndex(["2009-12-31"]), CALENDAR)
+
+
+def test_cutoffs_refuse_a_holiday_session() -> None:
+    with pytest.raises(ValueError, match="2024-11-28"):
+        calendar_cutoffs(pd.DatetimeIndex(["2024-11-27", "2024-11-28"]), CALENDAR)
+
+
+def test_provider_sessions_are_validated_at_the_boundary() -> None:
+    with pytest.raises(ValueError, match="2024-11-28"):
+        resolve_sessions(
+            date(2024, 11, 27),
+            date(2024, 11, 29),
+            CALENDAR,
+            provider_sessions=pd.DatetimeIndex(["2024-11-27", "2024-11-28"]),
+        )
+    with pytest.raises(ValueError, match="2031-01-03"):
+        resolve_sessions(
+            date(2031, 1, 3),
+            date(2031, 1, 3),
+            CALENDAR,
+            provider_sessions=pd.DatetimeIndex(["2031-01-03"]),
+        )
+
+
+def test_early_closes_cannot_be_mutated_through_the_calendar() -> None:
+    with pytest.raises(TypeError):
+        CALENDAR.early_closes[date(2024, 6, 3)] = dt.time(13, 0)  # type: ignore[index]
+    assert date(2024, 6, 3) not in CALENDAR.early_closes
+    source = {date(2024, 11, 29): dt.time(13, 0)}
+    built = NyseCalendar(
+        first_year=2024, last_year=2024, holidays=frozenset(), early_closes=source, source="t"
+    )
+    source[date(2024, 6, 3)] = dt.time(13, 0)
+    assert date(2024, 6, 3) not in built.early_closes
+
+
+def test_the_loader_names_the_file_for_a_malformed_shape(tmp_path) -> None:
+    bad = tmp_path / "shape.json"
+    bad.write_text(
+        '{"source": "s", "first_year": 2024, "last_year": 2024, "holidays": [], "early_closes": []}'
+    )
+    with pytest.raises(ValueError, match="shape.json"):
+        load_nyse_calendar(bad)
+
+
+def test_an_early_close_never_moves_a_cutoff_later() -> None:
+    cutoffs = calendar_cutoffs(
+        pd.DatetimeIndex(["2024-11-29"]), CALENDAR, cutoff_local=dt.time(12, 0)
+    )
+    assert list(cutoffs) == [pd.Timestamp(utc("2024-11-29 17:00"))]
