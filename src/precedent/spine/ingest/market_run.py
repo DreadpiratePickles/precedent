@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from dataclasses import asdict
 from pathlib import Path
 
@@ -32,7 +32,9 @@ def _parser(venue: str) -> argparse.ArgumentParser:
     parser.add_argument("--max-requests", type=int, default=DEFAULT_MAX_REQUESTS)
     parser.add_argument("--category", action="append", default=[], help="repeatable")
     parser.add_argument("--max-calls", type=int, default=None, help="typer call budget")
-    parser.add_argument("--dry-run", action="store_true", help="model typers: open no socket")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="plan only: no request is sent, nothing is written"
+    )
     return parser
 
 
@@ -44,6 +46,26 @@ def _only_categories(
     kept = [m for m in markets if m.category is not None and m.category.lower() in wanted]
     report.skipped_category += len(markets) - len(kept)
     return kept
+
+
+def _print_plan(venue: str, args: argparse.Namespace, typer: Typer) -> int:
+    """`--dry-run`: say what would happen, with an all-zero report. No request, no write."""
+    categories = ", ".join(args.category) if args.category else "all"
+    summary = {
+        "venue": venue,
+        "dry_run": True,
+        "planned": (
+            f"would fetch up to {args.max_requests} page(s) of resolved {venue} markets "
+            f"(categories: {categories}), type each question with "
+            f"{getattr(typer, 'version', 'the selected typer')}, and append them to the store; "
+            "no request was sent and nothing was written"
+        ),
+        "report": asdict(MarketIngestReport()),
+        "append": asdict(AppendReport(added=0, identical_skipped=0)),
+        "error": None,
+    }
+    print(json.dumps(summary))
+    return EXIT_OK
 
 
 def run_market_ingest(
@@ -68,6 +90,8 @@ def run_market_ingest(
         print(f"config error: {error}", file=sys.stderr)
         return EXIT_USAGE
 
+    if args.dry_run:
+        return _print_plan(venue, args, typer)
     root = data_dir()
     store = MarketStore(root / "markets")
     report = MarketIngestReport()
@@ -83,9 +107,17 @@ def run_market_ingest(
     error: Exception | None = None
     try:
         for page in pages:
+            transient_before = report.not_stored_transient
             records = type_markets(_only_categories(page, wanted, report), typer, report)
             appended = store.append(records)
             added, skipped = added + appended.added, skipped + appended.identical_skipped
+            if report.not_stored_transient > transient_before:
+                # Stop without saving the cursor past this page, so a later run fetches it again
+                # and types the markets that could not be typed now.
+                report.stopped_by_transient = True
+                if isinstance(pages, Generator):
+                    pages.close()
+                break
     except (HttpError, ValueError, MarketConflictError) as failure:
         error = failure
     summary = {

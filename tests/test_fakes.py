@@ -62,3 +62,9 @@ def test_ok_bytes_and_clock_record_sleep():
 def test_exploding_transport_fails_the_test_when_called():
     with pytest.raises(AssertionError):
         ExplodingTransport().send(HttpRequest("GET", "https://example.test/", {}))
+
+
+def test_the_fake_transport_rejects_a_timeout_in_the_params_slot():
+    transport = FakeTransport([status(200)])
+    with pytest.raises(AssertionError, match="params must be a mapping"):
+        transport.send(HttpRequest("GET", "http://x.test/", {}, 120.0))  # type: ignore[arg-type]

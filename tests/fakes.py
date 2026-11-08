@@ -35,6 +35,17 @@ def _url_without_query(url: str) -> str:
     return url.split("?", 1)[0]
 
 
+def _assert_request_shape(request: HttpRequest) -> None:
+    """Fail under the fake what HttpxTransport would fail on (a timeout in the params slot)."""
+    params = request.params
+    assert params is None or isinstance(params, Mapping), f"params must be a mapping: {params!r}"
+    if params is not None:
+        assert all(isinstance(k, str) and isinstance(v, str) for k, v in params.items()), (
+            f"params must map str to str: {params!r}"
+        )
+    assert isinstance(request.timeout_s, int | float), f"timeout_s must be a number: {request!r}"
+
+
 class FakeTransport:
     """Replays canned responses. A sequence is consumed in order; a mapping is keyed by URL
     without the query string, each value one response (repeated) or a sequence (consumed)."""
@@ -55,6 +66,7 @@ class FakeTransport:
             self._queue = list(responses)
 
     def send(self, request: HttpRequest) -> HttpResponse:
+        _assert_request_shape(request)
         self.requests.append(request)
         if self._queue is not None:
             if not self._queue:

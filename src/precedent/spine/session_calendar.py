@@ -130,16 +130,23 @@ def calendar_cutoffs(
     return cutoffs
 
 
+def calendar_start_utc(calendar: NyseCalendar) -> dt.datetime:
+    """1 January of the calendar's first year, UTC: nothing earlier can be aligned."""
+    return dt.datetime(calendar.first_year, 1, 1, tzinfo=dt.UTC)
+
+
 def default_cutoffs_for(
     dates: Sequence[date], calendar: NyseCalendar, lookahead_days: int
 ) -> pd.Series:
-    """Cutoffs from the first date to `lookahead_days` past the last, capped at the last year.
+    """Cutoffs from the first date to `lookahead_days` past the last, inside the calendar's years.
 
-    The lookahead lets late-arriving items align to a later session; the cap keeps it inside
-    the calendar's years so a date near the end of the calendar does not raise.
+    The lookahead lets late-arriving items align to a later session. The end is capped at the
+    last year, and the start is floored at 1 January of the first year, so a date outside the
+    calendar does not raise; an item dated before the floor gets no session (see `unalign_before`
+    and `calendar_start_utc`).
     """
-    start = min(dates)
-    end = max(dates) + dt.timedelta(days=lookahead_days)
+    start = max(min(dates), date(calendar.first_year, 1, 1))
+    end = max(max(dates), start) + dt.timedelta(days=lookahead_days)
     if end.year > calendar.last_year >= start.year:
         end = date(calendar.last_year, 12, 31)
     return calendar_cutoffs(weekday_sessions(start, end, calendar), calendar)

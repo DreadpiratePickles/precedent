@@ -113,3 +113,19 @@ def align_records(
         )
         for record, available_at, session in zip(records, available, sessions, strict=True)
     ]
+
+
+def unalign_before(records: list[EventRecord], start_utc: dt.datetime) -> list[EventRecord]:
+    """Copies of the records with `effective_session` cleared where `available_utc < start_utc`.
+
+    `assign_effective_session` gives an early record the first session; a record from before the
+    calendar began must not land there, so it stays unaligned (and is counted as such).
+    """
+    if start_utc.tzinfo is None:
+        raise ValueError("start_utc must be timezone-aware")
+    return [
+        record.model_copy(update={"effective_session": None})
+        if record.available_utc is not None and record.available_utc < start_utc
+        else record
+        for record in records
+    ]

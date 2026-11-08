@@ -234,3 +234,13 @@ def test_default_cutoffs_for_caps_the_lookahead_at_the_calendars_last_year():
     assert cutoffs.index.max() == pd.Timestamp("2027-12-31")
     inside = default_cutoffs_for([date(2024, 3, 4)], CALENDAR, 15)
     assert inside.index.max() == pd.Timestamp("2024-03-19")
+
+
+def test_default_cutoffs_for_floors_the_start_at_the_calendars_first_year():
+    from precedent.spine.session_calendar import default_cutoffs_for
+
+    cutoffs = default_cutoffs_for([date(2009, 6, 1)], CALENDAR, 15)
+    assert cutoffs.index.min() == pd.Timestamp("2010-01-04")
+    assert cutoffs.index.max() < pd.Timestamp("2010-02-01")
+    straddling = default_cutoffs_for([date(2009, 12, 30), date(2010, 1, 6)], CALENDAR, 15)
+    assert straddling.index.min() == pd.Timestamp("2010-01-04")

@@ -462,7 +462,7 @@ def test_v_an_8k_accepted_in_the_last_days_of_the_calendar_still_aligns():
         },
     }
     records, _ = events_from_submissions(
-        submissions, "ACME", ingested_utc=datetime(2027, 12, 21, tzinfo=UTC)
+        submissions, ["ACME"], ingested_utc=datetime(2027, 12, 21, tzinfo=UTC)
     )
     assert len(records) == 1
 

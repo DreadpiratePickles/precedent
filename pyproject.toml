@@ -7,6 +7,7 @@ name = "precedent-engine"
 version = "0.1.0"
 description = "Past outcomes of similar events, from news, markets and filings. Not a forecast."
 license = { text = "Apache-2.0" }
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "pandas>=2.2",

@@ -133,9 +133,8 @@ class GdeltFetcher:
             if attempts >= self._max_files:
                 continue
             attempts += 1
-            body = send_with_retries(
-                self._transport, self._clock, HttpRequest("GET", entry.url, {}, _FILE_TIMEOUT_S)
-            ).body
+            file_request = HttpRequest("GET", entry.url, {}, timeout_s=_FILE_TIMEOUT_S)
+            body = send_with_retries(self._transport, self._clock, file_request).body
             if hashlib.md5(body).hexdigest() != entry.md5:  # noqa: S324 - the list's own checksum
                 md5_failed += 1
                 continue

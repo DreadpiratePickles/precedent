@@ -36,6 +36,8 @@ Retry only transient failures (429, 5xx) with exponential backoff and jitter, at
 
 Loop: single pass. The work is a deterministic transform decided by tests, so there is no oracle-driven iteration to run (design 10.2).
 
+Market typing outcomes that say nothing about the question are not stored: a spent call budget (`max_calls`), a transport refusal (`http ...`) and anything produced under `--dry-run`. They are counted (`not_stored_transient`), the crawl stops without saving the cursor past that page so a later run fetches it again, and `ingest polymarket|kalshi --dry-run` sends no request and writes nothing.
+
 ### Source: S&P 500 membership
 - Source: `fja05680/sp500`, file `S&P 500 Historical Components & Changes.csv` (read 2026-11-07 from the raw file; its README gives no column layout). Not committed; `tests/fixtures/membership_sample.csv` is a synthetic file with the same layout.
 - Layout: header `date,tickers`; one row per change date (ISO `YYYY-MM-DD`); `tickers` is one quoted, comma-separated list holding every member after that date.
@@ -74,6 +76,7 @@ Research for Task 11, Step 0. Read from `microsoft/qlib` tag `v0.9.7` (commit `d
 - `ActionGeo_CountryCode` is FIPS 10-4, not ISO 3166, and is not used in v1. `NumMentions`, `NumSources` and `NumArticles` count only the first 15-minute window in which the event was seen.
 - Time: `first_seen_utc` is `DATEADDED` (UTC); `SQLDATE` is never read for time. `published_utc` is null.
 - Dedup across runs: the store keys records by `article_id` only; consumers reading several runs together call `dedupe_gdelt_records`.
+- Parser version: `rules-gdelt-v1:<12 hex>` (`gdelt_parser_version()`) is a hash of `references/cameo_to_event_type.json` and the `gdelt` section of `references/precedent_params.json`; editing either starts a new vintage instead of mixing rules inside one. The 8-K version, `rules-8k-v1:<12 hex>` (`edgar_parser_version()`), hashes `references/item_rules_8k.json`. Rows dated before the calendar's first year stay unaligned.
 - Integrity: the master list is served over plain HTTP, so the MD5 guards against corruption, not tampering.
 - Live run: the first run is an owner gate (it downloads real files); see the stage Approval section.
 
@@ -86,6 +89,9 @@ Research for Task 11, Step 0. Read from `microsoft/qlib` tag `v0.9.7` (commit `d
 - `references/item_rules_8k.json`: `RECALLED`. The item numbers and titles were not confirmed against the SEC item list (the sec.gov HTML page redirected to an investor.gov glossary page, and the Form 8-K PDF could not be read as text here). Every entry is a proposal for the owner; the file says `"proposed": true`. Unlisted items (for example 7.01, 8.01, 9.01) are skipped and counted.
 - Fixtures `tests/fixtures/submissions_sample.json` and `submissions_foreign_sample.json` are synthetic, in the shape above.
 - Limit: the first page (`recent`) holds about the latest 1,000 filings; a company with older 8-Ks needs the `files` documents, which this version does not fetch.
+- Identity: `article_id` is `<accession>:<item>` and carries no instrument. `events_from_submissions(submissions, instruments, ...)` makes one record per (filing, item) with one resolved impact per instrument on the CIK (share classes such as GOOG and GOOGL); `ingest edgar` groups the `cik,symbol` lines by CIK, fetches each CIK once, and catches a store conflict (`EventConflictError`) or `ValueError` per CIK, so the JSON summary always prints and the exit code is 1.
+- Calendar years: a filing accepted before 1 January of the calendar's first year gets no session (`effective_session` is null) and the store counts it as `unaligned_records`; the default cutoffs start no earlier than that date.
+- Owner-gate check, `acceptanceDateTime` time zone (`RECALLED` until confirmed): the code reads the `Z` suffix as true UTC. At the first live fetch, confirm it against `filingDate` and the SEC's 17:30 Eastern same-day rule (a filing accepted after 17:30 ET carries the next business day's `filingDate`). Under true UTC, 17:30 ET is 21:30Z (EDT) or 22:30Z (EST), so a filing stamped later than that on a business day must show the next business day's `filingDate`. If instead filings stamped between 17:30Z and that threshold already show the next day's `filingDate`, the stamps are Eastern wall time with a false `Z`: every 8-K's `available_utc` would be 4-5 hours early (systematic look-ahead for after-close 8-Ks), and no 8-K result may be trusted until the parser is fixed. Evidence so far, not proof: the 2026-11-07 unauthenticated probe showed `2026-11-06T21:30:47.000Z` for a same-day filing, consistent with UTC.
 
 ### Source: Polymarket
 - LIVE-DATA, read 2026-11-07, unauthenticated, `GET /markets?closed=true` and `/markets/keyset?closed=true` on the Gamma base URL. No response body is stored in the repository.

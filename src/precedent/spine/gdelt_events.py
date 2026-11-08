@@ -1,4 +1,4 @@
-"""GDELT 2.0 events as rule-typed EventRecords (parser version rules-gdelt-v1). No model is called.
+"""GDELT 2.0 events as rule-typed EventRecords (parser `rules-gdelt-v1:<hash>`). No model is called.
 
 An export row is typed from its CAMEO code by a committed table, sized from `GoldsteinScale` and
 `NumSources`, and stamped with `DATEADDED` (never `SQLDATE`) so alignment is point-in-time.
@@ -23,10 +23,16 @@ from precedent.config import references_dir
 from precedent.spine.event_key import build_event_key, load_country_groups
 from precedent.spine.event_record import EventRecord
 from precedent.spine.event_schema import ActorKind, EventType, NewsEvent
-from precedent.spine.pit_alignment import align_records
-from precedent.spine.session_calendar import default_cutoffs_for, load_nyse_calendar
+from precedent.spine.pit_alignment import align_records, unalign_before
+from precedent.spine.session_calendar import (
+    calendar_start_utc,
+    default_cutoffs_for,
+    load_nyse_calendar,
+)
 
-PARSER_VERSION = "rules-gdelt-v1"
+PARSER_VERSION_PREFIX = "rules-gdelt-v1"
+_CAMEO_MAP_FILE = "cameo_to_event_type.json"
+_PARAMS_FILE = "precedent_params.json"
 SOURCE_NAME = "gdelt2"
 EXPORT_COLUMN_COUNT = 61
 UNTYPED = "untyped"
@@ -144,6 +150,24 @@ class CameoMap(BaseModel):
         if stray:
             raise ValueError(f"subcodes not under a known root: {stray}")
         return self
+
+
+def gdelt_parser_version() -> str:
+    """`rules-gdelt-v1:<12 hex>` over the CAMEO table's bytes and the params file's gdelt section.
+
+    Editing either changes the version, so records made under different rules never share a
+    vintage. The section is hashed as canonical JSON, so edits to other sections do not count.
+    """
+    mapping_file = references_dir() / _CAMEO_MAP_FILE
+    params_file = references_dir() / _PARAMS_FILE
+    try:
+        mapping_bytes = mapping_file.read_bytes()
+        section = json.loads(params_file.read_text(encoding="utf-8"))["gdelt"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot compute the GDELT parser version: {error!r}") from error
+    canonical = json.dumps(section, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    digest = hashlib.sha256(mapping_bytes + canonical.encode("utf-8")).hexdigest()
+    return f"{PARSER_VERSION_PREFIX}:{digest[:12]}"
 
 
 def load_cameo_map(
@@ -279,6 +303,7 @@ def _record_for(
     cameo_map: dict,
     params: GdeltParams,
     ingested_utc: datetime,
+    parser_version: str,
 ) -> tuple[EventRecord, int]:
     linked, non_iso = _iso3_codes(row)
     step = _sign(goldstein)
@@ -328,7 +353,7 @@ def _record_for(
         ingested_utc=ingested_utc,
         available_utc=None,
         effective_session=None,
-        parser_version=PARSER_VERSION,
+        parser_version=parser_version,
         event=event,
         resolved_impacts=[],
         linked_countries=linked,
@@ -393,6 +418,7 @@ def events_from_gdelt_rows(
     Order: too few sources, then unmapped CAMEO code, then one record per (event key, Actor1
     country, effective session). Dedup is per call; `dedupe_gdelt_records` does it across runs.
     """
+    parser_version = gdelt_parser_version()
     goldstein = _numbers(rows, "GoldsteinScale", float)
     sources = _numbers(rows, "NumSources", int)
     first_seen = _first_seen(rows)
@@ -408,12 +434,13 @@ def events_from_gdelt_rows(
             continue
         record, non_iso = _record_for(
             row, event_type, first_seen[position], goldstein[position], sources[position],
-            cameo_map, params, ingested_utc,
+            cameo_map, params, ingested_utc, parser_version,
         )  # fmt: skip
         candidates.append(
             _Candidate(record, int(row["GLOBALEVENTID"]), _actor1_country_key(record), non_iso)
         )
     cutoffs = session_cutoffs_utc
+    use_default_cutoffs = cutoffs is None
     if cutoffs is None and candidates:
         cutoffs = _default_cutoffs([c.record.first_seen_utc for c in candidates])
     aligned = (
@@ -423,6 +450,8 @@ def events_from_gdelt_rows(
         if candidates and cutoffs is not None
         else []
     )
+    if use_default_cutoffs:  # rows before the calendar's first year stay unaligned
+        aligned = unalign_before(aligned, calendar_start_utc(load_nyse_calendar()))
     candidates = [
         _Candidate(record, c.event_id, c.actor1_country, c.non_iso_codes)
         for record, c in zip(aligned, candidates, strict=True)

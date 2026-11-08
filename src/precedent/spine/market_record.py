@@ -12,8 +12,9 @@ from pydantic import BaseModel, ConfigDict
 
 from precedent.spine.typers.base import TypedText, Typer
 
-MAX_CALLS_TYPER_REASON = "max_calls reached"
-MAX_CALLS_RESULT_REASON = "max_calls"
+MAX_CALLS_REASON_PREFIX = "max_calls"
+DRY_RUN_REASON = "dry-run"
+_TRANSIENT_REFUSAL_PREFIXES = ("max_calls", "http")
 _OFFSET_SUFFIX = re.compile(r"(Z|[+-]\d{2}(:?\d{2})?)$", re.IGNORECASE)
 
 
@@ -55,8 +56,10 @@ class MarketIngestReport:
     untyped: int = 0
     refused_invalid: int = 0
     max_calls_reached: int = 0
+    not_stored_transient: int = 0
     resolved_by_prices_only: int = 0
     stopped_by_budget: bool = False
+    stopped_by_transient: bool = False
 
     def absorb(self, other: MarketIngestReport) -> None:
         """Add another report's counters into this one (flags are left alone)."""
@@ -97,30 +100,40 @@ def _parse_with_pandas(text: str) -> datetime | None:
     return stamp.to_pydatetime()
 
 
+def is_transient_outcome(typed: TypedText) -> bool:
+    """True when a typing outcome says nothing about the question and must not be stored.
+
+    A spent call budget (`max_calls...`), a transport failure (`http ...`) and a dry run
+    (`untyped` with reason "dry-run") would otherwise be kept under the real typer version,
+    so a later run could never type the market (and re-typing would raise a conflict).
+    """
+    if typed.status == "refused_invalid":
+        return (typed.reason or "").startswith(_TRANSIENT_REFUSAL_PREFIXES)
+    return typed.status == "untyped" and typed.reason == DRY_RUN_REASON
+
+
 def type_markets(
     markets: list[ResolvedMarket], typer: Typer, report: MarketIngestReport
 ) -> list[MarketRecord]:
-    """Type every market's question. No market is dropped: untyped ones are kept and counted.
+    """Type every market's question; untyped answers are kept and counted, transient ones are not.
 
-    A typer that has used up its call budget answers `refused_invalid` with reason
-    "max_calls reached"; such a market is stored `untyped` with reason "max_calls".
+    An outcome that `is_transient_outcome` is counted (`not_stored_transient`, and its own
+    counter: `max_calls_reached`, `refused_invalid` or `untyped`) and left out of the result, so
+    a later run types that market. `kept` counts the returned records only.
     """
     records: list[MarketRecord] = []
     for market in markets:
         typed = typer.type_text(market.question)
-        if typed.status == "refused_invalid" and typed.reason == MAX_CALLS_TYPER_REASON:
-            report.max_calls_reached += 1
-            typed = TypedText(
-                status="untyped",
-                key=None,
-                reason=MAX_CALLS_RESULT_REASON,
-                evidence_span=None,
-                typer_version=typed.typer_version,
-            )
         if typed.status == "untyped":
             report.untyped += 1
         elif typed.status == "refused_invalid":
-            report.refused_invalid += 1
+            if (typed.reason or "").startswith(MAX_CALLS_REASON_PREFIX):
+                report.max_calls_reached += 1
+            else:
+                report.refused_invalid += 1
+        if is_transient_outcome(typed):
+            report.not_stored_transient += 1
+            continue
         records.append(MarketRecord(**market.model_dump(), typed=typed))
         report.kept += 1
     return records

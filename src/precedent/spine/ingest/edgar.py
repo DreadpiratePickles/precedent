@@ -16,7 +16,7 @@ from precedent.spine.edgar_client import (
     EdgarError,
     EdgarRateLimitError,
 )
-from precedent.spine.event_store import EventStore
+from precedent.spine.event_store import EventConflictError, EventStore
 from precedent.spine.http import Clock, SystemClock, Transport
 
 DEFAULT_MAX_REQUESTS = 50
@@ -27,13 +27,19 @@ EXIT_USAGE_OR_CONFIG = 2
 
 @dataclass(frozen=True)
 class CikEntry:
+    """One filer and every symbol that trades on its CIK (share classes share a CIK)."""
+
     cik: int
-    symbol: str
+    symbols: tuple[str, ...]
 
 
 def read_ciks(path: Path) -> list[CikEntry]:
-    """Parse `cik,symbol` lines; blank lines, `#` comments and a `cik,symbol` header are skipped."""
-    entries: list[CikEntry] = []
+    """Parse `cik,symbol` lines; blank lines, `#` comments and a `cik,symbol` header are skipped.
+
+    Lines are grouped by CIK in first-seen order, so GOOG and GOOGL under one CIK make one entry
+    with two symbols (and one fetch). A repeated (cik, symbol) pair is kept once.
+    """
+    symbols_by_cik: dict[int, list[str]] = {}
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         text = line.strip()
         if not text or text.startswith("#") or text.lower().replace(" ", "") == "cik,symbol":
@@ -41,8 +47,10 @@ def read_ciks(path: Path) -> list[CikEntry]:
         cik_text, _, symbol = (part.strip() for part in text.partition(","))
         if not cik_text.isdigit() or not symbol:
             raise ValueError(f"{path}:{number}: expected 'cik,symbol', got {text!r}")
-        entries.append(CikEntry(int(cik_text), symbol))
-    return entries
+        symbols = symbols_by_cik.setdefault(int(cik_text), [])
+        if symbol not in symbols:
+            symbols.append(symbol)
+    return [CikEntry(cik, tuple(symbols)) for cik, symbols in symbols_by_cik.items()]
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -95,8 +103,9 @@ def _ingest(
     for entry in attempted:
         try:
             records, report = events_from_submissions(
-                client.fetch_submissions(entry.cik), entry.symbol, ingested_utc=now
+                client.fetch_submissions(entry.cik), list(entry.symbols), ingested_utc=now
             )
+            store.append(records)
         except EdgarRateLimitError as error:
             failures.append({"cik": entry.cik, "error": str(error)})
             stopped_by_rate_limit = True
@@ -105,10 +114,9 @@ def _ingest(
             failures.append({"cik": entry.cik, "error": str(error)})
             stopped_by_block = True
             break
-        except (EdgarError, ValueError) as error:
+        except (EdgarError, EventConflictError, ValueError) as error:
             failures.append({"cik": entry.cik, "error": str(error)})
             continue
-        store.append(records)
         fetched += 1
         totals["filings_read"] += report.filings_read
         totals["records"] += report.records

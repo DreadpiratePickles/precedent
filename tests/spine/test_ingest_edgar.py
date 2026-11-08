@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from fakes import FakeClock, FakeTransport, ok, status
 
+from precedent.spine.edgar_8k_events import edgar_parser_version
 from precedent.spine.event_store import EventStore
 from precedent.spine.ingest.edgar import read_ciks, run
 
@@ -25,7 +26,7 @@ def workspace(tmp_path, monkeypatch):
 
 def stored_ids(tmp_path):
     store = EventStore(tmp_path / "data" / "events")
-    path = store.path_for("rules-8k-v1")
+    path = store.path_for(edgar_parser_version())
     return [json.loads(line)["article_id"] for line in path.read_text().splitlines()]
 
 
@@ -148,4 +149,42 @@ def test_read_ciks_skips_header_blank_and_comment_lines(tmp_path):
     path = tmp_path / "ciks.csv"
     path.write_text("cik,symbol\n# note\n\n1234567, ACME \n")
     entries = read_ciks(path)
-    assert [(e.cik, e.symbol) for e in entries] == [(1234567, "ACME")]
+    assert [(e.cik, e.symbols) for e in entries] == [(1234567, ("ACME",))]
+
+
+def test_read_ciks_groups_share_classes_under_one_cik(tmp_path):
+    path = tmp_path / "ciks.csv"
+    path.write_text("1652044,GOOGL\n1234567,ACME\n1652044,GOOG\n1652044,GOOG\n")
+    assert [(e.cik, e.symbols) for e in read_ciks(path)] == [
+        (1652044, ("GOOGL", "GOOG")),
+        (1234567, ("ACME",)),
+    ]
+
+
+def test_two_symbols_on_one_cik_make_one_fetch_and_one_record_per_item(workspace, tmp_path, capsys):
+    workspace.write_text("1234567,ACME\n1234567,ACMEB\n")
+    transport = FakeTransport({URL_ACME: ok(SAMPLE)})
+    assert run(["--ciks", str(workspace)], transport=transport, clock=FakeClock()) == 0
+    assert [r.url for r in transport.requests] == [URL_ACME]
+    ids = stored_ids(tmp_path)
+    assert len(ids) == len(set(ids)) == 3
+    stored = EventStore(tmp_path / "data" / "events").read(edgar_parser_version())
+    assert all([i.instrument for i in r.resolved_impacts] == ["ACME", "ACMEB"] for r in stored)
+    assert last_json_line(capsys)["ciks_listed"] == 1
+
+
+def test_a_store_conflict_is_reported_per_cik_and_the_summary_still_prints(
+    workspace, tmp_path, capsys
+):
+    first = FakeTransport({URL_ACME: ok(SAMPLE), URL_FOREIGN: ok(FOREIGN)})
+    assert run(["--ciks", str(workspace)], transport=first, clock=FakeClock()) == 0
+    capsys.readouterr()
+    changed = json.loads(json.dumps(SAMPLE))
+    changed["name"] = "Renamed Devices Inc."
+    second = FakeTransport({URL_ACME: ok(changed), URL_FOREIGN: ok(FOREIGN)})
+    code = run(["--ciks", str(workspace)], transport=second, clock=FakeClock())
+    assert code == 1
+    summary = last_json_line(capsys)
+    assert [failure["cik"] for failure in summary["ciks_failed"]] == [1234567]
+    assert summary["ciks_fetched"] == 1
+    assert len(second.requests) == 2  # the conflict did not stop the next CIK

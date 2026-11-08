@@ -2,10 +2,12 @@
 
 from datetime import date
 
+import numpy as np
 import pandas as pd
 import pytest
 from fakes import assert_truncation_invariant, make_event_record
 
+from precedent.spine.abnormal_returns import estimate_betas
 from precedent.spine.event_record import EventRecord
 from precedent.spine.macro_factors import build_macro_factor_panel
 
@@ -90,3 +92,83 @@ def test_macro_panel_passes_truncation_invariance():
         return build_macro_factor_panel(list(events["record"]), BETAS, SESSIONS_10)
 
     assert_truncation_invariant(builder, frame, SESSIONS_10, [0, 2, 4, 6, 8])
+
+
+LONG_SESSIONS = pd.bdate_range("2024-01-02", periods=80)
+EST_WINDOW = (-30, -6)
+
+
+def synthetic_returns() -> tuple[pd.DataFrame, pd.Series]:
+    rng = np.random.default_rng(7)
+    market = pd.Series(rng.normal(0, 0.01, len(LONG_SESSIONS)), index=LONG_SESSIONS)
+    assets = pd.DataFrame(
+        {
+            "AAA": 1.5 * market + rng.normal(0, 0.002, len(market)),
+            "BBB": -0.5 * market + rng.normal(0, 0.002, len(market)),
+        }
+    )
+    return assets, market
+
+
+def beta_frame(assets, market, sessions) -> pd.DataFrame:
+    return estimate_betas(assets, market, sessions, est_window=EST_WINDOW, min_obs=10)
+
+
+def test_a_beta_frame_supplies_the_beta_at_each_session():
+    betas = pd.DataFrame(
+        {"AAA": np.arange(1.0, 11.0), "BBB": np.arange(11.0, 21.0)}, index=SESSIONS_10
+    )
+    panel = build_macro_factor_panel(
+        [event_on("2024-01-02", 2)], betas, SESSIONS_10, half_life_sessions=1.0
+    )
+    for position, session in enumerate(SESSIONS_10[:3]):
+        decay = 1.0 * 0.5**position  # direction 1.0 (step 2)
+        assert panel.loc[(session, "AAA"), "macro_x_beta"] == pytest.approx(decay * (1 + position))
+        assert panel.loc[(session, "BBB"), "macro_x_beta"] == pytest.approx(decay * (11 + position))
+
+
+def test_a_nan_or_missing_beta_gives_nan_and_is_never_filled():
+    betas = pd.DataFrame({"AAA": [np.nan, 2.0, 3.0]}, index=SESSIONS_10[1:4])
+    panel = build_macro_factor_panel([event_on("2024-01-02", 2)], betas, SESSIONS_10)
+    x_beta = panel["macro_x_beta"].droplevel("instrument")
+    assert x_beta.isna().loc[[SESSIONS_10[0], SESSIONS_10[1], *SESSIONS_10[4:]]].all()
+    assert x_beta.loc[SESSIONS_10[2]] == pytest.approx(2.0 * 0.5 ** (2 / 3))
+    assert panel["macro_direction_decay"].notna().all()
+
+
+def test_a_beta_change_at_session_t_leaves_the_rows_before_t_unchanged():
+    base = pd.DataFrame({"AAA": 1.0, "BBB": -1.0}, index=SESSIONS_10)
+    changed = base.copy()
+    changed.iloc[5:] = 9.0
+    events = [event_on("2024-01-02", 2), event_on("2024-01-05", -1), event_on("2024-01-10", 2)]
+    before = build_macro_factor_panel(events, base, SESSIONS_10)
+    after = build_macro_factor_panel(events, changed, SESSIONS_10)
+    cut = SESSIONS_10[5]
+    early = before.index.get_level_values("datetime") < cut
+    pd.testing.assert_frame_equal(before[early], after[early])
+    assert not before[~early].equals(after[~early])
+
+
+def test_macro_panel_with_estimated_betas_passes_truncation_invariance():
+    assets, market = synthetic_returns()
+    records = [event_on("2024-02-01", 2), event_on("2024-02-12", -1), event_on("2024-03-04", 2)]
+    full = build_macro_factor_panel(
+        records, beta_frame(assets, market, LONG_SESSIONS), LONG_SESSIONS
+    )
+    assert full["macro_x_beta"].notna().any() and full["macro_x_beta"].isna().any()
+    for position in (20, 35, 50, 65):
+        cut_sessions = LONG_SESSIONS[: position + 1]
+        kept = [r for r in records if pd.Timestamp(r.effective_session) <= cut_sessions[-1]]
+        betas = beta_frame(assets.loc[cut_sessions], market.loc[cut_sessions], cut_sessions)
+        truncated = build_macro_factor_panel(kept, betas, cut_sessions)
+        pd.testing.assert_frame_equal(
+            full[full.index.get_level_values("datetime") <= cut_sessions[-1]], truncated
+        )
+
+
+def test_unsorted_or_duplicated_sessions_are_rejected():
+    shuffled = SESSIONS_10[::-1]
+    with pytest.raises(ValueError, match="sorted"):
+        build_macro_factor_panel([], BETAS, shuffled)
+    with pytest.raises(ValueError, match="unique"):
+        build_macro_factor_panel([], BETAS, SESSIONS_10.append(SESSIONS_10[:1]).sort_values())

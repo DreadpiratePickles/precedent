@@ -16,6 +16,7 @@ from precedent.spine.gdelt_events import (
     GdeltParams,
     dedupe_gdelt_records,
     events_from_gdelt_rows,
+    gdelt_parser_version,
     load_cameo_map,
     read_export_csv,
 )
@@ -112,7 +113,8 @@ def test_a_government_sanction_is_trade_or_sanctions():
         "gdelt2",
         ["USA", "RUS"],
     )
-    assert record.parser_version == "rules-gdelt-v1"
+    assert record.parser_version == gdelt_parser_version()
+    assert record.parser_version.startswith("rules-gdelt-v1:")
 
 
 def test_a_sanction_by_a_non_government_actor_falls_back_to_the_root_rule():
@@ -330,3 +332,59 @@ def test_a_mapping_to_an_unknown_event_type_is_refused(tmp_path):
     path.write_text(json.dumps(bad))
     with pytest.raises(ValueError):
         load_cameo_map(path)
+
+
+def _copied_references(tmp_path, monkeypatch):
+    import shutil
+
+    from precedent.config import references_dir
+    from precedent.spine import gdelt_events
+
+    target = tmp_path / "references"
+    target.mkdir()
+    for name in ("cameo_to_event_type.json", "precedent_params.json"):
+        shutil.copy(references_dir() / name, target / name)
+    monkeypatch.setattr(gdelt_events, "references_dir", lambda: target)
+    return target
+
+
+def test_the_parser_version_is_stable_and_names_its_rules(tmp_path, monkeypatch):
+    version = gdelt_parser_version()
+    assert version.startswith("rules-gdelt-v1:") and len(version.split(":")[1]) == 12
+    _copied_references(tmp_path, monkeypatch)
+    assert gdelt_parser_version() == version  # same bytes, same version
+
+
+def test_changing_a_cameo_table_byte_changes_the_parser_version(tmp_path, monkeypatch):
+    target = _copied_references(tmp_path, monkeypatch)
+    before = gdelt_parser_version()
+    table = target / "cameo_to_event_type.json"
+    table.write_bytes(table.read_bytes() + b"\n")
+    assert gdelt_parser_version() != before
+
+
+def test_changing_a_gdelt_param_changes_the_version_but_another_section_does_not(
+    tmp_path, monkeypatch
+):
+    target = _copied_references(tmp_path, monkeypatch)
+    before = gdelt_parser_version()
+    params_file = target / "precedent_params.json"
+    params = json.loads(params_file.read_text())
+    params["notes"]["gdelt"] = "reworded"
+    params_file.write_text(json.dumps(params))
+    assert gdelt_parser_version() == before  # outside the gdelt section
+    params["gdelt"]["min_sources"] += 1
+    params_file.write_text(json.dumps(params))
+    assert gdelt_parser_version() != before
+
+
+def test_a_row_before_the_calendar_starts_stays_unaligned():
+    rows = frame_of(
+        gdelt_row(GLOBALEVENTID="1", DATEADDED="20091215120000"),
+        gdelt_row(GLOBALEVENTID="2", DATEADDED="20240103120000", Actor2Name="OTHER"),
+    )
+    records, _ = events_from_gdelt_rows(rows, CAMEO, PARAMS, ingested_utc=INGESTED)
+    by_id = {r.article_id: r for r in records}
+    assert by_id["gdelt:1"].effective_session is None
+    assert by_id["gdelt:1"].available_utc is not None
+    assert by_id["gdelt:2"].effective_session is not None

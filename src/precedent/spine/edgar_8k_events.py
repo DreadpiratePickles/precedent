@@ -16,10 +16,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from precedent.config import references_dir
 from precedent.spine.event_record import EventRecord, ResolvedImpact
 from precedent.spine.event_schema import EventType, Impact, NewsEvent
-from precedent.spine.pit_alignment import align_records
-from precedent.spine.session_calendar import default_cutoffs_for, load_nyse_calendar
+from precedent.spine.pit_alignment import align_records, unalign_before
+from precedent.spine.session_calendar import (
+    calendar_start_utc,
+    default_cutoffs_for,
+    load_nyse_calendar,
+)
 
-PARSER_VERSION = "rules-8k-v1"
+PARSER_VERSION_PREFIX = "rules-8k-v1"
 SOURCE = "edgar"
 EIGHT_K_FORMS = frozenset({"8-K", "8-K/A"})
 AMENDMENT_FORM = "8-K/A"
@@ -36,6 +40,16 @@ _REQUIRED_COLUMNS = (
     "items",
 )
 _TICKER_PATTERN = re.compile(r"^[A-Z][A-Z0-9.\-]{0,5}$")
+
+
+def edgar_parser_version(path: Path | None = None) -> str:
+    """`rules-8k-v1:<12 hex of the item rules file's bytes>`: a rule edit starts a new vintage."""
+    file_path = path or references_dir() / _ITEM_RULES_FILE
+    try:
+        digest = hashlib.sha256(file_path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise ValueError(f"cannot read the 8-K item rules {file_path}: {error}") from error
+    return f"{PARSER_VERSION_PREFIX}:{digest[:12]}"
 
 
 class ItemRule(BaseModel):
@@ -149,13 +163,18 @@ def _default_cutoffs(first_seen: list[datetime]) -> pd.Series:
 
 def events_from_submissions(
     submissions: dict[str, Any],
-    instrument: str,
+    instruments: list[str],
     *,
     ingested_utc: datetime,
     session_cutoffs_utc: pd.Series | None = None,
     latency: pd.Timedelta = DEFAULT_LATENCY,
 ) -> tuple[list[EventRecord], EdgarIngestReport]:
-    """One aligned EventRecord per 8-K item of `instrument`, plus counts of what was set aside.
+    """One aligned EventRecord per 8-K item, with one resolved impact per instrument.
+
+    `instruments` are every symbol that trades on the filer's CIK (share classes); the record's
+    `article_id` is `<accession>:<item>` and carries no instrument, so one filing item is one
+    record however many symbols share the CIK. `ticker_hint` is the first instrument that looks
+    like a ticker.
 
     Only forms 8-K and 8-K/A produce records. An item code with no rule is skipped and counted.
     A malformed document raises ValueError rather than yielding an empty result.
@@ -164,7 +183,10 @@ def events_from_submissions(
     company = _company_name(submissions)
     rules = load_item_rules().items
     is_us_filer = _business_state_or_country(submissions) in load_us_state_codes()
-    ticker_hint = instrument if _TICKER_PATTERN.match(instrument) else None
+    if not instruments or len(set(instruments)) != len(instruments):
+        raise ValueError(f"instruments must be a non-empty list without repeats, got {instruments}")
+    ticker_hint = next((name for name in instruments if _TICKER_PATTERN.match(name)), None)
+    parser_version = edgar_parser_version()
     filings_read = len(columns["form"])
     skipped_items = skipped_forms = skipped_without_items = 0
     records: list[EventRecord] = []
@@ -196,10 +218,11 @@ def events_from_submissions(
                     form,
                     accepted,
                     company,
-                    instrument,
+                    instruments,
                     ticker_hint,
                     is_us_filer,
                     ingested_utc,
+                    parser_version,
                 )
             )
     if records:
@@ -209,6 +232,8 @@ def events_from_submissions(
             else _default_cutoffs([r.first_seen_utc for r in records])
         )
         records = align_records(records, cutoffs, latency)
+        if session_cutoffs_utc is None:  # the default cutoffs start with the calendar's years
+            records = unalign_before(records, calendar_start_utc(load_nyse_calendar()))
     return records, EdgarIngestReport(
         filings_read, len(records), skipped_items, skipped_forms, skipped_without_items
     )
@@ -221,10 +246,11 @@ def _record(
     form: str,
     accepted: datetime,
     company: str,
-    instrument: str,
+    instruments: list[str],
     ticker_hint: str | None,
     is_us_filer: bool,
     ingested_utc: datetime,
+    parser_version: str,
 ) -> EventRecord:
     article_id = f"{accession}:{item}"
     country = "USA" if is_us_filer else None
@@ -251,12 +277,13 @@ def _record(
         ingested_utc=ingested_utc,
         available_utc=None,
         effective_session=None,
-        parser_version=PARSER_VERSION,
+        parser_version=parser_version,
         event=event,
         resolved_impacts=[
             ResolvedImpact(
                 instrument=instrument, kind="company", direction=0.0, match_method="cik_map"
             )
+            for instrument in instruments
         ],
         linked_countries=["USA"] if is_us_filer else [],
     )

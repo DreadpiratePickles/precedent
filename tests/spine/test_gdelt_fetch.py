@@ -10,7 +10,7 @@ from fixtures.gdelt_rows import gdelt_row, tsv, zip_bytes
 
 from precedent.config import GDELT_MASTERFILELIST_URL
 from precedent.spine.event_store import EventStore
-from precedent.spine.gdelt_events import GdeltFormatError
+from precedent.spine.gdelt_events import GdeltFormatError, gdelt_parser_version
 from precedent.spine.gdelt_fetch import GdeltFetcher, parse_masterfilelist
 from precedent.spine.http import HttpError
 from precedent.spine.ingest import gdelt as ingest_gdelt
@@ -164,7 +164,7 @@ def test_run_fetches_parses_and_appends_events(tmp_path, monkeypatch, capsys):
     assert code == 0
     assert (report["fetch"]["downloaded"], report["ingest"]["rows_read"]) == (2, 2)
     assert report["ingest"]["kept"] + report["ingest"]["dropped_duplicate"] == 2
-    stored = EventStore(tmp_path / "events").read("rules-gdelt-v1")
+    stored = EventStore(tmp_path / "events").read(gdelt_parser_version())
     assert len(stored) == report["ingest"]["kept"] == report["store"]["added"]
 
 
@@ -183,3 +183,14 @@ def test_run_refuses_an_inverted_window(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as stop:
         ingest_gdelt.run(["--since", "2024-01-04", "--until", "2024-01-03"])
     assert stop.value.code == 2
+
+
+def test_file_requests_carry_the_timeout_in_its_own_slot(tmp_path):
+    """Regression: the timeout was once passed positionally into the params slot."""
+    transport = transport_for(TWO_FILES)
+    GdeltFetcher(transport, tmp_path / "state.json", tmp_path, max_files=10).fetch(D, D)
+    file_requests = [r for r in transport.requests if r.url.startswith(BASE)]
+    assert file_requests
+    for request in file_requests:
+        assert request.params is None
+        assert isinstance(request.timeout_s, float)

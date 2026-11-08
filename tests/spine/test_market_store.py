@@ -162,10 +162,33 @@ def test_refusals_and_an_exhausted_budget_are_counted_separately():
         _BudgetTyper([typed(version="budget-v1"), refused, exhausted]),
         report,
     )
-    assert [r.typed.status for r in records] == ["typed", "refused_invalid", "untyped"]
-    assert records[2].typed.reason == "max_calls"
-    assert (report.refused_invalid, report.max_calls_reached, report.untyped) == (1, 1, 1)
-    assert report.kept == 3
+    # Contract change (final review F4): an exhausted budget is transient and is not stored.
+    assert [r.typed.status for r in records] == ["typed", "refused_invalid"]
+    assert (report.refused_invalid, report.max_calls_reached, report.untyped) == (1, 1, 0)
+    assert report.not_stored_transient == 1
+    assert report.kept == 2
+
+
+@pytest.mark.parametrize(
+    ("status", "reason", "stored"),
+    [
+        ("refused_invalid", "max_calls reached", False),
+        ("refused_invalid", "http 503", False),
+        ("refused_invalid", "http 0", False),
+        ("untyped", "dry-run", False),
+        ("refused_invalid", "schema: reply body is not JSON", True),
+        ("refused_invalid", "evidence span not in text", True),
+        ("untyped", "no_market_event", True),
+    ],
+)
+def test_only_transient_typing_outcomes_are_left_out(status, reason, stored):
+    answer = TypedText(
+        status=status, key=None, reason=reason, evidence_span=None, typer_version="budget-v1"
+    )
+    report = MarketIngestReport()
+    records = type_markets([FED_MARKET], _BudgetTyper([answer]), report)
+    assert len(records) == (1 if stored else 0)
+    assert (report.kept, report.not_stored_transient) == ((1, 0) if stored else (0, 1))
 
 
 @pytest.mark.parametrize(

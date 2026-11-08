@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from precedent.spine.edgar_8k_events import (
     EdgarIngestReport,
     ItemRule,
+    edgar_parser_version,
     events_from_submissions,
     load_item_rules,
     load_us_state_codes,
@@ -24,8 +25,10 @@ def utc(text: str) -> datetime:
     return datetime.fromisoformat(text).replace(tzinfo=UTC)
 
 
-def records_of(submissions, instrument="ACME", **kwargs):
-    return events_from_submissions(submissions, instrument, ingested_utc=INGESTED, **kwargs)
+def records_of(submissions, instruments=("ACME",), **kwargs):
+    return events_from_submissions(
+        submissions, list(instruments), ingested_utc=INGESTED, **kwargs
+    )
 
 
 def test_multi_item_filing_yields_one_event_per_item():
@@ -51,7 +54,7 @@ def test_amendment_is_an_update():
 
 def test_the_filer_country_is_linked():
     assert {tuple(r.linked_countries) for r in records_of(SAMPLE)[0]} == {("USA",)}
-    foreign_records = records_of(FOREIGN_SAMPLE, "XYZ")[0]
+    foreign_records = records_of(FOREIGN_SAMPLE, ["XYZ"])[0]
     assert foreign_records
     assert all(r.linked_countries == [] for r in foreign_records)
     assert all(r.event.actor.country_iso3 is None for r in foreign_records)
@@ -60,7 +63,8 @@ def test_the_filer_country_is_linked():
 def test_the_record_fields_follow_the_field_table():
     earnings = next(r for r in records_of(SAMPLE)[0] if r.article_id.endswith("000001:2.02"))
     assert earnings.source == "edgar"
-    assert earnings.parser_version == "rules-8k-v1"
+    assert earnings.parser_version == edgar_parser_version()
+    assert earnings.parser_version.startswith("rules-8k-v1:")
     assert earnings.ingested_utc == INGESTED
     assert len(earnings.body_sha256) == 64
     event = earnings.event
@@ -92,10 +96,59 @@ def test_the_record_fields_follow_the_field_table():
     assert management.event.is_scheduled is False
 
 
+def test_changing_an_item_rule_byte_changes_the_parser_version(tmp_path, monkeypatch):
+    from precedent.config import references_dir
+    from precedent.spine import edgar_8k_events
+
+    version = edgar_parser_version()
+    assert version.startswith("rules-8k-v1:") and len(version.split(":")[1]) == 12
+    rules = tmp_path / "item_rules_8k.json"
+    rules.write_bytes((references_dir() / "item_rules_8k.json").read_bytes())
+    monkeypatch.setattr(edgar_8k_events, "references_dir", lambda: tmp_path)
+    assert edgar_parser_version() == version
+    rules.write_bytes(rules.read_bytes() + b"\n")
+    assert edgar_parser_version() != version
+
+
+def test_share_classes_give_one_record_per_item_with_one_impact_per_instrument():
+    single = records_of(SAMPLE, ["ACME"])[0]
+    both = records_of(SAMPLE, ["ACME", "ACMEB"])[0]
+    assert [r.article_id for r in both] == [r.article_id for r in single]
+    assert len({r.article_id for r in both}) == len(both)
+    assert all([i.instrument for i in r.resolved_impacts] == ["ACME", "ACMEB"] for r in both)
+    assert all(r.event.impacted[0].ticker_hint == "ACME" for r in both)
+
+
+def test_ticker_hint_is_the_first_instrument_that_fits_the_pattern():
+    record = records_of(SAMPLE, ["synthetic-id 0042", "ACMEB"])[0][0]
+    assert record.event.impacted[0].ticker_hint == "ACMEB"
+
+
+@pytest.mark.parametrize("bad", [[], ["ACME", "ACME"]])
+def test_instruments_must_be_non_empty_and_unique(bad):
+    with pytest.raises(ValueError, match="instruments"):
+        records_of(SAMPLE, bad)
+
+
 def test_an_instrument_that_is_not_a_ticker_gets_no_ticker_hint():
-    record = records_of(SAMPLE, "synthetic-id 0042")[0][0]
+    record = records_of(SAMPLE, ["synthetic-id 0042"])[0][0]
     assert record.event.impacted[0].ticker_hint is None
     assert record.resolved_impacts[0].instrument == "synthetic-id 0042"
+
+
+def test_a_2009_filing_stays_unaligned_and_the_store_counts_it(tmp_path):
+    from precedent.spine.event_store import EventStore
+
+    document = json.loads(json.dumps(SAMPLE))
+    document["filings"]["recent"]["acceptanceDateTime"][3] = "2009-12-15T21:05:00.000Z"
+    records, _ = records_of(document)
+    old = [r for r in records if r.first_seen_utc.year == 2009]
+    assert old and all(r.effective_session is None and r.available_utc is not None for r in old)
+    assert any(r.effective_session is not None for r in records)
+    report = EventStore(tmp_path).append(records)
+    _, frame_report = EventStore(tmp_path).to_frame(edgar_parser_version())
+    assert report.added == len(records)
+    assert frame_report.unaligned_records == len(old)
 
 
 def test_records_are_aligned_to_the_next_session_cutoff():

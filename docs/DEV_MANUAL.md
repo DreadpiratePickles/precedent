@@ -174,7 +174,7 @@ One JSON Lines file per parser version: `$PRECEDENT_DATA_DIR/events/events_<slug
 
 **Fetcher.** `GdeltFetcher` reads the master file list, picks files stamped within `--since..--until`, downloads at most `--max-files` per run (default 96, one day), checks each file's MD5 from the list, writes it atomically under `raw/gdelt/`, and records progress in `gdelt_fetch_state.json`, so an interrupted run resumes. The MD5 guards against corruption, not tampering (the list is served over plain HTTP).
 
-**Typing** (`events_from_gdelt_rows`, parser version `rules-gdelt-v1`). In order:
+**Typing** (`events_from_gdelt_rows`, parser version `rules-gdelt-v1:<12 hex>`, a hash of `cameo_to_event_type.json` and the `gdelt` section of `precedent_params.json`, so editing either starts a new vintage). In order:
 
 1. Drop rows with `NumSources < 3` (proposed, decision B4).
 2. Map the CAMEO code through `references/cameo_to_event_type.json`. Roots 14 → `election_or_political`; 15, 18, 19, 20 → `armed_conflict`; 13 → `other`; subcode 163 (impose embargo, boycott or sanctions) with a government Actor1 → `trade_or_sanctions`; everything else `untyped` and dropped. Every row is marked `"proposed": true`; `stages/02_triage/CONTEXT.md` lists where the mapping is coarser than the code (for example protests are not elections).
@@ -185,9 +185,9 @@ One JSON Lines file per parser version: `$PRECEDENT_DATA_DIR/events/events_<slug
 
 ### 4.7 EDGAR 8-K — `edgar_client.py`, `edgar_8k_events.py`, `ingest/edgar.py`
 
-An **8-K** is the form a US public company files to report a material event; each filing lists numbered items (2.02 results, 5.02 officer change, 1.05 cybersecurity incident, and so on). EDGAR's submissions JSON gives each filing's `acceptanceDateTime`, the exact UTC moment the SEC accepted it. `filingDate` is never used: filings accepted after 17:30 Eastern get the next business day's date.
+An **8-K** is the form a US public company files to report a material event; each filing lists numbered items (2.02 results, 5.02 officer change, 1.05 cybersecurity incident, and so on). EDGAR's submissions JSON gives each filing's `acceptanceDateTime`, the moment the SEC accepted it, read as UTC (RECALLED until the first live fetch confirms the `Z` suffix; see the stage 01 contract). `filingDate` is never used: filings accepted after 17:30 Eastern get the next business day's date.
 
-`events_from_submissions` (parser version `rules-8k-v1`) makes one record per 8-K item that has a rule in `references/item_rules_8k.json` (event type, severity, scheduled flag). Unknown items, other forms and filings without items are counted, not dropped silently. `8-K/A` becomes `novelty = update`. A filer whose business address is a US state code (`references/us_state_codes.json`) links country `USA`.
+`events_from_submissions` (parser version `rules-8k-v1:<12 hex>`, a hash of `item_rules_8k.json`) makes one record per 8-K item that has a rule in `references/item_rules_8k.json` (event type, severity, scheduled flag). Unknown items, other forms and filings without items are counted, not dropped silently. `8-K/A` becomes `novelty = update`. A filer whose business address is a US state code (`references/us_state_codes.json`) links country `USA`. Every symbol on the filer's CIK (share classes) becomes one resolved impact of the same record; `ingest edgar` groups the `cik,symbol` lines by CIK.
 
 **The no-contact gate.** The SEC requires a declared User-Agent with a contact. No contact is written into the repository; `EdgarClient.from_env` reads `PRECEDENT_SEC_USER_AGENT` and raises `ConfigError` when it is unset, so `precedent ingest edgar` exits 2 before any request. HTTP 403 and 429 stop the run. The client rate-limits itself and fetches at most `--max-requests` CIKs (default 50). Label: `NO LIVE RUN`; the item list and state codes are recalled, not confirmed against the SEC (`docs/STATUS.md`). Only the `filings.recent` page is read (about the latest 1,000 filings).
 
@@ -239,13 +239,13 @@ class Typer(Protocol):
 
 An **abnormal return** is the part of an asset's return the market does not explain. The market model fits `asset = alpha + beta * market` by least squares on the **estimation window**, sessions -250 to -21 relative to the event, ending well before it so the event cannot leak into its own baseline. The **CAR** (cumulative abnormal return) sums `asset - (alpha + beta * market)` over sessions +1 to +horizon, so the event window starts after the decision cutoff.
 
-`cumulative_abnormal_return` returns **NaN, not zero**, when the estimation window has fewer than 120 usable rows, the market has no variance, or the event window runs past the data. Zero would be a claim that nothing happened. `estimate_betas` gives the trailing beta per session for the macro factors.
+`cumulative_abnormal_return` returns **NaN, not zero**, when the estimation window has fewer than 120 usable rows, the market has no variance, or the event window runs past the data. Zero would be a claim that nothing happened. `estimate_betas` gives the trailing beta per session and asset; pass that frame (not its last row) to the macro factors.
 
 ### 4.12 News and macro factors — `news_factors.py`, `macro_factors.py` (Qlib-facing)
 
 `build_news_factor_panel` turns events into a sparse (session, instrument) panel: same-day columns (`news_cnt_1d`, `news_sev_max_1d`, `news_signed_1d`, `news_novel_share_1d`) and decayed ones (`news_signed_decay`, `news_attention_decay`) with a 3-session half-life and a 20-session age limit. Age is counted in session positions, not calendar days. An event near the end of the calendar is truncated, never extrapolated.
 
-`build_macro_factor_panel` sums decayed macro directions (`macro_direction_decay`) and scales them by each instrument's beta (`macro_x_beta`).
+`build_macro_factor_panel` sums decayed macro directions (`macro_direction_decay`) and scales them by each instrument's beta (`macro_x_beta`). A Series of betas is one static beta per instrument; a frame indexed by session supplies the beta at each session (NaN beta gives NaN, never a value filled from another session), so the product stays point-in-time.
 
 **Truncation invariance** is the leak test every factor builder ships with: build from all events, then from only events up to day t; rows up to t must be identical. If they differ, a factor depends on later data. Both builders pass it through `assert_truncation_invariant` in `tests/fakes.py`.
 
