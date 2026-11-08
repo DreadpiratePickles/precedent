@@ -156,9 +156,17 @@ def test_read_ciks_groups_share_classes_under_one_cik(tmp_path):
     path = tmp_path / "ciks.csv"
     path.write_text("1652044,GOOGL\n1234567,ACME\n1652044,GOOG\n1652044,GOOG\n")
     assert [(e.cik, e.symbols) for e in read_ciks(path)] == [
-        (1652044, ("GOOGL", "GOOG")),
+        (1652044, ("GOOG", "GOOGL")),
         (1234567, ("ACME",)),
     ]
+
+
+def test_read_ciks_sorts_symbols_so_line_order_does_not_matter(tmp_path):
+    one, other = tmp_path / "one.csv", tmp_path / "other.csv"
+    one.write_text("1,GOOGL\n1,GOOG\n")
+    other.write_text("1,GOOG\n1,GOOGL\n")
+    assert [e.symbols for e in read_ciks(one)] == [("GOOG", "GOOGL")]
+    assert read_ciks(one) == read_ciks(other)
 
 
 def test_two_symbols_on_one_cik_make_one_fetch_and_one_record_per_item(workspace, tmp_path, capsys):
