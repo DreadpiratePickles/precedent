@@ -17,4 +17,5 @@ This folder ships inside the wheel as `precedent/references/` (see `pyproject.to
 ## Ripple
 
 - `ripple_params.json`: the Ripple propagation, decay, link-expiry and correlation-peer parameters (design section 9.5) and the placebo noise floor (`placebo_margin_floor`, `placebo_margin_se_multiple`: a graph beats its placebo only when the margin clears the larger of the floor and that many standard errors of the per-fold difference), all proposed; read by `load_ripple_params` in `precedent.ripple.params`.
-- `rungs/m3_ripple_*.yaml`: the Ripple ablation rungs (G1 sector, G2 correlation, G3 10-K text similarity, degree-preserving placebo), each `panel_prefixes: ["news_", "ripple_"]`; which graph builds the `ripple_` panel is decided by the caller, not by these files.
+- `rungs/m3_ripple_*.yaml`: the Ripple ablation rungs (G1 sector, G2 correlation, G3 10-K text similarity, G4 model-extracted links, degree-preserving placebo), each `panel_prefixes: ["news_", "ripple_"]`; which graph builds the `ripple_` panel is decided by the caller, not by these files.
+- `link_prompt_v1.txt`: the prompt `parse_links` sends for the G4 model-extracted links (`{filer}` and `{passage}` placeholders, closed relation and kind lists); the owner approves it before any run, and the Loop in `stages/30_ripple_links/CONTEXT.md` may add `link_prompt_v<N>.txt` versions.
