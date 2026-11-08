@@ -203,22 +203,29 @@ footer { padding-bottom: 28px; font-size: 13px; }
   }
 
   const EVENT_RANGES = { direction_sign: [-1, 1, 1], severity_band: [0, 2, 1], is_scheduled: [0, 1, 1] };
-  function mechanismControls(payload) {
+  // The page starts from the query: its event values and every do() it was run with, whatever
+  // the node's kind (an asset or event node has no slider but its intervention still applies).
+  function mechanismInitialState(payload) {
     const forced = {};
     payload.interventions.forEach((i) => { forced[i.node] = i.value; });
+    return { events: Object.assign({}, payload.event_values), forced };
+  }
+  function mechanismControls(payload) {
+    const forced = mechanismInitialState(payload).forced;
     return payload.graph.nodes.filter((n) => n.kind !== "asset").map((n) => {
       if (n.kind === "event") {
         const [min, max, step] = EVENT_RANGES[n.id.split(":").pop()] || [-1, 1, 1];
         return { node: n.id, kind: "event", min, max, step, value: payload.event_values[n.id] ?? 0, free: false };
       }
-      const set = has(forced, n.id);
-      return { node: n.id, kind: "intermediate", min: -3, max: 3, step: 0.1, value: set ? forced[n.id] : 0, free: !set };
+      const set = has(forced, n.id), value = set ? forced[n.id] : 0;
+      return { node: n.id, kind: "intermediate", min: Math.min(-3, value), max: Math.max(3, value), step: 0.1, value, free: !set };
     });
   }
 
   window.mechanismPrng = { fmix32, hashUniform, hashNormals };
   window.mechanismSimulate = mechanismSimulate;
   window.mechanismControls = mechanismControls;
+  window.mechanismInitialState = mechanismInitialState;
 
   // ---- the page -------------------------------------------------------------------------
   const pct = (x) => (x >= 0 ? "+" : "-") + Math.abs(x * 100).toFixed(1) + "%";
@@ -291,7 +298,7 @@ footer { padding-bottom: 28px; font-size: 13px; }
     document.getElementById("manifest").textContent = ["graph " + fitted.graph_version, "fitted as of " + fitted.fitted_asof_utc.slice(0, 10), "seed " + payload.seed, payload.n_paths + " paths", "commit " + (payload.code_commit || "unknown")].join(" | ");
     drawDag(payload);
 
-    const state = { events: Object.assign({}, payload.event_values), forced: {} };
+    const state = mechanismInitialState(payload);
     const rows = mechanismControls(payload), inputs = {};
     const controlsEl = document.getElementById("controls");
     rows.forEach((c) => {
@@ -307,23 +314,30 @@ footer { padding-bottom: 28px; font-size: 13px; }
         const tag = document.createElement("label"); tag.append(box, " do()"); toggle.appendChild(tag);
         slider.disabled = c.free;
       }
-      const sync = () => {
+      // display() shows the state; read() takes the user's move into the state.
+      const display = () => {
+        const shown = c.kind === "event" ? state.events[c.node] : state.forced[c.node];
+        slider.disabled = box ? !box.checked : false;
+        value.textContent = shown === undefined ? "free" : String(Math.round(shown * 100) / 100);
+      };
+      const read = () => {
         const number = Number(slider.value);
         if (c.kind === "event") state.events[c.node] = number;
         else if (box.checked) state.forced[c.node] = number; else delete state.forced[c.node];
-        slider.disabled = box ? !box.checked : false;
-        value.textContent = box && !box.checked ? "free" : String(Math.round(number * 100) / 100);
+        display();
       };
-      slider.addEventListener("input", () => { sync(); render(); });
-      if (box) box.addEventListener("change", () => { sync(); render(); });
-      inputs[c.node] = { c, slider, box, sync };
-      row.append(label, toggle, slider, value); controlsEl.appendChild(row); sync();
+      slider.addEventListener("input", () => { read(); render(); });
+      if (box) box.addEventListener("change", () => { read(); render(); });
+      inputs[c.node] = { c, slider, box, display };
+      row.append(label, toggle, slider, value); controlsEl.appendChild(row); display();
     });
     document.getElementById("reset").addEventListener("click", () => {
+      const initial = mechanismInitialState(payload);
+      state.events = initial.events; state.forced = initial.forced;
       mechanismControls(payload).forEach((c) => {
         const input = inputs[c.node]; input.slider.value = c.value;
         if (input.box) input.box.checked = !c.free;
-        input.sync();
+        input.display();
       });
       render();
     });

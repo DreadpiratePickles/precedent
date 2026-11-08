@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import math
 import os
 import subprocess
 import sys
@@ -80,6 +81,8 @@ def parse_do_flags(flags: list[str], graph: CausalGraph) -> tuple[Intervention, 
             value = float(raw)
         except ValueError as error:
             raise ValueError(f"--do {flag!r}: {raw!r} is not a number") from error
+        if not math.isfinite(value):
+            raise ValueError(f"--do {flag!r}: {raw!r} is not a finite number")
         parsed.append(Intervention(node, value))
     return tuple(parsed)
 
@@ -193,7 +196,7 @@ def _result_for(args: argparse.Namespace, key: EventKey, graph: CausalGraph) -> 
         interventions=interventions,
         precedent=bands,
         seed=args.seed,
-        n_paths=args.n_paths or load_params().n_paths,
+        n_paths=load_params().n_paths if args.n_paths is None else args.n_paths,
         asof_utc=asof_utc,
         code_commit=_code_commit(),
     )
@@ -210,16 +213,18 @@ def run(argv: list[str]) -> int:
         return _usage_error(
             "precedent mechanism: give either the event text or --event-type, not both"
         )
-    key = _key_from_text(args.text) if args.text is not None else _key_from_flags(args)
-    if key is None:
-        return USAGE_ERROR
     try:
+        key = _key_from_text(args.text) if args.text is not None else _key_from_flags(args)
+        if key is None:
+            return USAGE_ERROR
         graph = _resolve_graph(key)
         if graph is None:
             return _usage_error(f"no template graph for event type {key.event_type}")
         parse_do_flags(args.do, graph)  # fail on a bad --do before any data is read
         result = _result_for(args, key, graph)
     except ConfigError as error:
+        return _usage_error(str(error))
+    except NotImplementedError as error:
         return _usage_error(str(error))
     except ValueError as error:
         return _usage_error(f"precedent mechanism: {error}")

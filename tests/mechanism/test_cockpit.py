@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
+import types
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -394,6 +395,32 @@ def test_js_do_intervention_and_controls_follow_python():
 
 
 @needs_node
+def test_js_initial_state_keeps_every_intervention_and_matches_the_embedded_fan():
+    # an asset and an intermediate intervention, the second beyond the default slider range
+    forced = (Intervention("TLT", 0.01), Intervention(RATES, 5.0))
+    result = simulated_result(interventions=forced, n_paths=3000, seed=2)
+    program = """
+    const payload = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    const state = window.mechanismInitialState(payload);
+    const list = Object.keys(state.forced).map((node) => ({node, value: state.forced[node]}));
+    console.log(JSON.stringify({
+      state,
+      controls: window.mechanismControls(payload),
+      sim: window.mechanismSimulate(payload, state.events, list, payload.n_paths, payload.seed),
+    }));
+    """
+    out = run_node(render_html(result), program, render_json(result))
+    assert out["state"]["forced"] == {"TLT": 0.01, RATES: 5.0}
+    assert out["state"]["events"] == {SIGN: -1.0}
+    rates = next(c for c in out["controls"] if c["node"] == RATES)
+    assert rates["max"] >= 5.0 and rates["value"] == 5.0 and rates["free"] is False
+    assert all(c["node"] != "TLT" for c in out["controls"])  # an asset has no slider
+    for asset, row in result.rollout_fan.items():
+        for q, expected in row.items():
+            assert out["sim"][asset][q] == pytest.approx(expected, abs=5e-4)
+
+
+@needs_node
 def test_js_falls_back_to_the_diagonal_like_python():
     graph = make_graph()
     bad_cov = np.array([[0.04, 0.2, 0.0], [0.2, 0.09, 0.0], [0.0, 0.0, 0.0625]])
@@ -486,6 +513,50 @@ def test_refused_text_query_exits_2(capsys, monkeypatch):
     monkeypatch.setattr(cli, "typer_from_env", lambda: Refuser())
     assert run(["x"]) == 2
     assert "schema: bad" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("flags", "bad"),
+    [
+        (["--event-type", "bogus", "--actor-kind", "central_bank"], "bogus"),
+        (["--event-type", "central_bank", "--actor-kind", "wizard"], "wizard"),
+        (
+            ["--event-type", "central_bank", "--actor-kind", "central_bank",
+             "--impacted-kinds", "index,planet"],
+            "planet",
+        ),
+    ],
+)  # fmt: skip
+def test_bad_key_flags_exit_2_naming_the_value(capsys, flags, bad):
+    assert run(flags) == 2
+    err = capsys.readouterr().err
+    assert bad in err and "Traceback" not in err
+
+
+def test_engine_present_but_data_step_unwritten_exits_2_with_its_message(capsys, monkeypatch):
+    engine = types.ModuleType("precedent.engine")
+    engine.__path__ = []
+    retrieval = types.ModuleType("precedent.engine.retrieval")
+    engine.retrieval = retrieval
+    monkeypatch.setitem(sys.modules, "precedent.engine", engine)
+    monkeypatch.setitem(sys.modules, "precedent.engine.retrieval", retrieval)
+    assert run(KEY_FLAGS) == 2
+    err = capsys.readouterr().err
+    assert "Task 7b" in err and "not built yet" not in err
+
+
+def test_do_value_must_be_finite(capsys):
+    graph = make_graph()
+    for raw in ("nan", "inf", "-inf"):
+        with pytest.raises(ValueError, match="finite"):
+            parse_do_flags([f"{RATES}={raw}"], graph)
+    assert run([*KEY_FLAGS, "--do", "rates_expectation=nan"]) == 2
+    assert "rates_expectation=nan" in capsys.readouterr().err
+
+
+def test_zero_n_paths_is_rejected_not_defaulted(capsys, stubbed_data_step):
+    assert run([*KEY_FLAGS, "--n-paths", "0"]) == 2
+    assert "n_paths" in capsys.readouterr().err
 
 
 def test_no_arguments_and_text_with_flags_are_usage_errors(capsys):
