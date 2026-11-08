@@ -10,6 +10,8 @@ from typing import Any
 import pandas as pd
 from pandas.testing import assert_frame_equal
 
+from precedent.spine.event_record import EventRecord
+from precedent.spine.event_schema import NewsEvent
 from precedent.spine.http import HttpRequest, HttpResponse
 
 
@@ -114,3 +116,41 @@ def _up_to(frame: pd.DataFrame, cut: Any) -> pd.DataFrame:
     if "effective_session" in frame.columns:
         return frame[frame["effective_session"] <= cut].reset_index(drop=True)
     return frame[frame.index.get_level_values(0) <= cut]
+
+
+_RECORD_EVENT = {
+    "schema_version": "1.0",
+    "event_type": "earnings",
+    "actor": {"name": "Acme Corp", "kind": "company", "country_iso3": "USA"},
+    "action": "reported revenue above guidance",
+    "impacted": [
+        {"name": "Acme Corp", "kind": "company", "ticker_hint": "ACME", "direction_step": 2}
+    ],
+    "severity": 5,
+    "macro_direction_step": 0,
+    "confidence": "high",
+    "horizon": "days",
+    "novelty": "new",
+    "is_scheduled": True,
+    "evidence_span": "Acme reported revenue of 12 billion dollars",
+}
+
+
+def make_event_record(**overrides: Any) -> EventRecord:
+    """A valid EventRecord with no availability yet; keyword overrides replace any field."""
+    fields: dict[str, Any] = {
+        "article_id": "gdelt:1",
+        "body_sha256": "0" * 64,
+        "source": "gdelt",
+        "published_utc": None,
+        "first_seen_utc": datetime(2024, 1, 5, 14, 0, tzinfo=UTC),
+        "ingested_utc": datetime(2024, 1, 5, 14, 5, tzinfo=UTC),
+        "available_utc": None,
+        "effective_session": None,
+        "parser_version": "v1",
+        "event": NewsEvent.model_validate(_RECORD_EVENT),
+        "resolved_impacts": [],
+        "linked_countries": ["USA"],
+    }
+    fields.update(overrides)
+    return EventRecord(**fields)

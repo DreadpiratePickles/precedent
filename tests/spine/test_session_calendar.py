@@ -1,0 +1,158 @@
+"""Tests for the committed NYSE session calendar and its early-close cutoffs."""
+
+import datetime as dt
+from datetime import date
+
+import pandas as pd
+import pytest
+from fakes import make_event_record
+
+from precedent.spine.pit_alignment import align_records
+from precedent.spine.session_calendar import (
+    NyseCalendar,
+    calendar_cutoffs,
+    load_nyse_calendar,
+    resolve_sessions,
+    weekday_sessions,
+)
+
+CALENDAR = load_nyse_calendar()
+
+
+def utc(text: str) -> dt.datetime:
+    return pd.Timestamp(text, tz="UTC").to_pydatetime()
+
+
+def test_thanksgiving_is_not_a_session() -> None:
+    sessions = weekday_sessions(date(2024, 11, 25), date(2024, 11, 29), CALENDAR)
+    assert list(sessions.strftime("%Y-%m-%d")) == [
+        "2024-11-25",
+        "2024-11-26",
+        "2024-11-27",
+        "2024-11-29",
+    ]
+
+
+def test_sessions_are_naive_midnight_dates() -> None:
+    sessions = weekday_sessions(date(2024, 11, 25), date(2024, 11, 29), CALENDAR)
+    assert isinstance(sessions, pd.DatetimeIndex)
+    assert sessions.tz is None
+    assert (sessions == sessions.normalize()).all()
+
+
+def test_an_early_close_moves_the_cutoff() -> None:
+    cutoffs = calendar_cutoffs(pd.DatetimeIndex(["2024-11-27", "2024-11-29"]), CALENDAR)
+    assert list(cutoffs) == [
+        pd.Timestamp(utc("2024-11-27 21:00")),
+        pd.Timestamp(utc("2024-11-29 18:00")),
+    ]
+    assert str(cutoffs.dt.tz) == "UTC"
+    assert list(cutoffs.index) == [pd.Timestamp("2024-11-27"), pd.Timestamp("2024-11-29")]
+
+
+def test_news_after_a_half_day_close_rolls_to_monday() -> None:
+    sessions = weekday_sessions(date(2024, 11, 25), date(2024, 12, 6), CALENDAR)
+    cutoffs = calendar_cutoffs(sessions, CALENDAR)
+    record = make_event_record(first_seen_utc=utc("2024-11-29 18:30"))
+    aligned = align_records([record], cutoffs, latency=pd.Timedelta(0))[0]
+    assert aligned.effective_session == date(2024, 12, 2)
+
+
+def test_provider_sessions_win_when_present() -> None:
+    provider = pd.DatetimeIndex(["2024-01-02", "2024-01-04"])
+    resolved = resolve_sessions(
+        date(2024, 1, 2), date(2024, 1, 4), CALENDAR, provider_sessions=provider
+    )
+    assert resolved.equals(provider)
+
+
+def test_the_committed_calendar_is_used_when_the_provider_has_none() -> None:
+    resolved = resolve_sessions(date(2024, 11, 27), date(2024, 11, 29), CALENDAR)
+    assert list(resolved.strftime("%Y-%m-%d")) == ["2024-11-27", "2024-11-29"]
+
+
+def test_the_calendar_refuses_years_it_does_not_cover() -> None:
+    with pytest.raises(ValueError):
+        weekday_sessions(date(2028, 1, 3), date(2028, 1, 7), CALENDAR)
+    with pytest.raises(ValueError):
+        weekday_sessions(date(2009, 12, 28), date(2010, 1, 5), CALENDAR)
+
+
+def test_a_reversed_range_is_an_error() -> None:
+    with pytest.raises(ValueError):
+        weekday_sessions(date(2024, 1, 5), date(2024, 1, 2), CALENDAR)
+
+
+def test_holiday_file_covers_2010_to_2027_on_weekdays() -> None:
+    assert (CALENDAR.first_year, CALENDAR.last_year) == (2010, 2027)
+    assert all(day.weekday() < 5 for day in CALENDAR.holidays)
+
+
+@pytest.mark.parametrize(
+    "closed",
+    [
+        date(2012, 10, 29),  # Hurricane Sandy
+        date(2012, 10, 30),
+        date(2017, 1, 2),  # New Year's Day observed
+        date(2020, 7, 3),  # Independence Day observed
+        date(2021, 12, 24),  # Christmas observed
+        date(2022, 6, 20),  # Juneteenth observed, first year
+        date(2024, 3, 29),  # Good Friday
+        date(2025, 1, 9),  # national day of mourning
+        date(2027, 6, 18),
+    ],
+)
+def test_known_closures_are_holidays(closed: date) -> None:
+    assert closed in CALENDAR.holidays
+
+
+@pytest.mark.parametrize("open_day", [date(2021, 12, 31), date(2022, 12, 30), date(2027, 12, 31)])
+def test_a_saturday_new_year_is_not_observed_on_the_friday(open_day: date) -> None:
+    assert open_day not in CALENDAR.holidays
+
+
+def test_juneteenth_is_not_a_holiday_before_2022() -> None:
+    assert date(2021, 6, 18) not in CALENDAR.holidays
+    assert date(2021, 6, 19) not in CALENDAR.holidays
+
+
+def test_early_closes_are_open_weekdays_at_one_pm() -> None:
+    assert CALENDAR.early_closes[date(2024, 11, 29)] == dt.time(13, 0)
+    assert CALENDAR.early_closes[date(2024, 7, 3)] == dt.time(13, 0)
+    assert CALENDAR.early_closes[date(2024, 12, 24)] == dt.time(13, 0)
+    assert not set(CALENDAR.early_closes) & CALENDAR.holidays
+    assert all(day.weekday() < 5 for day in CALENDAR.early_closes)
+
+
+def test_a_calendar_is_frozen() -> None:
+    with pytest.raises(ValueError):
+        CALENDAR.first_year = 2000  # type: ignore[misc]
+
+
+def test_a_calendar_rejects_an_early_close_on_a_holiday() -> None:
+    with pytest.raises(ValueError):
+        NyseCalendar(
+            first_year=2024,
+            last_year=2024,
+            holidays=frozenset({date(2024, 11, 28)}),
+            early_closes={date(2024, 11, 28): dt.time(13, 0)},
+            source="test",
+        )
+
+
+def test_the_loader_reads_a_given_path_and_rejects_a_bad_file(tmp_path) -> None:
+    good = tmp_path / "cal.json"
+    good.write_text(
+        '{"source": "s", "first_year": 2024, "last_year": 2024,'
+        ' "holidays": ["2024-01-01"], "early_closes": {"2024-11-29": "13:00"}}'
+    )
+    loaded = load_nyse_calendar(good)
+    assert loaded.holidays == frozenset({date(2024, 1, 1)})
+    assert loaded.early_closes == {date(2024, 11, 29): dt.time(13, 0)}
+    bad = tmp_path / "bad.json"
+    bad.write_text(
+        '{"source": "s", "first_year": 2024, "last_year": 2024, "holidays": ["2024-01-06"],'
+        ' "early_closes": {}}'
+    )
+    with pytest.raises(ValueError):
+        load_nyse_calendar(bad)
