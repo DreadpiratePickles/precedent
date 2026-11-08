@@ -49,8 +49,8 @@ def effective_sample_size(
     """The smaller of the Kish size and the count of non-overlapping windows.
 
     Kish is ``(sum w)^2 / sum w^2``. The window count is greedy in ascending position order: a
-    start is accepted when it is at least ``horizon`` after the last accepted one. Empty input
-    gives 0.0, and so do weights that are all zero.
+    start is accepted when it is at least ``horizon`` after the last accepted one. Rows with zero
+    weight are ignored for both. Empty input gives 0.0, and so do weights that are all zero.
     """
     w = _check_weights(weights)
     starts = np.asarray(window_start_positions)
@@ -68,7 +68,7 @@ def effective_sample_size(
     kish = float(np.sum(w)) ** 2 / sum_sq
     count = 0
     last_accepted: float | None = None
-    for start in np.sort(starts):
+    for start in np.sort(starts[w > 0]):
         if last_accepted is None or start >= last_accepted + horizon:
             count += 1
             last_accepted = start
@@ -114,6 +114,10 @@ def summarize_responses(
     Continuous ``placebo`` is an array of placebo responses; binary ``placebo`` is the
     unconditional rate. A refused summary keeps ``n``, ``n_eff`` and, for binary, ``k``. An
     all-zero weight vector (``n_eff == 0``) is refused even if ``min_neff`` is not positive.
+
+    ``n`` counts every input row. Every other statistic (window count, quantiles, hit rate,
+    rate, ``k``) uses only the rows with positive weight. A non-finite placebo raises
+    ``ValueError``.
     """
     v = np.asarray(values, dtype=float)
     w = _check_weights(weights)
@@ -127,11 +131,20 @@ def summarize_responses(
             raise ValueError("binary values must be 0.0 or 1.0")
         if placebo is not None and np.ndim(placebo) != 0:
             raise ValueError("a binary summary needs a float placebo rate, not an array")
+        if placebo is not None and not np.isfinite(float(placebo)):
+            raise ValueError("the placebo rate must be finite")
     elif placebo is not None and np.ndim(placebo) == 0:
         raise ValueError("a continuous summary needs an array of placebo values, not a float")
+    elif placebo is not None and not np.all(np.isfinite(np.asarray(placebo, dtype=float))):
+        raise ValueError("placebo values must be finite")
 
+    starts = np.asarray(window_start_positions)
+    if starts.ndim != 1 or starts.shape[0] != v.shape[0]:
+        raise ValueError(f"values {v.shape} and window_start_positions {starts.shape} differ")
     n = int(v.shape[0])
-    n_eff = effective_sample_size(w, window_start_positions, horizon)
+    positive = w > 0
+    v, w, starts = v[positive], w[positive], starts[positive]
+    n_eff = effective_sample_size(w, starts, horizon)
     k = int(np.sum(v == 1.0)) if is_binary else None
     if n_eff < min_neff or n_eff <= 0.0:
         return PrecedentSummary(mode=mode, n=n, n_eff=n_eff, refused=True, k=k)

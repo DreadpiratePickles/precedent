@@ -168,3 +168,63 @@ def test_binary_placebo_rate_is_reported_and_none_placebo_gives_none():
 def test_values_and_weights_length_mismatch_raises():
     with pytest.raises(ValueError):
         summarize_responses(np.ones(4), np.ones(3), np.arange(3) * 10, 5, None)
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_non_finite_placebo_is_rejected_in_both_modes(bad):
+    with pytest.raises(ValueError):
+        summarize_responses(
+            np.full(12, 0.02), np.ones(12), np.arange(12) * 10, 5, np.array([0.0, bad, 0.01])
+        )
+    with pytest.raises(ValueError):
+        summarize_responses(
+            np.ones(12), np.ones(12), np.arange(12) * 100, 20, bad, is_binary=True
+        )
+    # a refused summary still validates its placebo
+    with pytest.raises(ValueError):
+        summarize_responses(np.ones(5), np.ones(5), np.arange(5) * 100, 20, bad, is_binary=True)
+
+
+def test_zero_weight_start_does_not_count_as_a_window():
+    s = summarize_responses(
+        np.full(4, 0.02), np.array([0.0, 1.0, 1.0, 1.0]), np.array([0, 3, 7, 20]), 5, None,
+        min_neff=1.0,
+    )
+    assert s.n == 4 and s.n_eff == pytest.approx(2.0)  # starts 3, 7, 20: accepts 3 and 20
+    assert effective_sample_size(np.array([0.0, 1.0, 1.0, 1.0]), np.array([0, 3, 7, 20]), 5) == (
+        pytest.approx(2.0)
+    )
+
+
+def test_zero_weight_values_do_not_leak_into_the_statistics():
+    s = summarize_responses(
+        np.array([-5.0, 5.0, 1.0, 2.0]),
+        np.array([0.0, 0.0, 1.0, 1.0]),
+        np.array([0, 100, 200, 300]),
+        5,
+        None,
+        min_neff=1.0,
+    )
+    assert s.n == 4 and s.n_eff == pytest.approx(2.0)
+    assert s.quantiles[0.1] == pytest.approx(1.0) and s.quantiles[0.9] == pytest.approx(2.0)
+    assert s.median == pytest.approx(1.5) and s.hit_rate == pytest.approx(1.0)
+
+
+def test_zero_weight_rows_do_not_count_in_binary_k_or_rate():
+    s = summarize_responses(
+        np.array([1.0, 1.0, 0.0, 1.0]),
+        np.array([0.0, 1.0, 1.0, 1.0]),
+        np.array([0, 100, 200, 300]),
+        5,
+        None,
+        is_binary=True,
+        min_neff=1.0,
+    )
+    assert (s.n, s.k) == (4, 2) and s.rate == pytest.approx(2 / 3)
+
+
+def test_a_median_outside_the_placebo_range_is_flagged_false():
+    s = summarize_responses(
+        np.full(20, 0.08), np.ones(20), np.arange(20) * 10, 5, np.linspace(-0.05, 0.05, 101)
+    )
+    assert s.inside_ordinary_range is False
