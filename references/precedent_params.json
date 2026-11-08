@@ -1,6 +1,7 @@
 {
   "notes": {
-    "gdelt": "Every value is proposed (decision B4); see stages/02_triage/CONTEXT.md."
+    "gdelt": "Every value is proposed (decision B4); see stages/02_triage/CONTEXT.md.",
+    "engine": "Every value is proposed; see stages/20_precedent_libraries/CONTEXT.md."
   },
   "gdelt": {
     "min_sources": 3,
@@ -15,5 +16,24 @@
       "high": 8
     },
     "latency_minutes": 30
+  },
+  "engine": {
+    "top_k": 30,
+    "min_neff": 8.0,
+    "shrink_k": 10.0,
+    "story_window_sessions": 3,
+    "nearest_shown": 5,
+    "card_rows_per_type": 8,
+    "asset_horizons": [1, 5, 20],
+    "sequence_horizons": [5, 20, 60],
+    "wilson_z": 1.2816,
+    "embedding_weight": 0.5,
+    "placebo_samples": 500,
+    "placebo_seed": 0,
+    "market": "SPY",
+    "asset_panel": [
+      "SPY", "QQQ", "IWM", "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU",
+      "XLV", "XLY", "TLT", "IEF", "HYG", "GLD", "USO", "UUP", "EEM", "EFA"
+    ]
   }
 }

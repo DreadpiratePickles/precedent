@@ -32,11 +32,11 @@ Fetch raw items from each source and append them, content-hashed and stamped wit
 Review the manifest counts and failures. A live fetch against a real source, and any fetch that downloads a dataset, is an owner gate: name the source, size and cost first.
 
 ## Failure Behavior
-Retry only transient failures (429, 5xx) with exponential backoff and jitter, at most 3 times. A partial failure is recorded per item in the manifest; a failed read never becomes an empty store. After the retry budget, stop, keep what was appended, and escalate with the manifest.
+Retry only transient failures (429, 5xx and transport failures) with exponential backoff and jitter, at most 3 times; a typing refusal of `http 408` is also transient (never stored, retried by a later run), while every other `http 4xx` is permanent. A partial failure is recorded per item in the manifest; a failed read never becomes an empty store. After the retry budget, stop, keep what was appended, and escalate with the manifest.
 
 Loop: single pass. The work is a deterministic transform decided by tests, so there is no oracle-driven iteration to run (design 10.2).
 
-Market typing outcomes that say nothing about the question are not stored: a spent call budget (`max_calls`), a transport refusal (`http ...`) and anything produced under `--dry-run`. They are counted (`not_stored_transient`), the crawl stops without saving the cursor past that page so a later run fetches it again, and `ingest polymarket|kalshi --dry-run` sends no request and writes nothing.
+Market typing outcomes that say nothing about the question are not stored: a spent call budget (`max_calls`), a transient transport refusal (`http 0`, `http 408`, `http 429`, `http 5xx`) and anything produced under `--dry-run`; any other `http 4xx` is a permanent refusal and is stored as `refused_invalid`. Markets already in the store for the typer version are skipped before typing (`already_stored`). Transient outcomes are counted (`not_stored_transient`), the crawl stops without saving the cursor past that page so a later run fetches it again, the run prints one stderr line and exits 1, and `ingest polymarket|kalshi --dry-run` sends no request and writes nothing.
 
 ### Source: S&P 500 membership
 - Source: `fja05680/sp500`, file `S&P 500 Historical Components & Changes.csv` (read 2026-11-07 from the raw file; its README gives no column layout). Not committed; `tests/fixtures/membership_sample.csv` is a synthetic file with the same layout.

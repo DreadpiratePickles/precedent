@@ -14,7 +14,9 @@ from precedent.spine.typers.base import TypedText, Typer
 
 MAX_CALLS_REASON_PREFIX = "max_calls"
 DRY_RUN_REASON = "dry-run"
-_TRANSIENT_REFUSAL_PREFIXES = ("max_calls", "http")
+HTTP_REASON_PREFIX = "http"
+_HTTP_REASON = re.compile(r"^http\s+(\d+)\b")
+_TRANSIENT_HTTP_STATUSES = frozenset({0, 408, 429})
 _OFFSET_SUFFIX = re.compile(r"(Z|[+-]\d{2}(:?\d{2})?)$", re.IGNORECASE)
 
 
@@ -57,6 +59,7 @@ class MarketIngestReport:
     refused_invalid: int = 0
     max_calls_reached: int = 0
     not_stored_transient: int = 0
+    already_stored: int = 0
     resolved_by_prices_only: int = 0
     stopped_by_budget: bool = False
     stopped_by_transient: bool = False
@@ -100,15 +103,32 @@ def _parse_with_pandas(text: str) -> datetime | None:
     return stamp.to_pydatetime()
 
 
+def _is_transient_http_reason(reason: str) -> bool:
+    """`http <status>` is transient for status 0 (transport failure), 408, 429 and 5xx.
+
+    Any other status (400, 401, 403, 404, 413, 422, ...) says the request itself is refused, so a
+    retry cannot help. A reason that starts with `http` but carries no status stays transient.
+    """
+    found = _HTTP_REASON.match(reason)
+    if found is None:
+        return True
+    status = int(found.group(1))
+    return status in _TRANSIENT_HTTP_STATUSES or 500 <= status <= 599
+
+
 def is_transient_outcome(typed: TypedText) -> bool:
     """True when a typing outcome says nothing about the question and must not be stored.
 
-    A spent call budget (`max_calls...`), a transport failure (`http ...`) and a dry run
-    (`untyped` with reason "dry-run") would otherwise be kept under the real typer version,
-    so a later run could never type the market (and re-typing would raise a conflict).
+    A spent call budget (`max_calls...`), a transient transport failure (`http 0`, 408, 429, 5xx)
+    and a dry run (`untyped` with reason "dry-run") would otherwise be kept under the real typer
+    version, so a later run could never type the market (and re-typing would raise a conflict).
+    A permanent `http 4xx` refusal is stored like any other `refused_invalid`.
     """
     if typed.status == "refused_invalid":
-        return (typed.reason or "").startswith(_TRANSIENT_REFUSAL_PREFIXES)
+        reason = typed.reason or ""
+        if reason.startswith(MAX_CALLS_REASON_PREFIX):
+            return True
+        return reason.startswith(HTTP_REASON_PREFIX) and _is_transient_http_reason(reason)
     return typed.status == "untyped" and typed.reason == DRY_RUN_REASON
 
 
