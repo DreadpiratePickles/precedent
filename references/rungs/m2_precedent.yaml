@@ -1,0 +1,7 @@
+# proposed: true. This rung has never been run; the ablation on real data is an owner gate.
+# The loader forbids extra keys, so the note lives in this comment, not in a field.
+# The five prec_ columns (prec_car5_med, prec_car5_iqr, prec_neff, prec_hit_rate,
+# prec_placebo_z) come from precedent.engine.precedent_factors; prec_placebo_z is 0.0 until a
+# caller that has the placebo_asset rows fills it. m1's news_ columns stay in.
+name: m2_precedent
+panel_prefixes: ["news_", "prec_"]
