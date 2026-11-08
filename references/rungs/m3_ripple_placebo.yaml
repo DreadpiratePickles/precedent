@@ -1,0 +1,3 @@
+name: m3_ripple_placebo
+# The ladder supplies the degree-preserving shuffle of the graph under test for this rung. The graph identity lives in the supplied ripple_ panel, not in this file.
+panel_prefixes: ["news_", "ripple_"]

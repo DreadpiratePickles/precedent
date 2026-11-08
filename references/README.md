@@ -17,3 +17,4 @@ This folder ships inside the wheel as `precedent/references/` (see `pyproject.to
 ## Ripple
 
 - `ripple_params.json`: the Ripple propagation, decay, link-expiry and correlation-peer parameters (design section 9.5), all proposed; read by `load_ripple_params` in `precedent.ripple.params`.
+- `rungs/m3_ripple_*.yaml`: the three Ripple ablation rungs (G1 sector, G2 correlation, degree-preserving placebo), each `panel_prefixes: ["news_", "ripple_"]`; which graph builds the `ripple_` panel is decided by the caller, not by these files.
