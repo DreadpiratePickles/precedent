@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import numbers
 from collections.abc import Callable
 from typing import Protocol
 
@@ -47,7 +48,12 @@ def embedding_similarity(
     returned unchanged and the embedder is not called. Otherwise the query text and every
     event text go to the embedder in one call, once per evaluation.
     """
-    if not isinstance(weight, int | float) or math.isnan(weight) or not 0.0 <= weight <= 1.0:
+    if (
+        isinstance(weight, bool)
+        or not isinstance(weight, numbers.Real)
+        or math.isnan(weight)
+        or not 0.0 <= weight <= 1.0
+    ):
         raise ValueError(f"weight must lie in [0, 1], got {weight!r}")
 
     def similarity(query: PrecedentQuery, events: pd.DataFrame) -> pd.Series:

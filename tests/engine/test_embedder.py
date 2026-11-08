@@ -9,6 +9,7 @@ from engine_synthetic import CUTOFFS, SESSIONS
 from precedent.engine.embedder import TextEmbedder, embedding_similarity
 from precedent.engine.evaluate import score_precedent_ladder
 from precedent.engine.keys import key_from_flags
+from precedent.engine.params import load_engine_params
 from precedent.engine.retrieval import (
     PrecedentQuery,
     exact_key_similarity,
@@ -293,3 +294,85 @@ def test_rung_b3_scores_with_the_events_own_text(fake_embedder):
 def test_the_default_rungs_are_unchanged_and_need_no_embedder():
     table = score_precedent_ladder(**_ladder_inputs(), outcome_type="event_sequence")
     assert set(table["rung"]) == {"B0", "B1"}
+
+
+def _text_driven_inputs():
+    """One key throughout; the outcome follows the text, so only text similarity can separate."""
+    placements = [
+        (f"t{i:03d}", KEY_A, 10 + 4 * i, TEXT_A if i % 2 == 0 else TEXT_B) for i in range(80)
+    ]
+    events = _events_with_text(placements)
+    rows = _sequence_rows(events)
+    rows["value"] = [1.0 if i % 2 == 0 else 0.0 for i in range(len(rows))]
+    return {"events": events, "rows": rows, "session_cutoffs_utc": CUTOFFS}
+
+
+def test_rung_b3_at_half_weight_changes_scores_relative_to_b1(fake_embedder):
+    inputs = _text_driven_inputs()
+    b1 = score_precedent_ladder(**inputs, outcome_type="event_sequence", rungs=("B1",))
+    b3 = score_precedent_ladder(
+        **inputs,
+        outcome_type="event_sequence",
+        rungs=("B3",),
+        embedder=fake_embedder,
+        embedding_weight=0.5,
+    )
+    left = b1.drop(columns="rung").reset_index(drop=True)
+    right = b3.drop(columns="rung").reset_index(drop=True)
+    assert len(left) == len(right) > 0
+    with pytest.raises(AssertionError):
+        pd.testing.assert_frame_equal(left, right)
+    assert b3["brier"].dropna().iloc[0] < b1["brier"].dropna().iloc[0]
+
+
+def test_rung_b3_default_weight_is_the_params_value(fake_embedder):
+    inputs = _text_driven_inputs()
+    default = score_precedent_ladder(
+        **inputs, outcome_type="event_sequence", rungs=("B3",), embedder=fake_embedder
+    )
+    explicit = score_precedent_ladder(
+        **inputs,
+        outcome_type="event_sequence",
+        rungs=("B3",),
+        embedder=fake_embedder,
+        embedding_weight=load_engine_params().embedding_weight,
+    )
+    pd.testing.assert_frame_equal(default, explicit)
+
+
+def test_rung_b3_without_a_canonical_text_column_raises(fake_embedder):
+    inputs = _ladder_inputs()
+    inputs["events"] = inputs["events"].drop(columns=["canonical_text"])
+    with pytest.raises(ValueError, match="canonical_text"):
+        score_precedent_ladder(
+            **inputs, outcome_type="event_sequence", rungs=("B3",), embedder=fake_embedder
+        )
+
+
+def test_rung_b3_with_a_null_query_text_raises(fake_embedder):
+    inputs = _ladder_inputs()
+    events = inputs["events"].copy()
+    events.loc[events.index[-1], "canonical_text"] = None
+    inputs["events"] = events
+    with pytest.raises(ValueError, match="canonical_text"):
+        score_precedent_ladder(
+            **inputs, outcome_type="event_sequence", rungs=("B3",), embedder=fake_embedder
+        )
+
+
+def test_rungs_without_b3_tolerate_a_missing_text_column():
+    inputs = _ladder_inputs()
+    inputs["events"] = inputs["events"].drop(columns=["canonical_text"])
+    table = score_precedent_ladder(**inputs, outcome_type="event_sequence")
+    assert set(table["rung"]) == {"B0", "B1"}
+
+
+@pytest.mark.parametrize("weight", [True, False, "0.5", None])
+def test_a_bool_or_non_number_weight_is_rejected(fake_embedder, weight):
+    with pytest.raises(ValueError, match="weight"):
+        embedding_similarity(fake_embedder, weight=weight)
+
+
+@pytest.mark.parametrize("weight", [np.float64(0.5), np.float32(0.25), np.int64(1)])
+def test_numpy_real_weights_are_accepted(fake_embedder, weight):
+    assert callable(embedding_similarity(fake_embedder, weight=weight))
