@@ -23,7 +23,7 @@ import pandas as pd
 from precedent.ripple.control_graphs import (
     correlation_links,
     correlation_links_as_links,
-    shuffle_preserving_degree,
+    shuffle_by_relation,
 )
 from precedent.ripple.link_store import Link, LinkStore, graph_asof
 from precedent.spine.abnormal_returns import abnormal_return_at
@@ -137,26 +137,41 @@ def _graph_digest(graph: pd.DataFrame) -> str:
     return hashlib.sha256(hashed.to_numpy().tobytes()).hexdigest()
 
 
-def placebo_graph_for_cutoff(graph_for_cutoff: GraphForCutoff, seed: int) -> GraphForCutoff:
-    """The degree-preserving shuffle of whatever graph `graph_for_cutoff` returns.
+class PlaceboGraphReader:
+    """A `GraphForCutoff` returning the per-relation degree-preserving shuffle of another one.
 
-    Each distinct graph is shuffled once with `seed` (`shuffle_preserving_degree`) and the result
-    is reused whenever the same graph comes back, so a snapshot keeps one placebo for its whole
-    life. A graph with fewer than two links has nothing to shuffle and is returned unchanged.
-    The returned frame is shared; callers must not modify it.
+    Each distinct graph is shuffled once (`shuffle_by_relation`) and the result is reused
+    whenever the same graph comes back, so a snapshot keeps one placebo for its whole life. A
+    relation subgraph no swap can change is left as it is rather than raising; the number of
+    such subgraphs, over every distinct graph read so far, is `placebo_unshuffled` (read it after
+    the ladder has run and report it: an unshuffled link makes the placebo look more like the
+    graph, which is conservative). The returned frame is shared; callers must not modify it.
     """
-    cache: dict[str, pd.DataFrame] = {}
 
-    def placebo_for_cutoff(cutoff_utc: pd.Timestamp) -> pd.DataFrame:
-        graph = graph_for_cutoff(cutoff_utc)
-        if len(graph) < 2:
+    def __init__(self, graph_for_cutoff: GraphForCutoff, seed: int) -> None:
+        self._graph_for_cutoff = graph_for_cutoff
+        self._seed = seed
+        self._cache: dict[str, pd.DataFrame] = {}
+        self.placebo_unshuffled = 0
+
+    def __call__(self, cutoff_utc: pd.Timestamp) -> pd.DataFrame:
+        graph = self._graph_for_cutoff(cutoff_utc)
+        if graph.empty:
             return graph
         key = _graph_digest(graph)
-        if key not in cache:
-            cache[key] = shuffle_preserving_degree(graph, seed)
-        return cache[key]
+        if key not in self._cache:
+            shuffled, unchanged = shuffle_by_relation(graph, self._seed)
+            self.placebo_unshuffled += unchanged
+            self._cache[key] = shuffled
+        return self._cache[key]
 
-    return placebo_for_cutoff
+
+def placebo_graph_for_cutoff(graph_for_cutoff: GraphForCutoff, seed: int) -> PlaceboGraphReader:
+    """The degree-preserving, per-relation shuffle of whatever `graph_for_cutoff` returns.
+
+    Never raises for a snapshot that cannot be shuffled (see `PlaceboGraphReader`).
+    """
+    return PlaceboGraphReader(graph_for_cutoff, seed)
 
 
 def _write_atomically(path: Path, write: Callable[[Path], None]) -> None:

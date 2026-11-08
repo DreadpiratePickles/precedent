@@ -6,6 +6,7 @@ from precedent.ripple.control_graphs import (
     correlation_links,
     correlation_links_as_links,
     sector_links,
+    shuffle_by_relation,
     shuffle_preserving_degree,
 )
 from precedent.ripple.link_store import Link, Relation
@@ -195,3 +196,131 @@ def test_shuffle_rejects_self_links_and_duplicate_pairs():
     doubled = pd.DataFrame({"source_node": ["A", "A"], "receiver_node": ["B", "B"]})
     with pytest.raises(ValueError, match="duplicate"):
         shuffle_preserving_degree(doubled, seed=0)
+
+
+# --- per-relation placebo (final review I3) -------------------------------------------------
+
+
+def two_relation_graph() -> pd.DataFrame:
+    """Customer and supplier edges over the same nodes; some pairs carry both relations."""
+    rng = np.random.default_rng(9)
+    nodes = [f"N{i}" for i in range(9)]
+    rows = []
+    for relation in ("customer_of", "supplier_of"):
+        edges: set[tuple[str, str]] = set()
+        while len(edges) < 18:
+            source, receiver = rng.choice(nodes, size=2, replace=False)
+            edges.add((str(source), str(receiver)))
+        rows += [
+            {"source_node": s, "receiver_node": r, "relation": relation, "weight": 1.0}
+            for s, r in sorted(edges)
+        ]
+    graph = pd.DataFrame(rows)
+    pairs = graph.groupby(["source_node", "receiver_node"]).size()
+    assert (pairs > 1).any()  # the fixture does exercise a pair named under two relations
+    return graph
+
+
+def degrees(graph: pd.DataFrame) -> dict[str, dict]:
+    return {
+        column: graph.groupby(["relation", column]).size().to_dict()
+        for column in ("source_node", "receiver_node")
+    }
+
+
+def test_shuffle_keeps_per_relation_in_and_out_degrees():
+    graph = two_relation_graph()
+    shuffled = shuffle_preserving_degree(graph, seed=4)
+    assert degrees(shuffled) == degrees(graph)
+    assert len(shuffled) == len(graph)
+    assert not shuffled.duplicated(["source_node", "receiver_node", "relation"]).any()
+    assert (shuffled.source_node != shuffled.receiver_node).all()
+    for relation, group in graph.groupby("relation"):
+        before = set(zip(group.source_node, group.receiver_node, strict=True))
+        after_group = shuffled[shuffled.relation == relation]
+        assert set(zip(after_group.source_node, after_group.receiver_node, strict=True)) != before
+
+
+def test_a_pair_under_two_relations_is_not_a_duplicate():
+    graph = pd.DataFrame(
+        {
+            "source_node": ["A", "A", "B", "C", "B", "C"],
+            "receiver_node": ["B", "B", "C", "A", "A", "B"],
+            "relation": ["customer_of", "supplier_of", "customer_of", "customer_of",
+                         "supplier_of", "supplier_of"],
+        }
+    )
+    shuffled, unchanged = shuffle_by_relation(graph, seed=1)
+    assert len(shuffled) == 6 and unchanged >= 0
+    still_duplicated = graph.duplicated(["source_node", "receiver_node", "relation"])
+    assert not still_duplicated.any()
+
+
+def test_the_same_pair_twice_under_one_relation_is_still_a_duplicate():
+    graph = pd.DataFrame(
+        {
+            "source_node": ["A", "A"],
+            "receiver_node": ["B", "B"],
+            "relation": ["customer_of", "customer_of"],
+        }
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        shuffle_by_relation(graph, seed=0)
+
+
+def test_a_relation_no_swap_can_change_is_returned_unchanged_and_counted():
+    mutual = pd.DataFrame(
+        {
+            "source_node": ["A", "B"],
+            "receiver_node": ["B", "A"],
+            "relation": ["supplier_of", "supplier_of"],
+            "weight": [0.5, 0.7],
+        }
+    )
+    graph = pd.concat([two_relation_graph().query("relation == 'customer_of'"), mutual])
+    shuffled, unchanged = shuffle_by_relation(graph, seed=2)
+    assert unchanged == 1
+    kept = shuffled[shuffled.relation == "supplier_of"]
+    assert set(zip(kept.source_node, kept.receiver_node, strict=True)) == {("A", "B"), ("B", "A")}
+    assert degrees(shuffled) == degrees(graph)
+
+
+def test_a_two_node_mutual_graph_does_not_crash_the_relation_shuffle():
+    mutual = pd.DataFrame(
+        {"source_node": ["A", "B"], "receiver_node": ["B", "A"], "relation": ["peer_of"] * 2}
+    )
+    shuffled, unchanged = shuffle_by_relation(mutual, seed=0)
+    assert unchanged == 1
+    pd.testing.assert_frame_equal(shuffled, mutual)
+    with pytest.raises(ValueError, match="too small"):  # the strict function still refuses
+        shuffle_preserving_degree(mutual, seed=0)
+
+
+def test_a_single_receiver_graph_is_unshufflable_and_counted():
+    one_receiver = pd.DataFrame(
+        {
+            "source_node": ["A", "B", "C"],
+            "receiver_node": ["Z", "Z", "Z"],
+            "relation": ["customer_of"] * 3,
+        }
+    )
+    _, unchanged = shuffle_by_relation(one_receiver, seed=0)
+    assert unchanged == 1
+
+
+def test_a_shufflable_graph_never_comes_back_unchanged_whatever_the_seed():
+    # Three independent edges: random swaps sometimes cancel out; the shuffle must still change.
+    graph = pd.DataFrame(
+        {"source_node": ["A", "C", "E"], "receiver_node": ["B", "D", "F"], "relation": "peer_of"}
+    )
+    key = ["source_node", "receiver_node"]
+    original = set(map(tuple, graph[key].to_numpy()))
+    for seed in range(300):
+        shuffled = shuffle_preserving_degree(graph, seed=seed)
+        assert set(map(tuple, shuffled[key].to_numpy())) != original, seed
+
+
+def test_too_small_message_names_the_real_cause():
+    tiny = pd.DataFrame({"source_node": ["A"], "receiver_node": ["B"]})
+    with pytest.raises(ValueError, match="too small or too constrained"):
+        shuffle_preserving_degree(tiny, seed=0)

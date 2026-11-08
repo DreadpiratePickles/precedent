@@ -639,6 +639,7 @@ def test_script_main_writes_the_report_beside_the_placebo_and_publishes_only_whe
     assert report.splitlines()[0].startswith("SYNTHETIC —")
     assert "g1_placebo" in report and "EXPLORATORY (survivorship-biased prices)" in report
     assert "static sector map" in report and "tolerance" in report
+    assert "placebo_unshuffled" in report  # the count is always printed, zero or not
     assert (out_dir / "ladder_folds.csv").exists()
     ladder = pd.read_csv(out_dir / "ladder.csv")
     assert sorted(ladder["graph"]) == ["g1", "g1_placebo", "g2", "g2_placebo"]

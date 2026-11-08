@@ -28,6 +28,7 @@ from precedent.config import ConfigError
 from precedent.ripple.control_graphs import sector_links
 from precedent.ripple.graph_builders import (
     EVIDENCE_LABELS,
+    PlaceboGraphReader,
     abnormal_return_frame,
     placebo_graph_for_cutoff,
     rolling_correlation_links,
@@ -185,9 +186,11 @@ def check_inputs(args: argparse.Namespace) -> list[str]:
 
 def _build_graphs(
     args: argparse.Namespace, returns: Any, cutoffs: Any, symbols: Sequence[str]
-) -> tuple[dict[str, Callable], dict[str, int], dict[str, str]]:
-    """The named graph functions (each graph, then its placebo), link counts and store hashes."""
+) -> tuple[dict[str, Callable], dict[str, int], dict[str, str], list[PlaceboGraphReader]]:
+    """The named graph functions (each graph, then its placebo), link counts, store hashes and
+    the placebo readers (their `placebo_unshuffled` counts are final once the ladder has run)."""
     graphs: dict[str, Callable] = {}
+    placebos: list[PlaceboGraphReader] = []
     counts: dict[str, int] = {}
     store_hashes: dict[str, str] = {}
     after_last = cutoffs.iloc[-1].to_pydatetime() + dt.timedelta(days=1)
@@ -217,8 +220,10 @@ def _build_graphs(
         store_hashes[name] = _sha256(store.path)
         base = snapshot_graph_for_cutoff(store, changes)
         graphs[name] = base
-        graphs[f"{name}_placebo"] = placebo_graph_for_cutoff(base, args.seed)
-    return graphs, counts, store_hashes
+        placebo = placebo_graph_for_cutoff(base, args.seed)
+        graphs[f"{name}_placebo"] = placebo
+        placebos.append(placebo)
+    return graphs, counts, store_hashes, placebos
 
 
 def run(
@@ -259,7 +264,7 @@ def run(
         raise InputError("no price shock could be built from the events; nothing to evaluate")
     abnormal = abnormal_return_frame(returns, args.market, sessions)
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    graphs, link_counts, store_hashes = _build_graphs(args, returns, cutoffs, symbols)
+    graphs, link_counts, store_hashes, placebos = _build_graphs(args, returns, cutoffs, symbols)
     init_qlib(args.qlib_dir, args.out_dir / "qlib_work")
     loader_factory = price_loader_factory or (
         lambda horizon: make_alpha158_price_loader(label_expr_for(horizon))
@@ -286,6 +291,7 @@ def run(
         half_life_sessions=params["half_life_sessions"],
         max_age_sessions=params["max_age_sessions"],
     )
+    unshuffled = sum(placebo.placebo_unshuffled for placebo in placebos)
     counts = {
         "sessions": len(sessions),
         "instruments": len(symbols),
@@ -294,6 +300,7 @@ def run(
         "shocks": len(shocks),
         "shocks dropped (no column or no fit)": dropped,
         **link_counts,
+        "placebo_unshuffled (relation subgraphs no swap could change)": unshuffled,
     }
     notes = [
         f"parser version: {args.parser_version}",
@@ -302,6 +309,11 @@ def run(
         f"fold sessions: {fold_sessions}; baseline price only (M0)",
         f"ripple parameters (proposed): {json.dumps(params, sort_keys=True)}",
     ]
+    if unshuffled:
+        notes.append(
+            f"{unshuffled} placebo relation subgraphs could not be shuffled and are the graph's "
+            "own links; that makes the placebo look more like the graph (conservative)"
+        )
     write_text_atomically(
         args.out_dir / "report.md",
         render_report(

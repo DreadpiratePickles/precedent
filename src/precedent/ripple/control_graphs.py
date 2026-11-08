@@ -157,47 +157,115 @@ def correlation_links_as_links(
     ]
 
 
-def shuffle_preserving_degree(graph: pd.DataFrame, seed: int) -> pd.DataFrame:
-    """A placebo graph: same out-degree and in-degree for every node, different links.
+_NO_RELATION = "<no relation column>"
 
-    Repeated edge swaps: pick two edges (a, b) and (c, d) and replace them with (a, d) and
-    (c, b) unless that makes a self-link or duplicates an existing pair. Exactly
-    `10 * n_edges` swaps are attempted, in the same order for a given `seed`
-    (`numpy.random.default_rng(seed)`). Raises ValueError when the input has a self-link or a
-    duplicate pair, or when the edge set is unchanged afterwards (graph too small to shuffle).
 
-    Non-node columns (weight, doc id, evidence, ...) stay attached to each original row's
-    SOURCE side: a link's weight describes the source's influence, so only `receiver_node`
-    moves. The result has the same columns and row count, a reset index, and is sorted by
-    (source_node, receiver_node) so it is reproducible. The input is not modified.
+def _shuffled_receivers(
+    sources: list[str], receivers: list[str], rng: np.random.Generator
+) -> list[str] | None:
+    """Receivers after degree-preserving edge swaps among one relation's edges, or None.
+
+    None means no swap can change the edge set (a graph of one edge, one receiver, one source,
+    or two nodes linked both ways). The random swaps can cancel out, so when they do a
+    deterministic scan applies the first swap that really changes the edge set; None is returned
+    only when no such swap exists.
     """
-    sources = graph["source_node"].tolist()
-    receivers = graph["receiver_node"].tolist()
-    original = set(zip(sources, receivers, strict=True))
-    if len(original) != len(sources):
-        raise ValueError("graph has duplicate (source_node, receiver_node) pairs")
-    if any(source == receiver for source, receiver in original):
-        raise ValueError("graph has self-links")
     n_edges = len(sources)
-    if n_edges < 2:
-        raise ValueError("graph is too small to shuffle")
+    original = set(zip(sources, receivers, strict=True))
     edges = set(original)
-    rng = np.random.default_rng(seed)
+    swapped = list(receivers)
     picks = rng.integers(0, n_edges, size=(_SWAP_ATTEMPTS_PER_EDGE * n_edges, 2))
     for first, second in picks.tolist():
         if first == second:
             continue
-        a, b = sources[first], receivers[first]
-        c, d = sources[second], receivers[second]
+        a, b = sources[first], swapped[first]
+        c, d = sources[second], swapped[second]
         if a == d or c == b or (a, d) in edges or (c, b) in edges:
             continue
         edges.difference_update(((a, b), (c, d)))
         edges.update(((a, d), (c, b)))
-        receivers[first], receivers[second] = d, b
-    if edges == original:
-        raise ValueError("graph is too small to shuffle: no degree-preserving swap changed it")
-    shuffled = graph.copy()
-    shuffled["receiver_node"] = receivers
-    return shuffled.sort_values(["source_node", "receiver_node"], kind="stable").reset_index(
-        drop=True
+        swapped[first], swapped[second] = d, b
+    if edges != original:
+        return swapped
+    scanned = list(receivers)
+    for first in range(n_edges):
+        for second in range(first + 1, n_edges):
+            a, b = sources[first], receivers[first]
+            c, d = sources[second], receivers[second]
+            if a in (c, d) or b in (c, d) or (a, d) in original or (c, b) in original:
+                continue
+            scanned[first], scanned[second] = d, b
+            return scanned
+    return None
+
+
+def shuffle_by_relation(graph: pd.DataFrame, seed: int) -> tuple[pd.DataFrame, int]:
+    """A placebo graph and how many relation subgraphs could not be shuffled.
+
+    Each relation's edges are shuffled on their own (the `relation` column; a graph without one
+    is a single subgraph), so every node keeps its in-degree and out-degree within every relation
+    and a customer edge never trades places with a supplier edge. Within a relation: pick two
+    edges (a, b) and (c, d) and replace them with (a, d) and (c, b) unless that makes a
+    self-link or duplicates an existing pair; `10 * n_edges` swaps are attempted, in the same
+    order for a given `seed` (`numpy.random.default_rng([seed, relation position])`, relations
+    in sorted order). A pair may appear under two relations; it is a duplicate only within one.
+
+    A relation subgraph no swap can change (one edge, one receiver, one source, two nodes
+    linked both ways) is returned unchanged and counted in the second element. Unchanged links
+    make the placebo look more like the graph, which is conservative for the claim that a graph
+    beats its placebo; callers must report the count. Raises ValueError for a self-link or a
+    duplicate (source, receiver, relation).
+
+    Non-node columns (weight, doc id, evidence, ...) stay attached to each original row's SOURCE
+    side: a link's weight describes the source's influence, so only `receiver_node` moves. The
+    result has the same columns and row count, a reset index, and is sorted by (source_node,
+    receiver_node, relation) so it is reproducible. The input is not modified.
+    """
+    relation = graph["relation"] if "relation" in graph.columns else pd.Series(
+        _NO_RELATION, index=graph.index
     )
+    sources = graph["source_node"].tolist()
+    receivers = graph["receiver_node"].tolist()
+    triples = list(zip(sources, receivers, relation.tolist(), strict=True))
+    if len(set(triples)) != len(triples):
+        raise ValueError("graph has duplicate (source_node, receiver_node, relation) rows")
+    if any(source == receiver for source, receiver, _ in triples):
+        raise ValueError("graph has self-links")
+    new_receivers = list(receivers)
+    unchanged = 0
+    positions_by_relation: dict[str, list[int]] = {}
+    for position, name in enumerate(relation.tolist()):
+        positions_by_relation.setdefault(str(name), []).append(position)
+    for index, name in enumerate(sorted(positions_by_relation)):
+        positions = positions_by_relation[name]
+        rng = np.random.default_rng([seed, index])
+        shuffled = _shuffled_receivers(
+            [sources[p] for p in positions], [receivers[p] for p in positions], rng
+        )
+        if shuffled is None:
+            unchanged += 1
+            continue
+        for position, receiver in zip(positions, shuffled, strict=True):
+            new_receivers[position] = receiver
+    result = graph.copy()
+    result["receiver_node"] = new_receivers
+    sort_columns = ["source_node", "receiver_node"] + (
+        ["relation"] if "relation" in graph.columns else []
+    )
+    return result.sort_values(sort_columns, kind="stable").reset_index(drop=True), unchanged
+
+
+def shuffle_preserving_degree(graph: pd.DataFrame, seed: int) -> pd.DataFrame:
+    """The strict form of `shuffle_by_relation`: raises when nothing could be shuffled at all.
+
+    A placebo graph with the same in-degree and out-degree for every node within every
+    relation, and different links. Raises ValueError for a self-link, a duplicate (source,
+    receiver, relation), or a graph none of whose relations a swap can change ("too small or too
+    constrained to shuffle"). When only some relations cannot be shuffled they are left as they
+    are; use `shuffle_by_relation` to learn how many.
+    """
+    shuffled, unchanged = shuffle_by_relation(graph, seed)
+    n_relations = graph["relation"].nunique() if "relation" in graph.columns else 1
+    if len(graph) == 0 or unchanged == n_relations:
+        raise ValueError("graph is too small or too constrained to shuffle: no swap can change it")
+    return shuffled

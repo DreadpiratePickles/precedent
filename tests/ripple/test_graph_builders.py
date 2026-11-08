@@ -239,6 +239,47 @@ def test_placebo_of_a_graph_too_small_to_shuffle_is_the_graph():
     )
 
 
+def test_placebo_of_an_unshufflable_snapshot_never_raises_and_is_counted():
+    mutual = pd.DataFrame(
+        {
+            "source_node": ["A", "B"],
+            "receiver_node": ["B", "A"],
+            "relation": ["peer_of", "peer_of"],
+            "weight": [1.0, 1.0],
+        }
+    )
+    ring = ring_graph()
+    graphs = {0: mutual, 1: ring}
+
+    def graph_for_cutoff(cutoff):
+        return graphs[0 if cutoff == CUTOFFS.iloc[0] else 1]
+
+    placebo = placebo_graph_for_cutoff(graph_for_cutoff, seed=7)
+    assert placebo.placebo_unshuffled == 0
+    pd.testing.assert_frame_equal(placebo(CUTOFFS.iloc[0]), mutual)
+    placebo(CUTOFFS.iloc[0])  # the same snapshot read again is counted once
+    assert placebo.placebo_unshuffled == 1
+    shuffled = placebo(CUTOFFS.iloc[3])
+    assert not shuffled[["source_node", "receiver_node"]].equals(
+        ring[["source_node", "receiver_node"]]
+    )
+    assert placebo.placebo_unshuffled == 1
+
+
+def test_placebo_shuffles_each_relation_separately():
+    rows = [
+        {"source_node": f"N{i}", "receiver_node": f"N{(i + k) % 8}", "relation": relation,
+         "weight": 1.0}
+        for relation, k in (("customer_of", 1), ("supplier_of", 3))
+        for i in range(8)
+    ]
+    graph = pd.DataFrame(rows)
+    placebo = placebo_graph_for_cutoff(lambda cutoff: graph, seed=5)(CUTOFFS.iloc[0])
+    for column in ("source_node", "receiver_node"):
+        before = graph.groupby(["relation", column]).size().to_dict()
+        assert placebo.groupby(["relation", column]).size().to_dict() == before
+
+
 def test_ledger_writer_round_trips_and_records_hashes(tmp_path):
     shocks = pd.Series(
         [0.04, -0.03],
