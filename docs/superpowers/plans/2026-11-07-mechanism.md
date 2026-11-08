@@ -1,18 +1,22 @@
 # Mechanism Implementation Plan
 
+> Amended 2026-11-07 against the product amendment spec. Supersedes the 2026-11-07 version.
+>
+> Research and content only; feeds the brief's one-mechanism slot; not a product surface (thesis section 3).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** For any real or typed-in event, build a small structural causal model whose *structure* comes from a document (template rules first, a language model later) and whose *numbers* come from price history, run Monte Carlo rollouts and `do()` interventions over it, and show the resulting fan chart beside Precedent's empirical band so the two can disagree in public.
 
-**Architecture:** A package `predate.mechanism` on top of the spine and Precedent. A `CausalGraph` is a typed DAG over a closed node vocabulary (event variables, intermediate variables, the asset panel) with signed, lag-banded edges. Code fits one linear structural equation per node from the Precedent response library under the same time guard, estimates the residual covariance, and rolls the system forward. Interventions set a node and cut its incoming edges. The first milestone uses hand-written template graphs per event type, so it needs no language model; model-proposed graphs are added last and must beat the templates on held-out events or they are reported as not having earned their cost.
+**Architecture:** A package `precedent.mechanism` on top of the spine and Precedent. A `CausalGraph` is a typed DAG over a closed node vocabulary (event variables, intermediate variables, the asset panel) with signed, lag-banded edges. Code fits one linear structural equation per node from the Precedent response library under the same time guard, estimates the residual covariance, and rolls the system forward. Interventions set a node and cut its incoming edges. The first milestone uses hand-written template graphs per event type, so it needs no language model; model-proposed graphs are added last and must beat the templates on held-out events or they are reported as not having earned their cost.
 
-**Tech Stack:** As the spine, plus `networkx` for DAG checks. The cockpit is one static HTML file with the fitted coefficients embedded as JSON; rollouts for slider moves run in the browser, so no server is needed.
+**Tech Stack:** As the spine, plus `networkx` for DAG checks (research extra, `uv sync --extra research`). The cockpit is one static HTML file with the fitted coefficients embedded as JSON; rollouts for slider moves run in the browser, so no server is needed.
 
 **Spec:** `docs/superpowers/specs/2026-11-06-predate-design.md`, sections 1.2, 3.3, 4 and 8. This plan is the spec for the Mechanism track; there is no separate design section yet.
 
-**Depends on:** spine plan Tasks 1 to 11; Precedent plan Tasks 1 to 5 (`EventKey`, response library, story clusters, `find_precedents`, `summarize_responses`). Task 8 also needs spine Task 13. Runs in its own worktree; it touches only `src/predate/mechanism/`, `tests/mechanism/`, `stages/4*_mechanism_*/`, `references/mechanism/` and `references/rungs/m4_mechanism_*.yaml`.
+**Depends on:** spine plan Tasks 1 to 4 and 9 to 15 (old Tasks 1 to 11); spine Task 2 (`EventKey`) and spine Task 6 (`typer_from_env`); Precedent Tasks 2 to 8 (story clusters, shared row schema, the response libraries, `find_precedents`, `summarize_responses`). Task 8 also needs spine Task 18. Task 9 imports Qlib and so also needs the `research` extra (`uv sync --all-extras`). Runs in its own worktree; it touches only `src/precedent/mechanism/`, `tests/mechanism/`, `stages/4*_mechanism_*/`, `references/mechanism/` and `references/rungs/m4_mechanism_*.yaml`.
 
-**Required amendment to the spine plan (one line, owner's yes):** spine Task 1's `cli.py` lists `whatif` and `ripple` as lazily imported subcommands. Add `mechanism -> predate.mechanism.cockpit:run` and `dream -> predate.dream.report:run` to that list before the spine is built, so the tracks still never edit `cli.py`.
+**No `cli.py` edit needed:** spine Task 1's `cli.py` already lists `ask`, `ripple`, `mechanism` and `dream` as lazily imported subcommands (`mechanism -> precedent.mechanism.cli:run`; a track that is absent prints `not built yet` and returns 2), so this track never edits `src/precedent/cli.py`. This track creates `src/precedent/mechanism/cli.py` (Task 7) with `run(argv: list[str]) -> int`.
 
 ## What the research check changed
 
@@ -28,7 +32,7 @@ Checked on 2026-11-07. Each item shapes a constraint or a test below.
 
 ## Global Constraints
 
-- Everything in the spine plan's Global Constraints applies. Only `parser_graph.py` may call a language model.
+- Everything in the spine plan's Global Constraints applies. Only `parser_graph.py` may call a language model directly; `cli.py` reaches one only through the spine's `typer_from_env()` seam when the owner opts in.
 - **The model emits structure, never numbers.** `CausalGraph` has no coefficients, no probabilities, no magnitudes. Every number in a fan chart is fitted by code from price history or sampled from fitted residuals.
 - **Closed node vocabulary.** A node is an event variable (`event:<event_type>` or `event:<event_type>:<field>` for `severity_band`, `direction_sign`, `is_scheduled`), an intermediate variable from `references/mechanism/intermediates.json` (proposed first list: `rates_expectation`, `risk_appetite`, `oil_supply`, `usd_demand`, `credit_spread`, `sector_demand:<sector>`), or an asset from the Precedent asset panel (spec 8.5). A graph naming any other node is rejected.
 - **Edges are enums.** `sign` in {+1, -1}, `lag_band` in {same_session, days, weeks}. No weights. `source_doc_id` and `evidence_span` are required on every edge whose `graph_version` does not start with `template-`.
@@ -49,14 +53,15 @@ Checked on 2026-11-07. Each item shapes a constraint or a test below.
 ## File Structure
 
 ```text
-src/predate/mechanism/
+src/precedent/mechanism/
   graph_schema.py      CausalGraph, Node, Edge, validation, JSON schema
   graph_store.py       append-only store keyed by (graph_id, graph_version)
   templates.py         rule-built graphs per event type (Task 2)
   fit_sem.py           guarded parameter fitting (Task 3)
   simulate.py          rollouts, interventions, quantiles (Task 4)
   evaluate.py          ladder scoring against Precedent (Task 5)
-  cockpit.py           the command and the static HTML page (Task 7)
+  cli.py               the `precedent mechanism` command: arguments, typing the text, text/JSON output (Task 7)
+  cockpit.py           the static HTML page (Task 7)
   parser_graph.py      model-proposed graphs, consensus, order-flip test (Task 8)
   mechanism_factors.py factors for Qlib (Task 9, optional)
 references/mechanism/intermediates.json, params.json, templates/<event_type>.json
@@ -75,7 +80,7 @@ As in the spine plan: write the listed tests, see them fail for the stated reaso
 ### Task 1: Causal graph schema and store
 
 **Files:**
-- Create: `src/predate/mechanism/graph_schema.py`, `src/predate/mechanism/graph_store.py`, `references/mechanism/intermediates.json`, `references/mechanism/params.json`, `references/mechanism/graph_schema_v1.json`, `stages/40_mechanism_graphs/CONTEXT.md`, `41_mechanism_fit/CONTEXT.md`, `42_mechanism_evaluate/CONTEXT.md`, `43_mechanism_cockpit/CONTEXT.md`
+- Create: `src/precedent/mechanism/graph_schema.py`, `src/precedent/mechanism/graph_store.py`, `references/mechanism/intermediates.json`, `references/mechanism/params.json`, `references/mechanism/graph_schema_v1.json`, `stages/40_mechanism_graphs/CONTEXT.md`, `41_mechanism_fit/CONTEXT.md`, `42_mechanism_evaluate/CONTEXT.md`, `43_mechanism_cockpit/CONTEXT.md`
 - Test: `tests/mechanism/test_graph_schema.py`, `tests/mechanism/test_graph_store.py`
 
 **Interfaces:**
@@ -114,7 +119,7 @@ def test_store_is_idempotent_and_refuses_conflicts(tmp_path):
         store.append([G.model_copy(update={"edges": G.edges[:-1]})])
 ```
 
-- [ ] **Step 2: Run.** Expected: FAIL, `No module named 'predate.mechanism'`.
+- [ ] **Step 2: Run.** Expected: FAIL, `No module named 'precedent.mechanism'`.
 - [ ] **Step 3: Implement.** Stage contracts follow the spine's standard; `40_mechanism_graphs` carries a `## Loop` section for the graph prompt (filled in Task 8); the others say `Loop: single pass`. `intermediates.json` holds the proposed list above with a one-line definition each.
 - [ ] **Step 4: Run.** Expected: PASS.
 - [ ] **Step 5: Commit** `feat(mechanism): causal graph schema, vocabulary and store`.
@@ -122,7 +127,7 @@ def test_store_is_idempotent_and_refuses_conflicts(tmp_path):
 ### Task 2: Template graphs (no model)
 
 **Files:**
-- Create: `src/predate/mechanism/templates.py`, `references/mechanism/templates/central_bank.json`, `macro_data_release.json`, `trade_or_sanctions.json`, `commodity_supply.json`, `earnings.json`, `guidance.json`, `armed_conflict.json`, `natural_disaster.json` (the eight event types with the most 8-K and GDELT events, proposed; add others as data shows volume)
+- Create: `src/precedent/mechanism/templates.py`, `references/mechanism/templates/central_bank.json`, `macro_data_release.json`, `trade_or_sanctions.json`, `commodity_supply.json`, `earnings.json`, `guidance.json`, `armed_conflict.json`, `natural_disaster.json` (the eight event types with the most 8-K and GDELT events, proposed; add others as data shows volume)
 - Test: `tests/mechanism/test_templates.py`
 
 **Interfaces:**
@@ -150,10 +155,10 @@ def test_unknown_event_type_has_no_template():
 ### Task 3: Guarded parameter fitting
 
 **Files:**
-- Create: `src/predate/mechanism/fit_sem.py`, Test: `tests/mechanism/test_fit_sem.py`
+- Create: `src/precedent/mechanism/fit_sem.py`, Test: `tests/mechanism/test_fit_sem.py`
 
 **Interfaces:**
-- Consumes: `find_precedents` (Precedent Task 4), the response library (Precedent Task 2), `load_returns(..., kind="open_to_open")` (spine Task 7).
+- Consumes: `find_precedents` (Precedent Task 7), the response libraries (Precedent Tasks 3 to 6), `load_returns(..., kind="open_to_open")` (spine Task 11).
 - Produces: `GuardedPanel`: the per-precedent observations the fit may see. `build_guarded_panel(query: PrecedentQuery, library, session_cutoffs_utc, returns, market, horizon, top_k) -> GuardedPanel`. It calls `find_precedents` once per asset and assembles, per precedent event, the event variables (from the `EventKey`: `direction_sign`, `severity_band` as ordinal 0,1,2, `is_scheduled`), and each asset's abnormal return over the response window. Intermediates are latent; see below.
 - Produces: `fit_sem(graph: CausalGraph, panel: GuardedPanel, ridge: float = 1.0) -> FittedSEM`. For each non-event node in topological order: an asset node's equation regresses its abnormal return on its parents; an intermediate node has no observed series, so it is identified as the ridge-regressed linear combination of *its* parents that best explains *its* children jointly (one latent factor, sign-anchored by the template's edge signs); the fit of each child then uses that latent score. `FittedSEM` has `coefficients: dict[str, dict[str, float]]`, `intercepts`, `residual_cov: np.ndarray` over asset nodes, `n_obs: int`, `underdetermined: set[str]`, `graph_id`, `graph_version`, `fitted_asof_utc`.
 - An edge whose fitted coefficient has the opposite sign from the graph's `sign` is kept, but listed in `FittedSEM.sign_disagreements`; the chart shows them.
@@ -187,7 +192,7 @@ def test_sign_disagreement_is_recorded_not_corrected(contrary_panel):  # data sa
 ### Task 4: Rollouts and interventions
 
 **Files:**
-- Create: `src/predate/mechanism/simulate.py`, Test: `tests/mechanism/test_simulate.py`
+- Create: `src/precedent/mechanism/simulate.py`, Test: `tests/mechanism/test_simulate.py`
 
 **Interfaces:**
 - Produces: `Intervention` (frozen dataclass): `node: str`, `value: float`.
@@ -223,10 +228,10 @@ def test_intervention_with_no_asset_descendant_is_reported(fitted_graph_with_lea
 ### Task 5: Ladder scoring against Precedent
 
 **Files:**
-- Create: `src/predate/mechanism/evaluate.py`, `references/rungs/m4_mechanism_template.yaml`, `references/rungs/m4_mechanism_placebo.yaml`, Test: `tests/mechanism/test_evaluate.py`
+- Create: `src/precedent/mechanism/evaluate.py`, `references/rungs/m4_mechanism_template.yaml`, `references/rungs/m4_mechanism_placebo.yaml`, Test: `tests/mechanism/test_evaluate.py`
 
 **Interfaces:**
-- Consumes: `pinball_loss`, `score_precedent_ladder` (Precedent Task 6).
+- Consumes: `pinball_loss`, `score_precedent_ladder` (Precedent Task 9).
 - Produces: `shuffle_edges_preserving_degree(graph: CausalGraph, seed: int) -> CausalGraph`: the placebo graph. Same nodes, same in- and out-degree per node, re-wired at random subject to the DAG and kind rules; `graph_version="placebo-<seed>"`.
 - Produces: `score_mechanism_ladder(events, library, session_cutoffs_utc, returns, market, graphs_by_rung: dict[str, Callable[[EventKey], CausalGraph | None]], horizon: int = 5, quantiles=(0.1, 0.5, 0.9), n_paths: int = 2_000, seed: int = 0) -> pd.DataFrame` with columns `rung, event_type, quantile, pinball_loss, coverage_80, n_scored, n_refused, n_underdetermined`. Rungs: `P-B1` (Precedent's empirical band, from `score_precedent_ladder`), `M-T` (template graph), `M-P` (placebo of the template). Events are scored in time order, each fitted from earlier events only.
 
@@ -257,7 +262,7 @@ def test_mechanism_and_precedent_are_scored_on_identical_events(planted_world):
 **Files:**
 - Create: `scripts/run_mechanism_m1.py`; output under `stages/42_mechanism_evaluate/output/<run_id>/` (not committed); Modify: `docs/STATUS.md`
 
-- [ ] **Step 1:** Using the response library from Precedent Task 7, score `P-B1`, `M-T` and `M-P` at horizons 1, 5 and 20 on the same held-out year, per event type.
+- [ ] **Step 1:** Using the response libraries from Precedent Task 16 (first real run), score `P-B1`, `M-T` and `M-P` at horizons 1, 5 and 20 on the same held-out year, per event type.
 - [ ] **Step 2:** Write `report.md`: pinball loss and coverage per rung and event type; `n_underdetermined`; the sign-disagreement table (template edges the data contradicts, with counts); the five event types where `M-T` most helps and most hurts against `P-B1`. Label `LIVE-DATA`, `EXPLORATORY (survivorship-biased prices)`.
 - [ ] **Step 3:** State the outcome in one of three sentences: templates beat Precedent on pinball loss; templates match it; templates lose to it. If they lose, Task 8 still runs (the model may propose better structure than the templates), but Task 9 does not.
 - [ ] **Step 4:** Commit the script and the status line. Stop for the owner's review.
@@ -265,12 +270,12 @@ def test_mechanism_and_precedent_are_scored_on_identical_events(planted_world):
 ### Task 7: The cockpit
 
 **Files:**
-- Create: `src/predate/mechanism/cockpit.py`, `src/predate/mechanism/cockpit_template.html`, Test: `tests/mechanism/test_cockpit.py`
+- Create: `src/precedent/mechanism/cli.py`, `src/precedent/mechanism/cockpit.py`, `src/precedent/mechanism/cockpit_template.html`, Test: `tests/mechanism/test_cockpit.py` (the tests below import `run` from `precedent.mechanism.cli`)
 
 **Interfaces:**
-- Produces: `run(argv: list[str]) -> int`, reached through `predate mechanism` (spine Task 1 as amended).
-  - By key, no model: `predate mechanism --event-type central_bank --actor-kind central_bank --severity-band high --unscheduled --direction -1 [--asof 2024-06-03] [--horizon 5] [--do rates_expectation=0] [--html PATH] [--json]`.
-  - By text: `predate mechanism "<text>"`. Needs the parser runtime (spine Task 13) for the event key and, after Task 8, the model graph; without the runtime, return 2 and print the key flags.
+- Produces: `cli.run(argv: list[str]) -> int` in `src/precedent/mechanism/cli.py`, the target of the spine's `mechanism` command (`precedent.mechanism.cli:run`); `cockpit.py` renders the static page for it.
+  - By key, no model: `precedent mechanism --event-type central_bank --actor-kind central_bank --severity-band high --unscheduled --direction -1 [--asof 2024-06-03] [--horizon 5] [--do rates_expectation=0] [--html PATH] [--json]`.
+  - By text: `precedent mechanism "<text>"`. The event key comes from `precedent.spine.typers.select.typer_from_env()` (spine Task 6; the rules typer by default, a model typer only if the owner sets `PRECEDENT_TYPER`). When the typer returns `untyped` (or `refused_invalid`), exit 2 and print the key flags (`--event-type ... --direction`) the user can pass instead. After Task 8, a model-proposed graph replaces the template graph only when one exists for the typed event type; typing the text never needs a model.
 - Text output, after Precedent's own block for the same query:
 
 ```text
@@ -310,9 +315,9 @@ def test_js_simulation_matches_python_on_the_same_seed(tmp_path, populated_store
     run(KEY_FLAGS + ["--html", str(tmp_path / "c.html"), "--json"])
     assert js_median(tmp_path / "c.html", "SPY", seed=0) == pytest.approx(py_median("SPY", seed=0), abs=5e-4)
 
-def test_text_query_without_a_runtime_exits_2(capsys, populated_stores, monkeypatch):
-    monkeypatch.delenv("PREDATE_MODEL_BASE_URL", raising=False)
-    assert run(["a central bank raises rates unexpectedly"]) == 2
+def test_untyped_text_query_exits_2_and_prints_the_key_flags(capsys, populated_stores, monkeypatch):
+    monkeypatch.delenv("PRECEDENT_TYPER", raising=False)   # the rules typer
+    assert run(["the weather in Lisbon was pleasant"]) == 2
     assert "--event-type" in capsys.readouterr().err
 ```
 
@@ -321,14 +326,14 @@ The fourth test is skipped when `node` is not on the path and the skip is record
 - [ ] **Steps 2-4:** as the Task Cycle.
 - [ ] **Step 5: Commit** `feat(mechanism): cockpit command and static what-if page`.
 
-### Task 8: Model-proposed graphs (after spine Task 13; owner gate on the gold set)
+### Task 8: Model-proposed graphs (after spine Task 18; owner gate on the gold set)
 
 **Files:**
-- Create: `src/predate/mechanism/parser_graph.py`, `references/mechanism/graph_prompt_v1.txt`, `references/rungs/m4_mechanism_model.yaml`; Modify: `stages/40_mechanism_graphs/CONTEXT.md` (`## Loop`), `evaluate.py` (rungs `M-L` model graph, `M-LP` its placebo)
+- Create: `src/precedent/mechanism/parser_graph.py`, `references/mechanism/graph_prompt_v1.txt`, `references/rungs/m4_mechanism_model.yaml`; Modify: `stages/40_mechanism_graphs/CONTEXT.md` (`## Loop`), `evaluate.py` (rungs `M-L` model graph, `M-LP` its placebo)
 - Test: `tests/mechanism/test_parser_graph.py`
 
 **Interfaces:**
-- Consumes: `EventExtractor` (spine Task 2), `OpenAICompatExtractor` (spine Task 13).
+- Consumes: `EventExtractor` (spine Task 2), `OpenAICompatExtractor` (spine Task 18).
 - Produces: `ProposedEdge` (pydantic, closed enums): `source: str`, `target: str`, `sign`, `lag_band`, `evidence_span: str`. `ProposedGraph` wraps `edges: list[ProposedEdge]` (at most 12).
 - Produces: `parse_graph(passage: str, event_key: EventKey, source_doc_id: str, extractor: EventExtractor, graph_version: str, vocabulary: frozenset[str], k_samples: int = 5, min_support: int = 3, seed: int = 0) -> tuple[CausalGraph | None, GraphParseReport]`. The model is sampled `k_samples` times at distinct seeds; an edge is kept when it appears in at least `min_support` samples with the same sign, its span is found in the passage, and both nodes are in the vocabulary. `support` on the kept edge is its count. The event node and the asset nodes are always present; a result with no path from the event node to any asset returns `None`. `GraphParseReport` has `proposed, evidence_missing, unknown_node, below_support, cycle_dropped, kept, order_flip_rate`.
 - Produces: `order_flip_rate(passage, ...) -> float`: `parse_graph` is also run on the passage with its sentences reversed; the rate is the share of kept edges whose direction differs between the two runs. The kept graph is the one from the original passage; the rate is reported beside it.
@@ -368,13 +373,13 @@ def test_request_has_temperature_zero_per_sample_and_distinct_seeds(recording_ex
 - [ ] **Step 6:** Run the gold scoring twice, with `response_format` schema-constrained and prompt-only (validation in code either way), and record both precision figures and the `order_flip_rate`. Choose the decoding mode with the higher held-out precision and record why.
 - [ ] **Step 7:** Build model graphs for the held-out year's events; score rungs `M-L` and `M-LP` beside `M-T`, `M-P` and `P-B1`. Append to the M-M1 report. If `M-L` does not beat `M-T` on pinball loss, say so and keep templates as the cockpit default. Commit `feat(mechanism): evidence-backed model-proposed graphs`.
 
-### Task 9: Mechanism factors for Qlib (only if Task 6 or 8 beat Precedent)
+### Task 9: Mechanism factors for Qlib (only if Task 6 or 8 beat Precedent; `research` extra)
 
 **Files:**
-- Create: `src/predate/mechanism/mechanism_factors.py`, `references/rungs/m4_mechanism_factors.yaml`, Test: `tests/mechanism/test_mechanism_factors.py`
+- Create: `src/precedent/mechanism/mechanism_factors.py`, `references/rungs/m4_mechanism_factors.yaml`, Test: `tests/mechanism/test_mechanism_factors.py`
 
 **Interfaces:**
-- Consumes: `make_alpha_handler`, `run_ablation` (spine Tasks 9 and 10).
+- Consumes: `make_alpha_handler`, `run_ablation` (spine Tasks 13 and 14). These import Qlib and LightGBM, so this task's code and tests need the `research` extra (`pyqlib==0.9.7`, `lightgbm`); the test module is skipped, and the skip recorded in `docs/STATUS.md`, when the extra is absent.
 - Produces: `build_mechanism_factor_panel(events, library, session_cutoffs_utc, sessions, returns, market, graphs: Callable[[EventKey], CausalGraph | None], horizon: int = 5, max_age_sessions: int = 5, n_paths: int = 2_000, seed: int = 0) -> pd.DataFrame` indexed (datetime, instrument) with columns `mech_med, mech_iqr, mech_vs_prec` (mechanism median minus Precedent median), `mech_underdetermined` (0/1), `mech_sign_disagreements`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -392,6 +397,19 @@ def test_every_column_carries_the_prefix(panel_inputs):
 
 - [ ] **Steps 2-4:** as the Task Cycle.
 - [ ] **Step 5:** Run the ablation with rung M4 beside M0 to M3 on real data; append to the report. Commit `feat(mechanism): mechanism factors and M4 rung`.
+
+### Task 10: Independent verifier
+
+**Files:**
+- Create: `docs/verification/mechanism-<date>.md`; Modify: `docs/STATUS.md`
+
+The verifier is a separate agent from the one that built Tasks 1 to 9. It receives this plan, `docs/superpowers/specs/2026-11-07-precedent-product-amendment.md`, the diff of the track against its baseline commit and the test output, assumes the work is broken, and does not read the builder's summary.
+
+- [ ] **Step 1:** Run and record each command with its exit code: `uv sync --frozen --all-extras`, `uv run ruff check .`, `uv run pytest -q tests/mechanism`, `uv run pytest -q`, `precedent mechanism --event-type central_bank --actor-kind central_bank --severity-band high --unscheduled --direction -1 --html <tmp>` on the sample library, then `test -z "$(git status --porcelain)"`.
+- [ ] **Step 2:** Map each Review Focus item (1 to 5) and each Global Constraint to the test that proves it. A constraint with no test is a `FAIL`. Check by grep that no coefficient or probability field exists on `CausalGraph` or `Edge`, that only `parser_graph.py` calls a model directly (`cli.py` only through `typer_from_env()`), that no file outside the allowed paths changed (including `cli.py`), and that no model id, base URL or data-dir default appears outside `src/precedent/config.py`.
+- [ ] **Step 3:** Confirm every fan chart in the text, JSON and HTML output is printed beside Precedent's band with both sample sizes and carries the disclaimer line, and that an input below `min_neff` is refused.
+- [ ] **Step 4:** Write `docs/verification/mechanism-<date>.md`: the commands and exit codes, a `PASS`, `FAIL` or `BLOCKED` per requirement, and the evidence class of each result (`SYNTHETIC`, `LIVE-DATA`, `LIVE-MODEL`, `NO LIVE RUN`). Steps that need an owner gate (Tasks 6, 8, 9 live runs) and were not run are `NO LIVE RUN`, not `PASS`. Add the matching rows to `docs/STATUS.md`.
+- [ ] **Step 5:** Commit `docs(mechanism): independent verification report`. Each finding is fixed in a separate commit `fix: independent-review findings`, then Steps 1 to 4 are re-run and the report updated.
 
 ## Open decisions for the owner
 

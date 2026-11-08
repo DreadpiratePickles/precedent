@@ -27,12 +27,12 @@ src/precedent/
   mcp_server.py          console script `precedent-mcp` (section 6)
   dream/  ripple/  mechanism/   research tracks, as their plans describe, under the new package name
 references/              Layer 3: schema JSON, typing rules, CAMEO map, country groups, params
-stages/                  ICM stage contracts (spine 01-09, Precedent 20-24, Ripple 30s, Mechanism 40s, Dream 50s, as the plans number them)
+stages/                  ICM stage contracts (spine 01-09, Precedent 20-24, Ripple 30s, Mechanism 40-43 (graphs, fit, evaluate, cockpit), Dream 50s, as the plans number them)
 data/sample/             a committed, small, labelled library slice for the offline demo (section 5)
 docs/examples/           run-produced evidence files, banner on line 1 (section 9)
 ```
 
-- Console scripts: `precedent` and `precedent-mcp`. The research tracks are subcommands (`precedent dream …`, `precedent ripple …`, `precedent mechanism …`); they never edit `cli.py` and are imported lazily, as the spine plan already says for `whatif`.
+- Console scripts: `precedent` and `precedent-mcp`. The research tracks are subcommands (`precedent dream …`, `precedent ripple …`, `precedent mechanism …`); they never edit `cli.py` and are imported lazily, as the spine plan says for `ask`.
 - `precedent ask` is the product command. A bare `precedent "<text>"` whose first argument is not a subcommand is sugar for `precedent ask "<text>"`.
 - Every `predate.` import path in the plans becomes `precedent.`; `predate.precedent.*` becomes `precedent.engine.*`; environment variables `PREDATE_*` become `PRECEDENT_*`. This is a mechanical rename applied when the plans are updated.
 - The repository has no GitHub remote yet. Creating it, naming it and pushing are the owner's steps (section 11); the agent never pushes.
