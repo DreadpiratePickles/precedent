@@ -17,6 +17,7 @@ from precedent.mechanism.graph_schema import (
     load_params,
     node_vocabulary,
 )
+from precedent.mechanism.simulate import fan, simulate
 from precedent.mechanism.templates import load_templates
 from precedent.spine.event_key import EventKey
 from precedent.spine.event_schema import EventType
@@ -96,7 +97,10 @@ def test_recovers_planted_linear_structure(planted):
     assert fitted.n_obs == 200
     assert fitted.underdetermined == frozenset()
     assert fitted.sign_disagreements == ()
-    assert fitted.intercepts["rates_expectation"] == 0.0
+    # the latent intercept carries the centring: -(mean parent value) * weight
+    assert fitted.intercepts["rates_expectation"] == pytest.approx(
+        -signs(200).mean() * fitted.coefficients["rates_expectation"][SIGN]
+    )
 
 
 def test_recovers_planted_structure_at_the_default_ridge(planted):
@@ -107,6 +111,32 @@ def test_recovers_planted_structure_at_the_default_ridge(planted):
         * (fitted.coefficients["rates_expectation"][SIGN])
     )
     assert product == pytest.approx(0.02, abs=2e-3)
+
+
+def test_latent_intercept_carries_its_centring_so_simulation_matches_the_fit():
+    """Direction mean is 0.4, not 0: intercept + slope * parent must equal the centred score."""
+    rng = np.random.default_rng(11)
+    direction = np.array([1.0] * 140 + [-1.0] * 60)
+    rng.shuffle(direction)
+    asset = 0.001 + 0.02 * direction + rng.normal(0.0, 0.001, size=200)
+    graph = make_graph([(SIGN, "rates_expectation", 1), ("rates_expectation", "SPY", 1)])
+    panel = make_panel({SIGN: list(direction)}, {"SPY": list(asset)})
+    fitted = fit_sem(graph, panel, ridge=1e-6)
+    weight = fitted.coefficients["rates_expectation"][SIGN]
+    centred_score = weight * (direction - direction.mean())
+    evaluated = fitted.intercepts["rates_expectation"] + weight * direction
+    np.testing.assert_allclose(evaluated, centred_score, atol=1e-12)
+    slope = fitted.coefficients["SPY"]["rates_expectation"]
+    fitted_asset = fitted.intercepts["SPY"] + slope * evaluated
+    assert np.abs(fitted_asset - (0.001 + 0.02 * direction)).max() < 5e-3
+    rollout = simulate(fitted, graph, {SIGN: 1.0}, (), n_paths=10_000, seed=0)
+    median = fan(rollout).loc["SPY", 0.5]
+    deterministic = fitted.intercepts["SPY"] + slope * (
+        fitted.intercepts["rates_expectation"] + weight * 1.0
+    )
+    # median noise ~ 1.25 * 0.001 / sqrt(10_000); the uncentred bias would be about 0.008
+    assert median == pytest.approx(deterministic, abs=1e-4)
+    assert median == pytest.approx(0.001 + 0.02, abs=1e-3)
 
 
 def test_recovers_multi_parent_multi_child_latent_direction_and_loadings():

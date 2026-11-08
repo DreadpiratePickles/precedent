@@ -49,6 +49,11 @@ class FittedSEM:
     `residual_cov` is over `assets`, in that order, with each asset's variance on n - slopes - 1
     degrees of freedom. It is estimated pairwise, so it may not be positive definite; the
     simulator owns the Cholesky-or-diagonal fallback.
+
+    An identified latent (intermediate) node is evaluated like any other, as
+    `intercepts[node] + sum(coefficients[node][p] * parent_p)`. Its intercept is minus the
+    weighted panel-mean parent value, so that value is the centred score its children's
+    equations were fitted on; an unidentified latent has intercept 0.0 and no coefficients.
     """
 
     coefficients: dict[str, dict[str, float]]
@@ -131,8 +136,12 @@ def _identify_latent(
     series: dict[str, np.ndarray],
     observed_assets: list[str],
     ridge: float,
-) -> tuple[np.ndarray, np.ndarray] | None:
-    """Parent weights and per-row score of an unobserved node, or None when not identifiable."""
+) -> tuple[np.ndarray, float, np.ndarray] | None:
+    """Weights, intercept and per-row score of an unobserved node; None when not identifiable.
+
+    The score is centred on the usable rows' parent mean, and the intercept is
+    -(parent mean @ weights), so intercept + sum(weight * parent) reproduces the score exactly.
+    """
     parents = graph.parents(node)
     reached = descendants(graph, node)
     children = [a for a in observed_assets if a in reached]
@@ -151,8 +160,9 @@ def _identify_latent(
     loadings = dict(zip(children, singular[0] * right_t[0], strict=True))
     if _anchor_flips_weights(graph, node, weights, loadings):
         weights = -weights
-    score = (parent_matrix - parent_matrix[usable].mean(axis=0)) @ weights
-    return weights, score
+    intercept = -float(parent_matrix[usable].mean(axis=0) @ weights)
+    score = parent_matrix @ weights + intercept
+    return weights, intercept, score
 
 
 def _fit_asset(
@@ -235,13 +245,13 @@ def fit_sem(graph: CausalGraph, panel: GuardedPanel, ridge: float = 1.0) -> Fitt
             latent = _identify_latent(graph, node, series, observed_assets, ridge)
             if latent is None:
                 coefficients[node], series[node] = {}, np.zeros(panel.n_obs)
+                intercepts[node] = 0.0
                 underdetermined.add(node)
             else:
-                weights, series[node] = latent
+                weights, intercepts[node], series[node] = latent
                 coefficients[node] = dict(
                     zip(graph.parents(node), map(float, weights), strict=True)
                 )
-            intercepts[node] = 0.0
         else:
             parents = graph.parents(node)
             coefs, intercepts[node], residuals[node], flagged = _fit_asset(
