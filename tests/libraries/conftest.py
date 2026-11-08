@@ -25,6 +25,7 @@ from precedent.libraries.market_resolution import MARKETS_FRAME_COLUMNS
 from precedent.spine.event_key import EventKey
 from precedent.spine.event_schema import NewsEvent
 from precedent.spine.event_store import EventStore
+from precedent.spine.gdelt_events import SOURCE_NAME as GDELT_SOURCE
 from precedent.spine.gdelt_events import gdelt_parser_version
 from precedent.spine.market_record import MarketRecord
 from precedent.spine.market_store import MarketStore
@@ -236,7 +237,7 @@ def _gdelt_store_records() -> list[Any]:
             make_event_record(
                 article_id=f"gdelt:{n}",
                 body_sha256=f"{n:064x}",
-                source="gdelt",
+                source=GDELT_SOURCE,
                 first_seen_utc=available - dt.timedelta(minutes=5),
                 available_utc=available,
                 effective_session=session.date(),

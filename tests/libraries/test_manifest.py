@@ -47,7 +47,9 @@ def test_manifest_accepts_unknown_or_a_full_lowercase_hash(commit):
     assert _manifest(built_from_commit=commit).built_from_commit == commit
 
 
-@pytest.mark.parametrize("commit", ["A" * 40, "g" * 40, "0" * 41, "Unknown", ""])
+@pytest.mark.parametrize(
+    "commit", ["A" * 40, "g" * 40, "0" * 41, "Unknown", "", "0" * 40 + "\n", "unknown\n"]
+)
 def test_manifest_rejects_other_commit_spellings(commit):
     with pytest.raises(ValidationError):
         _manifest(built_from_commit=commit)

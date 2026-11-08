@@ -29,7 +29,7 @@ __all__ = [
 ]
 
 MANIFEST_NAME = "MANIFEST.json"
-_COMMIT_PATTERN = re.compile(r"^(?:[0-9a-f]{40}|unknown)$")
+_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}|unknown")
 _READ_CHUNK_BYTES = 1 << 20
 
 Sha256Hex = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
@@ -96,7 +96,7 @@ class Manifest(BaseModel):
     @field_validator("built_from_commit")
     @classmethod
     def _commit_is_a_full_hash_or_unknown(cls, value: str) -> str:
-        if not _COMMIT_PATTERN.match(value):
+        if not _COMMIT_PATTERN.fullmatch(value):
             raise ValueError(
                 f"built_from_commit must be 40 lowercase hex digits or 'unknown', got {value!r}"
             )

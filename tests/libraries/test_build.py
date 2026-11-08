@@ -8,8 +8,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from pydantic import ValidationError
 
-from precedent.engine.params import load_engine_params
+from precedent.engine.params import EngineParams, load_engine_params
 from precedent.libraries import build as build_module
 from precedent.libraries.build import (
     BuildReport,
@@ -19,8 +20,12 @@ from precedent.libraries.build import (
     run,
 )
 from precedent.libraries.bundle import load_bundle
+from precedent.libraries.manifest import LibraryIntegrityError
+from precedent.spine.edgar_8k_events import SOURCE as EDGAR_SOURCE
+from precedent.spine.edgar_8k_events import edgar_parser_version
 from precedent.spine.event_record import ResolvedImpact
 from precedent.spine.event_store import EventStore
+from precedent.spine.gdelt_events import SOURCE_NAME as GDELT_SOURCE
 from precedent.spine.gdelt_events import gdelt_parser_version
 from precedent.spine.session_calendar import load_nyse_calendar, weekday_sessions
 
@@ -123,6 +128,41 @@ def test_another_typer_version_reads_no_markets(populated_stores):
     assert [source.name for source in manifest.sources] == ["gdelt2"]
 
 
+def test_the_gdelt_source_is_listed_with_its_citation_under_the_spine_source_name(
+    populated_stores,
+):
+    records = EventStore(populated_stores / "events").read(gdelt_parser_version())
+    assert {record.source for record in records} == {GDELT_SOURCE} == {"gdelt2"}
+    build_libraries(populated_stores, PARAMS, commit=COMMIT)
+    manifest = load_bundle(populated_stores / "library").manifest
+    gdelt = next(source for source in manifest.sources if source.name == "gdelt2")
+    assert "GDELT Project" in gdelt.citation and gdelt.rows == 30
+
+
+def test_an_edgar_record_gives_an_edgar_8k_source(populated_stores):
+    store = EventStore(populated_stores / "events")
+    base = store.read(gdelt_parser_version())[3]
+    store.append(
+        [
+            base.model_copy(
+                update={
+                    "article_id": "0000000000-21-000001:2.02",
+                    "body_sha256": "6" * 64,
+                    "source": EDGAR_SOURCE,
+                    "parser_version": edgar_parser_version(),
+                }
+            )
+        ]
+    )
+    report = build_libraries(populated_stores, PARAMS, commit=COMMIT)
+    assert report.events.kept == 31
+    sources = {s.name: s for s in load_bundle(populated_stores / "library").manifest.sources}
+    assert list(sources) == ["gdelt2", "edgar_8k", "polymarket", "kalshi"]
+    assert sources["edgar_8k"].rows == 1 and sources["gdelt2"].rows == 30
+    assert "Securities and Exchange Commission" in sources["edgar_8k"].citation
+    assert sources["edgar_8k"].first_date == sources["edgar_8k"].last_date
+
+
 def _write_prices(root: Path, symbols: list[str]) -> None:
     days = weekday_sessions(dt.date(2020, 1, 2), dt.date(2021, 12, 31), load_nyse_calendar())
     rng = np.random.default_rng(7)
@@ -136,41 +176,33 @@ def _write_prices(root: Path, symbols: list[str]) -> None:
         frame.to_parquet(root / "prices" / f"{symbol}.parquet")
 
 
-def _add_asset_events(root: Path) -> None:
-    """An early record to give 2021 events market-model history, and one impacting ZZZ."""
+def _add_impacting_event(root: Path) -> None:
+    """A record on 2021-04-01 whose parsed impact resolves to the instrument ZZZ."""
     store = EventStore(root / "events")
-    records = store.read(gdelt_parser_version())
-    early = records[0].model_copy(
-        update={
-            "article_id": "gdelt:900",
-            "body_sha256": "8" * 64,
-            "first_seen_utc": dt.datetime(2020, 1, 3, 14, tzinfo=dt.UTC),
-            "available_utc": dt.datetime(2020, 1, 3, 15, tzinfo=dt.UTC),
-            "effective_session": dt.date(2020, 1, 3),
-        }
+    record = store.read(gdelt_parser_version())[20]
+    store.append(
+        [
+            record.model_copy(
+                update={
+                    "article_id": "gdelt:901",
+                    "body_sha256": "7" * 64,
+                    "first_seen_utc": dt.datetime(2021, 4, 1, 14, tzinfo=dt.UTC),
+                    "available_utc": dt.datetime(2021, 4, 1, 15, tzinfo=dt.UTC),
+                    "effective_session": dt.date(2021, 4, 1),
+                    "resolved_impacts": [
+                        ResolvedImpact(
+                            instrument="ZZZ", kind="company", direction=1.0, match_method="x"
+                        )
+                    ],
+                }
+            )
+        ]
     )
-    impacting = records[20].model_copy(
-        update={
-            "article_id": "gdelt:901",
-            "body_sha256": "7" * 64,
-            "resolved_impacts": [
-                ResolvedImpact(instrument="ZZZ", kind="company", direction=1.0, match_method="x")
-            ],
-        }
-    )
-    on_april_first = impacting.model_copy(
-        update={
-            "first_seen_utc": dt.datetime(2021, 4, 1, 14, tzinfo=dt.UTC),
-            "available_utc": dt.datetime(2021, 4, 1, 15, tzinfo=dt.UTC),
-            "effective_session": dt.date(2021, 4, 1),
-        }
-    )
-    store.append([early, on_april_first])
 
 
 def test_with_prices_for_the_market_and_a_panel_symbol_the_asset_library_is_built(populated_stores):
     _write_prices(populated_stores, ["SPY", "QQQ", "ZZZ"])
-    _add_asset_events(populated_stores)
+    _add_impacting_event(populated_stores)
     report = build_libraries(populated_stores, PARAMS, commit=COMMIT)
     assert report.asset is not None and report.asset_not_built_reason is None
     assert report.asset.rows > 0
@@ -188,9 +220,28 @@ def test_with_prices_for_the_market_and_a_panel_symbol_the_asset_library_is_buil
     assert placebo["value"].map(np.isfinite).all()
 
 
+def test_prices_move_the_session_start_back_so_early_events_have_history(populated_stores):
+    _write_prices(populated_stores, ["SPY", "QQQ"])  # from 2020-01-02, a year before the events
+    report = build_libraries(populated_stores, PARAMS, commit=COMMIT)
+    assert report.asset is not None
+    assert report.asset.skipped_short_history == 0
+    assert report.asset.rows == 30 * len(PARAMS.asset_horizons)  # every event, QQQ, every horizon
+    bundle = load_bundle(populated_stores / "library")
+    first_event = bundle.events["effective_session"].min()
+    assert first_event == dt.date(2021, 2, 1)
+    assert bundle.sessions[0] == pd.Timestamp("2019-12-30")  # 400 days before, next session
+    asset = bundle.rows[bundle.rows["outcome_type"] == "asset"]
+    assert asset["effective_session"].min() == pd.Timestamp("2021-02-01")
+
+
+def test_without_prices_the_sessions_start_at_the_earliest_date(populated_stores):
+    build_libraries(populated_stores, PARAMS, commit=COMMIT)
+    assert load_bundle(populated_stores / "library").sessions[0] == pd.Timestamp("2021-02-01")
+
+
 def test_the_placebo_is_reproducible_and_avoids_event_sessions(populated_stores):
     _write_prices(populated_stores, ["SPY", "QQQ"])
-    _add_asset_events(populated_stores)
+    _add_impacting_event(populated_stores)
     build_libraries(populated_stores, PARAMS, commit=COMMIT)
     first = load_bundle(populated_stores / "library")
     build_libraries(populated_stores, PARAMS, commit=COMMIT)
@@ -278,3 +329,32 @@ def test_run_reports_a_config_error_and_returns_two(populated_stores, capsys, mo
 def test_run_rejects_an_unknown_flag_with_two(capsys):
     assert run(["--bogus"]) == 2
     assert "--bogus" in capsys.readouterr().err
+
+
+def test_run_reports_invalid_engine_parameters_in_one_line(populated_stores, capsys, monkeypatch):
+    def broken_params():
+        return EngineParams.model_validate({})
+
+    monkeypatch.setattr(build_module, "load_engine_params", broken_params)
+    assert run(["--data-dir", str(populated_stores)]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: engine parameters are invalid") and len(err.splitlines()) == 1
+    with pytest.raises(ValidationError):
+        broken_params()
+
+
+def test_run_reports_an_integrity_error_without_a_traceback(populated_stores, capsys, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise LibraryIntegrityError("events.parquet", "sha256 differs from the manifest")
+
+    monkeypatch.setattr(build_module, "build_libraries", refuse)
+    assert run(["--data-dir", str(populated_stores)]) == 2
+    assert "events.parquet" in capsys.readouterr().err
+
+
+def test_current_commit_treats_any_os_error_as_unknown(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise PermissionError("git")
+
+    monkeypatch.setattr(build_module.subprocess, "run", refuse)
+    assert current_commit() == "unknown"

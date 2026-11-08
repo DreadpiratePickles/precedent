@@ -13,13 +13,13 @@ import json
 import re
 import subprocess
 import sys
-from datetime import UTC, date
+from datetime import UTC, date, timedelta
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from precedent.config import ConfigError, data_dir
 from precedent.engine.params import EngineParams, load_engine_params
@@ -32,14 +32,18 @@ from precedent.libraries.bundle import PLACEBO_COLUMNS, write_bundle
 from precedent.libraries.common import empty_library_rows
 from precedent.libraries.event_sequence import SequenceLibraryReport, build_event_sequence_library
 from precedent.libraries.events_table import EventsTableReport, build_events_table
-from precedent.libraries.manifest import ManifestSource
+from precedent.libraries.manifest import LibraryIntegrityError, ManifestSource
 from precedent.libraries.market_resolution import (
     MarketLibraryReport,
     build_market_resolution_library,
 )
+from precedent.spine.edgar_8k_events import SOURCE as EDGAR_SOURCE
 from precedent.spine.edgar_8k_events import edgar_parser_version
 from precedent.spine.event_record import EventRecord
 from precedent.spine.event_store import EventStore
+from precedent.spine.gdelt_events import (
+    SOURCE_NAME as GDELT_SOURCE,
+)
 from precedent.spine.gdelt_events import dedupe_gdelt_records, gdelt_parser_version
 from precedent.spine.market_record import MarketRecord
 from precedent.spine.market_store import VENUES, MarketStore
@@ -53,12 +57,13 @@ __all__ = ["BuildReport", "NoEventsError", "build_libraries", "current_commit", 
 USAGE_ERROR = 2
 LIBRARY_DIR_NAME = "library"
 LOOKAHEAD_DAYS = 120
+PRICE_LOOKBACK_DAYS = 400
 _GDELT_PARSER_PREFIX = "rules-gdelt"
 _NO_MARKET_EVENT = "no_market_event"
 _NO_PRICES = "no prices"
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
-_EVENT_SOURCES = (("gdelt2", "gdelt"), ("edgar_8k", "edgar"))
+_EVENT_SOURCES = (("gdelt2", GDELT_SOURCE), ("edgar_8k", EDGAR_SOURCE))
 _CITATIONS = {
     "gdelt2": (
         "The GDELT Project (gdeltproject.org), GDELT 2.0 Event Database; "
@@ -96,7 +101,7 @@ def current_commit() -> str:
             text=True,
             check=False,
         )
-    except FileNotFoundError:
+    except OSError:
         return "unknown"
     commit = result.stdout.strip()
     if result.returncode == 0 and _COMMIT_PATTERN.fullmatch(commit):
@@ -120,9 +125,18 @@ def _read_markets(root: Path, typer_version: str) -> list[MarketRecord]:
     return [market for venue in VENUES for market in store.read(venue, typer_version)]
 
 
-def _session_cutoffs(records: list[EventRecord], markets: list[MarketRecord]) -> pd.Series:
+def _session_cutoffs(
+    records: list[EventRecord], markets: list[MarketRecord], lookback_days: int
+) -> pd.Series:
+    """Sessions from the earliest date, `lookback_days` earlier, to 120 days past the latest.
+
+    The lookback gives the market model its estimation history; the calendar's first year
+    floors the start.
+    """
     dates: list[date] = [r.effective_session for r in records if r.effective_session is not None]
     dates += [market.resolved_utc.astimezone(UTC).date() for market in markets]
+    if lookback_days:
+        dates.append(min(dates) - timedelta(days=lookback_days))
     return default_cutoffs_for(dates, load_nyse_calendar(), LOOKAHEAD_DAYS)
 
 
@@ -149,19 +163,25 @@ def _empty_placebo() -> pd.DataFrame:
     )
 
 
+def _tradable_symbols(root: Path, params: EngineParams) -> set[str]:
+    """Symbols that can be assets: none unless prices exist for the market and one other."""
+    available = _price_symbols(root / "prices")
+    tradable = available - {params.market}
+    return tradable if params.market in available else set()
+
+
 def _asset_part(
     root: Path,
     params: EngineParams,
     events: pd.DataFrame,
     sessions: pd.DatetimeIndex,
     impacts: dict[str, list[str]],
+    tradable: set[str],
 ) -> tuple[pd.DataFrame, pd.DataFrame, AssetLibraryReport | None]:
     """Asset rows, placebo rows and the report; no report when there are no usable prices."""
     prices_dir = root / "prices"
-    available = _price_symbols(prices_dir)
     market = params.market
-    tradable = available - {market}
-    if market not in available or not tradable:
+    if not tradable:
         return empty_library_rows(), _empty_placebo(), None
     panel = [symbol for symbol in dict.fromkeys(params.asset_panel) if symbol in tradable]
     from_impacts = {s for symbols in impacts.values() for s in symbols} & tradable
@@ -245,7 +265,10 @@ def build_libraries(
     typer's. Raises `NoEventsError` (naming `precedent ingest`) when no record is stored or none
     can be placed on a session. The asset library needs `<SYMBOL>.parquet` for `params.market`
     and one other symbol under `data_dir / "prices"`; without them `asset` is None and
-    `asset_not_built_reason` is `no prices`. The market symbol is never its own asset.
+    `asset_not_built_reason` is `no prices`. The market symbol is never an asset row and never
+    a placebo symbol (its abnormal return against itself is zero). When prices exist the session
+    axis starts 400 calendar days before the earliest event or market date, so the market model
+    has its estimation window for the first events; without prices it starts at that date.
     """
     if parser_versions is None:
         parser_versions = (gdelt_parser_version(), edgar_parser_version())
@@ -263,7 +286,8 @@ def build_libraries(
             "run `precedent ingest` again"
         )
     markets = _read_markets(data_dir, typer_version)
-    cutoffs = _session_cutoffs(records, markets)
+    tradable = _tradable_symbols(data_dir, params)
+    cutoffs = _session_cutoffs(records, markets, PRICE_LOOKBACK_DAYS if tradable else 0)
     sessions = pd.DatetimeIndex(cutoffs.index)
     events, events_report = build_events_table(records, sessions, params.story_window_sessions)
     if events_report.kept == 0:
@@ -279,7 +303,7 @@ def build_libraries(
         events, markets, sessions, cutoffs
     )
     asset_rows, placebo, asset_report = _asset_part(
-        data_dir, params, events, sessions, _impacts_by_event(records)
+        data_dir, params, events, sessions, _impacts_by_event(records), tradable
     )
     report = BuildReport(
         events=events_report,
@@ -319,12 +343,18 @@ def run(argv: list[str]) -> int:
     root: Path = args.data_dir if args.data_dir is not None else data_dir()
     try:
         params = load_engine_params()
+    except (ValidationError, ValueError, OSError) as error:
+        print(
+            f"error: engine parameters are invalid: {' '.join(str(error).split())}", file=sys.stderr
+        )
+        return USAGE_ERROR
+    try:
         typer_version = typer_from_env().version
         report = build_libraries(root, params, current_commit(), typer_version=typer_version)
     except ConfigError as error:
         print(f"config error: {error}", file=sys.stderr)
         return USAGE_ERROR
-    except NoEventsError as error:
+    except (NoEventsError, LibraryIntegrityError) as error:
         print(f"error: {error}", file=sys.stderr)
         return USAGE_ERROR
     counts: dict[str, Any] = report.model_dump()
