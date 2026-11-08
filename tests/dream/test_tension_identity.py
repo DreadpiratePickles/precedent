@@ -197,7 +197,8 @@ def test_an_asymmetric_tension_closes_when_the_reverse_supplier_link_appears(tmp
 
 def test_tensions_asof_reads_the_last_record_recorded_by_the_cutoff(tmp_path, conflicted_stores):
     run(["--date", "2024-06-03", "--out", str(tmp_path)])
-    run(["--date", "2024-06-06", "--out", str(tmp_path)])  # closes the conflict at the 06-06 cutoff
+    # closes the conflict at the 06-06 cutoff
+    run(["--date", "2024-06-06", "--out", str(tmp_path), "--allow-gap"])
     store = TensionStore(tmp_path / "tensions")
     assert {
         t.status

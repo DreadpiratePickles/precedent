@@ -34,7 +34,27 @@ def test_the_script_names_ingest_then_the_dream_then_the_review_in_order():
     assert commands[2].startswith("uv run precedent dream review")
 
 
+def test_the_script_catches_up_in_order_and_reviews_from_the_first_caught_up_session():
+    text = SCRIPT.read_text()
+    # D70: every session after the manifest's last one, ingested then dreamed one at a time
+    assert "manifest.json" in text and '"last_session"' in text
+    assert "for SESSION in $SESSIONS; do" in text
+    assert text.index("precedent ingest gdelt") < text.index("precedent dream --date")
+    assert text.index("done") < text.index("precedent dream review")
+    assert '${FIRST:+--since "$FIRST"}' in text
+    assert "--allow-gap" not in text  # a gap is the owner's choice, never the script's
+
+
 def test_the_schedule_doc_is_proposed_not_installed_and_has_no_personal_path():
     text = (ROOT / "docs" / "DREAM_SCHEDULE.md").read_text()
     assert "proposed" in text.lower() and "03:30" in text
     assert "/Users/" not in text and "/home/" not in text
+
+
+def test_the_script_passes_prices_only_when_both_shell_variables_are_set():
+    text = SCRIPT.read_text()
+    assert 'if [ -n "${DREAM_PRICES_DIR:-}" ] && [ -n "${DREAM_MARKET:-}" ]; then' in text
+    assert '--prices "$DREAM_PRICES_DIR" --market "$DREAM_MARKET"' in text
+    assert "${PRICE_ARGS[@]" in text
+    doc = (ROOT / "docs" / "DREAM_SCHEDULE.md").read_text()
+    assert "DREAM_PRICES_DIR" in doc and "DREAM_MARKET" in doc

@@ -191,9 +191,12 @@ def session_cutoffs(first: str, last: str) -> pd.Series:
 
 
 def hash_tree(root: Path) -> str:
-    """One digest over every file's relative path and bytes under `root`."""
+    """One digest over every file's relative path and bytes under `root`.
+
+    The advisory lock sentinel `.lock` (D74) is not content and is left out.
+    """
     digest = hashlib.sha256()
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+    for path in sorted(p for p in root.rglob("*") if p.is_file() and p.name != ".lock"):
         digest.update(str(path.relative_to(root)).encode())
         digest.update(path.read_bytes())
     return digest.hexdigest()

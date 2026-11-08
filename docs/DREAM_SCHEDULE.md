@@ -6,17 +6,40 @@ GDELT download, which is an owner gate.
 
 ## What the script does
 
-1. `uv run precedent ingest gdelt --since <session> --until <session>` for the previous NYSE
-   session (the last one before today on the committed calendar, or the date given as the first
-   argument). Other sources (`ingest edgar`, the prediction markets) need the owner's own inputs
-   and are not part of the script.
-2. `uv run precedent dream --date <session> --out stages/52_dream_report/output`.
-3. `uv run precedent dream review --out stages/52_dream_report/output`, the proposed resolutions
-   with both evidence spans side by side.
+The script catches up. It reads `last_session` from `<out>/manifest.json` and, for every NYSE
+session after it through the last one before today, in order:
 
-It stops at the first failing step (`set -euo pipefail`), so a failed ingest writes no dream. A
-re-run for the same session adds no store line and gives the same dream bytes. Resolutions are
-decided by the owner, by hand, with `precedent dream promote --resolution <id> --accept|--reject`.
+1. `uv run precedent ingest gdelt --since <session> --until <session>`. Other sources
+   (`ingest edgar`, the prediction markets) need the owner's own inputs and are not part of the
+   script.
+2. `uv run precedent dream --date <session> --out stages/52_dream_report/output`.
+
+Then it prints the morning review, `uv run precedent dream review --out ... --since <first caught-up
+session>`: the proposed resolutions with both evidence spans side by side. On a first run (no
+manifest) it dreams only the last session before today. With a date argument it dreams only that
+session.
+
+It stops at the first failing step (`set -euo pipefail`), so a failed ingest writes no dream and no
+session is skipped. Resolutions are decided by the owner, by hand, with
+`precedent dream promote --resolution <id> --accept|--reject`.
+
+### Order, gaps and replays (D70)
+
+A session is dreamed once, in order. `precedent dream` refuses (exit 2, naming the last session
+dreamed) a session that is not the next one after `last_session`, and one before it that has no
+dream. After a gap it refuses unless `--allow-gap` is given, which is an explicit choice; the dream
+then says `gap: <n> sessions skipped`. The script never passes `--allow-gap`: it dreams the missed
+sessions instead. Asking for a session that already has a dream rebuilds it on a scratch copy of the
+stores; if that would add a line to any store (a document that reached the event store late, say),
+nothing is written and the command exits 1, because a past dream is a vintage. A store root is also
+bound to the parser version, the claim vocabulary and the detector parameters it was built with
+(`manifest.json`); change one and `precedent dream` exits 2 and says to use a fresh `--out`.
+
+### Prices (D75)
+
+The script passes `--prices "$DREAM_PRICES_DIR" --market "$DREAM_MARKET"` only when both shell
+variables are set; they are shell variables, not `PRECEDENT_` environment variables. Without them
+`text_vs_price` does not run, and every dream says so under `## Not run`.
 
 ## When to install it
 
@@ -78,8 +101,11 @@ Check in this order:
 2. Did it run? Read `nightly.log` and `nightly.err.log` next to the dreams; the first line names
    the session and output root.
 3. Was the Mac off, or asleep and not woken by 03:30? launchd then runs the job on the next wake;
-   if the Mac stayed off, run `scripts/dream_nightly.sh YYYY-MM-DD` for the missed session by
-   hand. A second run of a session is harmless.
+   if the Mac stayed off, run `scripts/dream_nightly.sh` by hand with no date: it catches up every
+   missed session in order. Do not run a later session first: `precedent dream` refuses it (exit 2)
+   rather than write a dream that differs from an in-order run. Running the script again for a
+   session already dreamed re-downloads its GDELT files (the ingest is idempotent, but it is a
+   download) and then replays the dream, which is a no-op or, if the inputs changed, a refusal.
 4. Did the ingest fail? The error log shows it, and no `dreams/dream_<session>.md` exists for that
    session. Network, a changed GDELT file layout, or MD5 failures (exit 1) all stop the script.
 5. Is `uv` found? `command not found` in the error log means `UV_DIR` in the plist is wrong.

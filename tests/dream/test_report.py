@@ -29,6 +29,7 @@ SECTIONS = [
     "Expired claims",
     "New claims",
     "Proposed resolutions awaiting review",
+    "Not run",
 ]
 
 
@@ -65,7 +66,7 @@ def test_backfilled_dream_equals_live_dream(tmp_path, populated_stores_with_late
     june = markdown(tmp_path)
     assert "LATE-DOC" not in june
     # the late record is not counted as a document of the session either (not yet available)
-    assert "documents ingested: 3;" in june.splitlines()[0]
+    assert "documents in session: 3;" in june.splitlines()[0]
     assert "LATE-DOC" not in (tmp_path / "claims" / "claims.jsonl").read_text()
 
 
@@ -99,7 +100,7 @@ def test_documents_ingested_after_the_cutoff_are_still_seen_by_their_session(
     out = tmp_path / "out"
     assert dream(out) == 0
     text = markdown(out)
-    assert "documents ingested: 2; feed gap: no" in text.splitlines()[0]
+    assert "documents in session: 2; feed gap: no" in text.splitlines()[0]
     assert "feed gap: yes" not in text
     assert text.count("- [claim]") >= 2
 
@@ -110,7 +111,7 @@ def test_a_september_run_that_stores_the_late_claim_leaves_the_june_dream_unchan
     assert dream(tmp_path) == 0
     june = (tmp_path / "dreams" / "dream_2024-06-03.md").read_bytes()
     june_jsonl = (tmp_path / "dreams" / "dream_2024-06-03.jsonl").read_bytes()
-    assert dream(tmp_path, "2024-09-03") == 0
+    assert dream(tmp_path, "2024-09-03", "--allow-gap") == 0
     assert "LATE-DOC" in markdown(tmp_path, "2024-09-03")  # new in September's window
     assert "LATE-DOC" in (tmp_path / "claims" / "claims.jsonl").read_text()
     assert dream(tmp_path) == 0  # re-run June with the late claim now in the claim store
@@ -120,7 +121,7 @@ def test_a_september_run_that_stores_the_late_claim_leaves_the_june_dream_unchan
 
 def test_every_tension_line_names_its_documents(tmp_path, conflicted_stores):
     dream(tmp_path)
-    lines = item_lines(markdown(tmp_path))
+    lines = [x for x in item_lines(markdown(tmp_path)) if not x.startswith("- [not_run]")]
     assert lines and all("(" in line and ")" in line for line in lines)
     conflict = next(line for line in lines if line.startswith("- [value_conflict]"))
     assert conflict == (
@@ -141,7 +142,7 @@ def test_feed_gap_session_says_so(tmp_path, stores_with_gap):
     assert dream(tmp_path, "2024-06-04") == 0
     text = markdown(tmp_path, "2024-06-04")
     assert text.splitlines()[0] == (
-        "# Dream for 2024-06-04   (documents ingested: 0; feed gap: yes)"
+        "# Dream for 2024-06-04   (documents in session: 0; feed gap: yes)"
     )
     assert "feed gap: yes" in text
 
@@ -152,9 +153,9 @@ def test_feed_gap_session_says_so(tmp_path, stores_with_gap):
 def test_markdown_layout_and_counts(tmp_path, conflicted_stores):
     dream(tmp_path)
     lines = markdown(tmp_path).splitlines()
-    assert lines[0] == "# Dream for 2024-06-03   (documents ingested: 3; feed gap: no)"
+    assert lines[0] == "# Dream for 2024-06-03   (documents in session: 3; feed gap: no)"
     # a value conflict and an asymmetric link; four rule-built claims and the two planted ones
-    counts = {"Opened tensions": 2, "New claims": 6}
+    counts = {"Opened tensions": 2, "New claims": 6, "Not run": 2}  # no prices; short history
     assert [h for h in lines if h.startswith("## ")] == [
         f"## {name} ({counts.get(name, 0)})" for name in SECTIONS
     ]
@@ -182,12 +183,15 @@ def test_jsonl_has_header_items_in_markdown_order_and_footer(tmp_path, conflicte
     ]
     header, items, footer = rows[0], rows[1:-1], rows[-1]
     assert header["type"] == "header" and header["session"] == SESSION
-    assert header["documents_ingested"] == 3 and header["feed_gap"] is False
+    assert header["documents_in_session"] == 3 and header["feed_gap"] is False
     assert header["cutoff_utc"] == "2024-06-03T20:00:00+00:00"
     assert header["counts"]["opened_tensions"] == 2 and header["counts"]["new_claims"] == 6
+    assert header["counts"]["not_run"] == 2
     assert footer == {"type": "footer", "disclaimer": DISCLAIMER}
     assert [r["text"] for r in items] == item_lines(markdown(tmp_path))  # same items, same order
-    assert [r["type"] for r in items] == ["opened_tension"] * 2 + ["new_claim"] * 6
+    assert [r["type"] for r in items] == ["opened_tension"] * 2 + ["new_claim"] * 6 + [
+        "not_run"
+    ] * 2
     tension = next(r for r in items if r["type"] == "opened_tension")
     assert tension["tension_id"] and tension["claim_ids"]
 
@@ -242,14 +246,16 @@ def test_an_annual_claim_expires_after_fifteen_months_and_its_tension_closes(tmp
     )
     ClaimStore(tmp_path / "claims").append([rival])
 
-    assert dream(tmp_path, "2024-03-04") == 0
+    assert dream(tmp_path, "2024-03-04", "--allow-gap") == 0
     opened = markdown(tmp_path, "2024-03-04")
     assert "## Opened tensions (1)" in opened and "## Expired claims (0)" in opened
     assert (
         "[value_conflict] ACME headcount_direction unspecified: down (edgar:0001:2.05, " in opened
     )
 
-    assert dream(tmp_path, "2024-05-06") == 0  # 15 months after 2023-02-01 has passed
+    assert (
+        dream(tmp_path, "2024-05-06", "--allow-gap") == 0
+    )  # 15 months after 2023-02-01 has passed
     later = markdown(tmp_path, "2024-05-06")
     assert "## Expired claims (1)" in later and "## Closed tensions (1)" in later
     expired = next(line for line in item_lines(later) if line.startswith("- [expired]"))
@@ -266,7 +272,7 @@ def test_an_annual_claim_expires_after_fifteen_months_and_its_tension_closes(tmp
 
 def test_a_tension_closes_when_its_claims_expire(tmp_path, conflicted_stores):
     dream(tmp_path)  # opens the ACME capex up-versus-down conflict on 2024-06-03
-    dream(tmp_path, "2024-06-06")  # three sessions later both claims have ended
+    dream(tmp_path, "2024-06-06", "--allow-gap")  # three sessions later both claims have ended
     closed = markdown(tmp_path, "2024-06-06").split("## Closed tensions")[1].split("## Silent")[0]
     assert "[value_conflict] ACME capex_direction" in closed
     statuses = {t.kind.value: t.status for t in TensionStore(tmp_path / "tensions").latest()}
@@ -277,10 +283,11 @@ def test_re_running_an_earlier_session_does_not_close_a_later_tension(tmp_path, 
     plant_capex_conflict(
         tmp_path, "2024-06-05T14:00:00Z", "2024-06-05T15:00:00Z", valid_to=None
     )  # two documents disagree from 06-05
-    assert dream(tmp_path, "2024-06-05") == 0
+    for day in ("2024-06-03", "2024-06-04", "2024-06-05"):
+        assert dream(tmp_path, day) == 0
     [opened] = TensionStore(tmp_path / "tensions").latest()
     assert opened.opened_session == date(2024, 6, 5) and opened.status == "open"
-    assert dream(tmp_path, "2024-06-03") == 0  # the planted claims are not yet visible
+    assert dream(tmp_path, "2024-06-03") == 0  # a replay: the planted claims are not yet visible
     [again] = TensionStore(tmp_path / "tensions").latest()
     assert again.status == "open"
 
@@ -391,24 +398,28 @@ def test_prices_with_no_row_for_the_session_skip_the_detector_and_say_so(tmp_pat
     )  # nothing for 06-03
     assert dream(tmp_path, SESSION, *flags) == 0
     text = markdown(tmp_path)
-    assert text.splitlines()[0] == (
-        "# Dream for 2024-06-03   (documents ingested: 1; feed gap: no; prices: none for 2024-06-03)"
+    assert (
+        text.splitlines()[0] == "# Dream for 2024-06-03   (documents in session: 1; feed gap: no)"
     )
-    assert "[text_vs_price]" not in text
+    assert "- [not_run] text_vs_price: no prices for 2024-06-03" in text  # D75
+    assert "[text_vs_price] ACME" not in text
     header = json.loads(
         (tmp_path / "dreams" / f"dream_{SESSION}.jsonl").read_text().splitlines()[0]
     )
     assert header["skipped"]["no_prices"] == 1 and header["prices_none_for"] == SESSION
 
 
-def test_prices_for_the_session_leave_the_header_line_unchanged(tmp_path, monkeypatch):
+def test_prices_for_the_session_leave_text_vs_price_out_of_the_not_run_section(
+    tmp_path, monkeypatch
+):
     flags = priced_stores(tmp_path, monkeypatch)
     assert dream(tmp_path, SESSION, *flags) == 0
-    assert "prices:" not in markdown(tmp_path).splitlines()[0]
+    assert "text_vs_price: no prices" not in markdown(tmp_path)
 
 
 def test_a_dream_without_prices_says_the_price_detector_was_skipped(tmp_path, populated_stores):
     dream(tmp_path)
+    assert "- [not_run] text_vs_price: no prices given" in markdown(tmp_path)
     header = json.loads(
         (tmp_path / "dreams" / f"dream_{SESSION}.jsonl").read_text().splitlines()[0]
     )
@@ -497,7 +508,7 @@ def test_json_flag_prints_one_machine_readable_summary(tmp_path, conflicted_stor
 
 def test_diff_between_shows_what_changed_across_sessions(tmp_path, conflicted_stores):
     dream(tmp_path)
-    dream(tmp_path, "2024-06-06")
+    dream(tmp_path, "2024-06-06", "--allow-gap")
     a = tmp_path / "dreams" / "dream_2024-06-03.md"
     b = tmp_path / "dreams" / "dream_2024-06-06.md"
     text = diff_between(a, b)
@@ -587,11 +598,13 @@ def test_replaying_sessions_after_a_tension_was_closed_later_gives_the_same_byte
 ):
     assert dream(tmp_path) == 0
     opened_on = dream_bytes(tmp_path, SESSION)
-    assert dream(tmp_path, "2024-06-06") == 0  # the story-window claims end; the conflict closes
+    assert (
+        dream(tmp_path, "2024-06-06", "--allow-gap") == 0
+    )  # the story-window claims end; the conflict closes
     closed_on = dream_bytes(tmp_path, "2024-06-06")
     assert b"## Closed tensions (1)" in closed_on[0]
     assert dream(tmp_path) == 0
-    assert dream(tmp_path, "2024-06-06") == 0
+    assert dream(tmp_path, "2024-06-06", "--allow-gap") == 0
     assert dream_bytes(tmp_path, SESSION) == opened_on
     assert dream_bytes(tmp_path, "2024-06-06") == closed_on
 
@@ -622,7 +635,7 @@ def test_replaying_a_session_after_its_resolution_was_decided_later_gives_the_sa
     first = dream_bytes(tmp_path, SESSION)
     assert b"## Proposed resolutions awaiting review (1)" in first[0]
     store.decide("r-1", "accepted", at("2024-06-06T20:00:00Z"))  # decided three sessions later
-    assert dream(tmp_path, "2024-06-06") == 0
+    assert dream(tmp_path, "2024-06-06", "--allow-gap") == 0
     assert b"## Proposed resolutions awaiting review (0)" in dream_bytes(tmp_path, "2024-06-06")[0]
     assert dream(tmp_path) == 0
     assert dream_bytes(tmp_path, SESSION) == first
@@ -657,5 +670,5 @@ def test_replaying_a_session_after_a_proposal_was_appended_later_gives_the_same_
     )
     assert dream(tmp_path) == 0
     assert dream_bytes(tmp_path, SESSION) == first
-    assert dream(tmp_path, "2024-06-11") == 0
+    assert dream(tmp_path, "2024-06-11", "--allow-gap") == 0
     assert b"## Proposed resolutions awaiting review (1)" in dream_bytes(tmp_path, "2024-06-11")[0]

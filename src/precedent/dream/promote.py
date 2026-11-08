@@ -27,6 +27,7 @@ from precedent.dream.claim_store import (
     ResolutionStore,
     TensionStore,
 )
+from precedent.dream.locking import DreamLockedError, exclusive_lock
 from precedent.dream.report import DEFAULT_OUT
 from precedent.dream.report_render import DISCLAIMER
 from precedent.spine.session_calendar import default_cutoffs_for, load_nyse_calendar
@@ -90,6 +91,15 @@ def run_promote(argv: list[str]) -> int:
     args = _parse(_promote_parser(), argv)
     if isinstance(args, int):
         return args
+    try:
+        with exclusive_lock(args.out, create=False):
+            return _promote(args)
+    except DreamLockedError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return STORE_FAILURE
+
+
+def _promote(args: argparse.Namespace) -> int:
     claims, tensions = ClaimStore(args.out / "claims"), TensionStore(args.out / "tensions")
     resolutions = ResolutionStore(args.out / "resolutions")
     resolution = next((r for r in resolutions.latest() if r.resolution_id == args.resolution), None)
@@ -231,6 +241,15 @@ def run_review(argv: list[str]) -> int:
     args = _parse(_review_parser(), argv)
     if isinstance(args, int):
         return args
+    try:
+        with exclusive_lock(args.out, create=False):
+            return _review(args)
+    except DreamLockedError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return STORE_FAILURE
+
+
+def _review(args: argparse.Namespace) -> int:
     claims = {c.claim_id: c for c in ClaimStore(args.out / "claims").latest()}
     tensions = {t.tension_id: t for t in TensionStore(args.out / "tensions").latest()}
     waiting = sorted(

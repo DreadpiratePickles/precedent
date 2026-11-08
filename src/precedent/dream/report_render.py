@@ -24,6 +24,7 @@ SECTIONS = (
     ("expired_claim", "expired_claims", "Expired claims"),
     ("new_claim", "new_claims", "New claims"),
     ("proposed_resolution", "proposed_resolutions", "Proposed resolutions awaiting review"),
+    ("not_run", "not_run", "Not run"),
 )
 Item = dict[str, Any]  # one note line plus its ids; "text" is the line itself
 
@@ -225,14 +226,66 @@ def _resolution_item(resolution: Resolution, tensions: list[Tension]) -> Item:
     }
 
 
+def not_run_items(
+    *,
+    session: date,
+    prices_given: bool,
+    prices_found: bool,
+    feed_gap: bool,
+    has_link_store: bool,
+    skipped: dict[str, int],
+) -> list[Item]:
+    """One item per detector that did not run for this session, with its reason (D75).
+
+    A silent detector must not read as a quiet market: without prices, without a link store, on a
+    feed gap or without enough history the note says what was not looked at.
+    """
+    rows: list[tuple[str, str]] = []
+    if not prices_given:
+        rows.append(("text_vs_price", "no prices given"))
+    elif not prices_found:
+        rows.append(("text_vs_price", f"no prices for {session.isoformat()}"))
+    elif feed_gap:
+        rows.append(("text_vs_price", "feed gap: no documents in the session"))
+    if not has_link_store:
+        rows.append(("asymmetric_link/stale_reliance/link_churn", "no link store"))
+    if skipped.get("link_without_claim"):
+        rows.append(
+            ("asymmetric_link", f"link_without_claim ({skipped['link_without_claim']} links)")
+        )
+    if skipped.get("shift_short_history"):
+        rows.append(
+            ("event_rate/link_churn", f"short_history ({skipped['shift_short_history']} not run)")
+        )
+    if skipped.get("shift_no_live_sessions"):
+        rows.append(
+            ("event_rate", f"no_live_sessions ({skipped['shift_no_live_sessions']} subjects)")
+        )
+    if skipped.get("shift_no_baseline_events"):
+        rows.append(
+            ("event_rate", f"no_baseline_events ({skipped['shift_no_baseline_events']} subjects)")
+        )
+    return [
+        {
+            "type": "not_run",
+            "text": f"- [not_run] {detector}: {reason}",
+            "detector": detector,
+            "reason": reason,
+        }
+        for detector, reason in rows
+    ]
+
+
 def markdown_lines(header: dict[str, Any], sections: dict[str, list[Item]]) -> list[str]:
     gap = "yes" if header["feed_gap"] else "no"
-    prices = (
-        f"; prices: none for {header['prices_none_for']}" if "prices_none_for" in header else ""
+    skipped = (
+        f"; gap: {header['gap_sessions_skipped']} sessions skipped"
+        if header.get("gap_sessions_skipped")
+        else ""
     )
     lines = [
         f"# Dream for {header['session']}   "
-        f"(documents ingested: {header['documents_ingested']}; feed gap: {gap}{prices})",
+        f"(documents in session: {header['documents_in_session']}; feed gap: {gap}{skipped})",
         "",
     ]
     for kind, _, heading in SECTIONS:
