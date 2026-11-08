@@ -151,6 +151,37 @@ def test_supersede_refuses_unknown_and_already_expired_claims(tmp_path):
     assert len(store.read_all()) == 2
 
 
+def test_supersede_shortens_a_bounded_claim(tmp_path):
+    store = ClaimStore(tmp_path)
+    bounded = claim().model_copy(update={"valid_to_utc": utc("2024-09-01T00:00:00")})
+    store.append([bounded])
+    assert len(claims_asof(store, utc("2024-06-15T21:00:00"))) == 1
+    shortened = store.supersede(bounded.claim_id, "x", utc("2024-06-01T21:30:00"), "restated")
+    assert shortened.valid_to_utc == utc("2024-06-01T21:30:00")
+    assert claims_asof(store, utc("2024-07-01T21:00:00")).empty  # between new and old expiry
+    assert len(claims_asof(store, utc("2024-05-01T21:00:00"))) == 1  # rewind: still valid
+
+
+def test_supersede_refuses_a_claim_already_expired_at_that_time(tmp_path):
+    store = ClaimStore(tmp_path)
+    bounded = claim().model_copy(update={"valid_to_utc": utc("2024-09-01T00:00:00")})
+    store.append([bounded])
+    with pytest.raises(ConflictError):
+        store.supersede(bounded.claim_id, None, utc("2024-09-01T00:00:00"), "x")
+    with pytest.raises(ConflictError):
+        store.supersede(bounded.claim_id, None, utc("2024-10-01T00:00:00"), "x")
+    assert len(store.read_all()) == 1
+
+
+def test_supersede_refuses_a_time_before_the_claim_starts(tmp_path):
+    store = ClaimStore(tmp_path)
+    c1 = claim()
+    store.append([c1])
+    with pytest.raises(ValueError, match="valid_from_utc"):
+        store.supersede(c1.claim_id, None, utc("2024-02-01T00:00:00"), "x")
+    assert len(store.read_all()) == 1
+
+
 def test_append_is_idempotent_and_refuses_changed_content(tmp_path):
     store = ClaimStore(tmp_path)
     c1 = claim()
@@ -250,9 +281,11 @@ def test_tension_store_lifecycle_is_append_only(tmp_path):
         store.close(t1.tension_id, date(2024, 3, 7), utc("2024-03-07T21:30:00"))
     with pytest.raises(KeyError):
         store.acknowledge("missing", utc("2024-03-07T21:30:00"))
-    with pytest.raises(ConflictError):
-        tension_changed = t1.model_copy(update={"detector_version": "dream-detect-v2"})
-        store.append([tension_changed])
+    refound = t1.model_copy(update={"detector_version": "dream-detect-v2"})
+    lines_before = line_count(tmp_path / "tensions.jsonl")
+    report = store.append([refound])  # a later detector version re-finding it is provenance
+    assert (report.added, report.identical_skipped) == (0, 1)
+    assert line_count(tmp_path / "tensions.jsonl") == lines_before
 
 
 def test_tension_acknowledge_marks_status_without_a_session(tmp_path):
@@ -273,8 +306,10 @@ def test_shift_store_refire_updates_latest_only(tmp_path):
     assert [s.statistic for s in store.read_all()] == [3.4, 4.1]
     assert [s.statistic for s in store.latest()] == [4.1]
     assert store.append([s1]).identical_skipped == 1
-    with pytest.raises(ConflictError):
-        store.append([shift(detector="dream-detect-v2")])
+    lines_before = line_count(tmp_path / "shifts.jsonl")
+    report = store.append([shift(detector="dream-detect-v2")])
+    assert (report.added, report.identical_skipped) == (0, 1)
+    assert line_count(tmp_path / "shifts.jsonl") == lines_before
     with pytest.raises(KeyError):
         store.refire("missing", 1.0, date(2024, 3, 5), utc("2024-03-05T21:30:00"))
     assert (tmp_path / "shifts.jsonl").exists()

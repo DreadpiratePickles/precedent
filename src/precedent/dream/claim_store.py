@@ -29,8 +29,8 @@ CLAIM_IDENTITY_FIELDS = (
     "evidence_span",
     "extractor_version",
 )
-TENSION_IDENTITY_FIELDS = ("kind", "claim_ids", "subject", "detector_version")
-SHIFT_IDENTITY_FIELDS = ("kind", "subject", "detector_version")
+TENSION_IDENTITY_FIELDS = ("kind", "claim_ids", "subject")
+SHIFT_IDENTITY_FIELDS = ("kind", "subject")
 RESOLUTION_IDENTITY_FIELDS = ("tension_id", "hypothesis", "evidence_span", "proposer_version")
 
 
@@ -136,11 +136,16 @@ class ClaimStore(_AppendOnlyStore[Claim]):
         """Expire a claim at `at_utc`: append a copy with its end, successor and reason.
 
         `new_claim_id` is not checked against the store; a dated rule expiry has no successor.
+        A claim that already ends later than `at_utc` has its validity shortened; one that
+        already ended at or before `at_utc` raises `ConflictError`; `at_utc` before the claim's
+        start raises `ValueError`.
         """
 
         def change(latest: Claim) -> dict[str, Any]:
-            if latest.valid_to_utc is not None:
-                raise ConflictError(f"claim {old_claim_id!r} is already expired")
+            if at_utc < latest.valid_from_utc:
+                raise ValueError(f"at_utc {at_utc} is before the claim's valid_from_utc")
+            if latest.valid_to_utc is not None and latest.valid_to_utc <= at_utc:
+                raise ConflictError(f"claim {old_claim_id!r} is already expired at {at_utc}")
             return {
                 "valid_to_utc": at_utc,
                 "superseded_by": new_claim_id,
