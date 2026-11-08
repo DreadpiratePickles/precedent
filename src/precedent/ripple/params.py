@@ -19,6 +19,8 @@ class RippleParams(BaseModel):
     annual_link_expiry_months: int = Field(ge=1)
     correlation_window_sessions: int = Field(ge=2)
     correlation_top_k: int = Field(ge=1)
+    placebo_margin_floor: float = Field(gt=0.0)
+    placebo_margin_se_multiple: float = Field(ge=0.0)
     proposed: bool
     note: str
 

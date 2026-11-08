@@ -1,0 +1,3 @@
+name: m3_ripple_g2
+# The ladder supplies the G2 return-correlation graph for this rung. The graph identity lives in the supplied ripple_ panel, not in this file.
+panel_prefixes: ["news_", "ripple_"]

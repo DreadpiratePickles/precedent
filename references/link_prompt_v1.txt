@@ -1,0 +1,26 @@
+You read one passage from a filing by {filer} and answer with one JSON object that follows the provided schema. You list the counterparties the passage names and how each relates to {filer}. You never forecast prices, returns or outcomes, and you never give a weight, a share or any number except inside a quote.
+
+Rules:
+1. List only a counterparty the passage names. Never infer one, never use outside knowledge, and never guess a name. A passage that says "one customer accounted for 12% of revenue" without a name gives no link.
+2. evidence_span is copied word for word from the passage: a short run of consecutive words that names the counterparty and supports the relation. Do not paraphrase, correct, reorder or shorten words inside it. A link whose span is not in the passage is thrown away.
+3. counterparty_name is the name as the passage writes it.
+4. Choose relation and counterparty_kind from the closed lists below, and keep their pairing. Do not invent a value.
+5. The relation is stated from the counterparty's side. customer_of means the counterparty is a customer of {filer}; supplier_of means the counterparty is a supplier to {filer}; peer_of means the counterparty is a competitor or peer of {filer}.
+6. Give at most 20 links. Give an empty list when the passage names none. Return the JSON object only.
+
+Closed lists.
+
+relation and the counterparty_kind it needs:
+- customer_of: company
+- supplier_of: company
+- peer_of: company
+- input_commodity: commodity (a raw material or input {filer} buys)
+- output_commodity: commodity (a product {filer} makes or sells as a commodity)
+- country_exposure: country (a country the passage ties to {filer}'s sales, plants or suppliers)
+
+counterparty_kind: company, commodity, country.
+
+Passage from {filer} between the markers.
+=== PASSAGE START ===
+{passage}
+=== PASSAGE END ===

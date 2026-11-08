@@ -5,7 +5,9 @@ Events are visited in time order and each is scored from earlier events only, th
 pools every earlier first report (the unconditional distribution or rate); rung B1 keeps only
 events with the same typed key. Continuous outcomes are scored with pinball loss per quantile
 and the coverage of the 80% band; binary outcomes with the Brier score. A refused summary
-(too few effective precedents) counts in `n_refused` and adds no loss.
+(too few effective precedents) counts in `n_refused` and adds no loss. Rung B2 is the exact-key
+match again, meaningful only when the events were typed by a model; rung B3 blends the exact key
+with the similarity of canonical texts from an injected embedder (`engine.embedder`).
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import pandas as pd
 
 from precedent import config
 from precedent.engine.aggregate import QUANTILE_LEVELS, summarize_responses
+from precedent.engine.embedder import TextEmbedder, embedding_similarity
 from precedent.engine.keys import EventKey
 from precedent.engine.params import load_engine_params
 from precedent.engine.retrieval import (
@@ -32,6 +35,8 @@ from precedent.libraries.common import OUTCOME_TYPES
 __all__ = ["RUNGS", "brier_score", "pinball_loss", "run", "score_precedent_ladder"]
 
 RUNGS = ("B0", "B1")
+_ALL_RUNGS = ("B0", "B1", "B2", "B3")
+_TEXT_COLUMN = "canonical_text"
 OUTPUT_COLUMNS = (
     "rung",
     "outcome_type",
@@ -68,7 +73,11 @@ def _every_event(_query: PrecedentQuery, events: pd.DataFrame) -> pd.Series:
     return pd.Series(1.0, index=events.index, dtype="float64")
 
 
-_SIMILARITY_OF_RUNG: dict[str, _Similarity] = {"B0": _every_event, "B1": exact_key_similarity}
+_SIMILARITY_OF_RUNG: dict[str, _Similarity] = {
+    "B0": _every_event,
+    "B1": exact_key_similarity,
+    "B2": exact_key_similarity,
+}
 
 
 class _Tally:
@@ -93,6 +102,8 @@ def score_precedent_ladder(
     quantiles: tuple[float, ...] = (0.1, 0.5, 0.9),
     *,
     score_only: pd.Series | Collection[str] | None = None,
+    embedder: TextEmbedder | None = None,
+    embedding_weight: float | None = None,
 ) -> pd.DataFrame:
     """Score each rung on `outcome_type`, one unit per first-report event and realised row.
 
@@ -107,17 +118,33 @@ def score_precedent_ladder(
     Series aligned to `events` (same index) or a collection of event ids. Every event in `events`
     still serves as a precedent through the time guard; only the listed events add to the
     tallies. None scores every first report.
+
+    Rungs: B0 pools every earlier first report; B1 and B2 both match the exact key, computed
+    identically (B2 is labelled apart because it is meaningful only when the caller passes
+    events typed by a model; B1 is the rules-typed control). B3 is
+    `embedding_similarity(embedder, embedding_weight)`; `embedding_weight=None` means
+    `EngineParams.embedding_weight`. It raises `ValueError` when requested without an `embedder`,
+    when the events table has no `canonical_text` column, or when any scored event's text is
+    null, so a missing text never silently scores as B1.
     """
     if outcome_type not in OUTCOME_TYPES:
         raise ValueError(f"unknown outcome_type {outcome_type!r}; expected one of {OUTCOME_TYPES}")
-    unknown_rungs = [rung for rung in rungs if rung not in _SIMILARITY_OF_RUNG]
+    unknown_rungs = [rung for rung in rungs if rung not in _ALL_RUNGS]
     if unknown_rungs:
-        raise ValueError(f"unknown rung {unknown_rungs}; expected {tuple(_SIMILARITY_OF_RUNG)}")
+        raise ValueError(f"unknown rung {unknown_rungs}; expected {_ALL_RUNGS}")
+    params = load_engine_params()
+    similarity_of_rung = dict(_SIMILARITY_OF_RUNG)
+    if "B3" in rungs:
+        if embedder is None:
+            raise ValueError("rung B3 needs an embedder")
+        if _TEXT_COLUMN not in events.columns:
+            raise ValueError(f"rung B3 needs a {_TEXT_COLUMN} column in the events table")
+        weight = params.embedding_weight if embedding_weight is None else embedding_weight
+        similarity_of_rung["B3"] = embedding_similarity(embedder, weight)
     unsupported = [q for q in quantiles if q not in QUANTILE_LEVELS]
     if unsupported:
         raise ValueError(f"unsupported quantile {unsupported}; expected {QUANTILE_LEVELS}")
     scored_ids = _scored_ids(events, score_only)
-    params = load_engine_params()
     realised = _realised_rows(rows, outcome_type, horizon)
     position_of = events.set_index("event_id")["effective_position"]
     ordered = events.sort_values(["available_utc", "event_id"], kind="stable")
@@ -135,7 +162,10 @@ def score_precedent_ladder(
             key=EventKey.from_string(event.key),
             available_utc=event.available_utc,
             story_cluster_id=event.story_cluster_id,
+            canonical_text=_text_of(event),
         )
+        if "B3" in rungs and query.canonical_text is None:
+            raise ValueError(f"rung B3 needs a {_TEXT_COLUMN} for event {event.event_id!r}")
         for rung in rungs:
             found = find_precedents(
                 query,
@@ -145,7 +175,7 @@ def score_precedent_ladder(
                 horizon,
                 outcome_type,
                 top_k=params.top_k,
-                similarity=_SIMILARITY_OF_RUNG[rung],
+                similarity=similarity_of_rung[rung],
             )
             tally = tallies.setdefault((rung, event.event_type), _Tally())
             for row in event_rows.itertuples(index=False):
@@ -186,6 +216,12 @@ def _scored_ids(
             raise ValueError("score_only as a Series must be boolean and indexed like events")
         return frozenset(events.loc[score_only, "event_id"])
     return frozenset(score_only)
+
+
+def _text_of(event: object) -> str | None:
+    """The event's canonical text when the events table carries one, else None."""
+    text = getattr(event, "canonical_text", None)
+    return text if isinstance(text, str) else None
 
 
 def _realised_rows(rows: pd.DataFrame, outcome_type: str, horizon: int) -> dict[str, pd.DataFrame]:

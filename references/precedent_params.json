@@ -27,6 +27,7 @@
     "asset_horizons": [1, 5, 20],
     "sequence_horizons": [5, 20, 60],
     "wilson_z": 1.2816,
+    "embedding_weight": 0.5,
     "placebo_samples": 500,
     "placebo_seed": 0,
     "market": "SPY",

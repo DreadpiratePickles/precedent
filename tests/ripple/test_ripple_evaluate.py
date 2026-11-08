@@ -1,0 +1,793 @@
+"""Research: the Ripple graph ladder, its placebo pairing, the diffusion table and the M1 script."""
+
+import pytest
+
+pytest.importorskip("lightgbm")
+pytest.importorskip("qlib")
+pytest.importorskip("scipy")
+pytest.importorskip("yaml")
+
+import datetime as dt  # noqa: E402
+import hashlib  # noqa: E402
+import importlib.util  # noqa: E402
+import json  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+from dataclasses import dataclass  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+from fakes import make_event_record  # noqa: E402
+from fixtures.tiny_provider import write_tiny_provider  # noqa: E402
+from qlib.config import C  # noqa: E402
+from qlib.data.dataset.loader import QlibDataLoader  # noqa: E402
+
+from precedent.ripple.control_graphs import shuffle_preserving_degree  # noqa: E402
+from precedent.ripple.evaluate import (  # noqa: E402
+    FOLD_COLUMNS,
+    LADDER_COLUMNS,
+    evaluate_graph_ladder,
+    load_fold_ics,
+)
+from precedent.ripple.ladder_report import (  # noqa: E402
+    PAIR_COLUMNS,
+    diffusion_table,
+    placebo_pairs,
+    render_report,
+)
+from precedent.ripple.link_store import Link, LinkStore, Relation, graph_asof  # noqa: E402
+from precedent.spine.event_record import ResolvedImpact  # noqa: E402
+from precedent.spine.event_store import EventStore  # noqa: E402
+from precedent.spine.pit_alignment import build_session_cutoffs  # noqa: E402
+from precedent.spine.purged_splits import purged_walk_forward_segments  # noqa: E402
+from precedent.spine.qlib_provider import init_qlib  # noqa: E402
+from precedent.spine.session_calendar import load_nyse_calendar, weekday_sessions  # noqa: E402
+
+# Qlib 0.9.7 still passes `inplace=` to pandas, which pandas 3 deprecates. The warning comes from
+# third-party code we do not control; it is filtered for this module only.
+pytestmark = pytest.mark.filterwarnings("ignore:The inplace keyword in DataFrame:Warning")
+
+N_PAIRS = 30
+SESSIONS = weekday_sessions(dt.date(2022, 1, 3), dt.date(2023, 12, 29), load_nyse_calendar())[:260]
+CUTOFFS = build_session_cutoffs(SESSIONS, dt.time(16, 0))
+SOURCES = [f"S{i:02d}" for i in range(N_PAIRS)]
+RECEIVERS = [f"R{i:02d}" for i in range(N_PAIRS)]
+FOLDS = purged_walk_forward_segments(
+    SESSIONS, train_len=100, valid_len=30, test_len=60, step=60, label_horizon=2
+)
+LGB_PARAMS = {
+    "n_estimators": 40,
+    "num_leaves": 7,
+    "learning_rate": 0.1,
+    "min_child_samples": 20,
+    "n_jobs": 1,
+    "random_state": 7,
+    "verbose": -1,
+}
+RUNGS_DIR = Path(__file__).resolve().parents[2] / "references" / "rungs"
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "run_ripple_m1.py"
+LADDER_FEATURES = (["$close/$open", "Ref($close, 1)/$open"], ["close_over_open", "prev_close"])
+SPILLOVER = 0.5
+SHOCK_SIZE = 0.04
+FIRST_EVENT_POSITION = 150  # abnormal_return_at needs 120 usable sessions before the event
+
+
+@dataclass(frozen=True)
+class Planted:
+    """Prices and shocks in which each receiver follows its own source, one session later."""
+
+    shocks: pd.Series
+    abnormal_returns: pd.DataFrame
+    prices: dict[str, pd.DataFrame]
+    shock_matrix: np.ndarray
+
+
+def planted_data(seed=5, market_sd=0.0) -> Planted:
+    """Source S_i has a shock on session t with probability 0.5; its close-to-close return on t
+    is that shock. Receiver R_i's return from open[t+1] to open[t+2], the label of session t,
+    is `SPILLOVER * shock_i(t)` plus noise. With `market_sd == 0` the market never moves, so
+    abnormal returns equal raw returns; a positive `market_sd` adds a MKT instrument."""
+    rng = np.random.default_rng(seed)
+    n = len(SESSIONS)
+    has_shock = rng.random((n, N_PAIRS)) < 0.5
+    shock = np.where(has_shock, rng.choice([-SHOCK_SIZE, SHOCK_SIZE], size=(n, N_PAIRS)), 0.0)
+    open_return = 0.005 * rng.standard_normal((n, N_PAIRS))  # open[k] -> open[k+1]
+    open_return[1:] += SPILLOVER * shock[:-1]
+    receiver_open = 100.0 * np.vstack(
+        [np.ones((1, N_PAIRS)), np.cumprod(1.0 + open_return[:-1], axis=0)]
+    )
+    receiver_close = receiver_open * (1.0 + 0.002 * rng.standard_normal((n, N_PAIRS)))
+    source_open = 100.0 * np.cumprod(1.0 + 0.005 * rng.standard_normal((n, N_PAIRS)), axis=0)
+    source_close = 100.0 * np.cumprod(1.0 + shock, axis=0)
+    prices = {
+        **{
+            name: pd.DataFrame({"open": source_open[:, i], "close": source_close[:, i]}, SESSIONS)
+            for i, name in enumerate(SOURCES)
+        },
+        **{
+            name: pd.DataFrame(
+                {"open": receiver_open[:, i], "close": receiver_close[:, i]}, SESSIONS
+            )
+            for i, name in enumerate(RECEIVERS)
+        },
+    }
+    if market_sd > 0:
+        market_open = 100.0 * np.cumprod(1.0 + market_sd * rng.standard_normal(n))
+        prices["MKT"] = pd.DataFrame(
+            {"open": market_open, "close": market_open * (1 + market_sd * rng.standard_normal(n))},
+            SESSIONS,
+        )
+    realised = np.vstack([np.zeros((1, N_PAIRS)), open_return[:-1]])  # open-to-open on session k
+    abnormal = pd.DataFrame(
+        np.hstack([shock, realised]), SESSIONS, columns=[*SOURCES, *RECEIVERS]
+    )
+    rows, columns = np.nonzero(shock)
+    shocks = pd.Series(
+        shock[rows, columns],
+        index=pd.MultiIndex.from_arrays(
+            [SESSIONS[rows].as_unit("ns"), pd.Index([SOURCES[c] for c in columns], dtype=str)],
+            names=["datetime", "instrument"],
+        ),
+        name="shock",
+    ).sort_index()
+    return Planted(shocks, abnormal, prices, shock)
+
+
+def peer_link(source, receiver, doc="planted"):
+    return Link(
+        source_node=source,
+        receiver_node=receiver,
+        relation=Relation.PEER_OF,
+        weight=1.0,
+        valid_from_utc=CUTOFFS.iloc[0] - pd.Timedelta(days=1),
+        valid_to_utc=CUTOFFS.iloc[-1] + pd.Timedelta(days=1),
+        source_doc_id=doc,
+        evidence_span=None,
+        extractor_version="rules-planted",
+    )
+
+
+def graph_function(links, root: Path):
+    """A `graph_for_cutoff` that reads the links through the real `graph_asof` visibility rule."""
+    store = LinkStore(root)
+    store.append(links)
+    return lambda cutoff: graph_asof(store, cutoff)
+
+
+def price_loader_for_horizon(horizon: int) -> QlibDataLoader:
+    return QlibDataLoader(
+        config={
+            "feature": LADDER_FEATURES,
+            "label": ([f"Ref($open, -{horizon + 1})/Ref($open, -1) - 1"], ["LABEL0"]),
+        }
+    )
+
+
+@dataclass(frozen=True)
+class PlantedMarket:
+    true_graph: object
+    shuffled_graph: object
+    kwargs: dict
+    planted: Planted
+
+
+@pytest.fixture
+def planted_market(tmp_path, monkeypatch) -> PlantedMarket:
+    monkeypatch.chdir(tmp_path)
+    planted = planted_data()
+    write_tiny_provider(tmp_path / "provider", planted.prices)
+    init_qlib(tmp_path / "provider", tmp_path / "work")
+    # Qlib loads features through a worker pool; one kernel loads in-process, which is faster here.
+    monkeypatch.setitem(C, "kernels", 1)
+    true_links = [peer_link(source, receiver) for source, receiver in zip(SOURCES, RECEIVERS, strict=True)]
+    true_graph = graph_function(true_links, tmp_path / "true_links")
+    true_frame = true_graph(CUTOFFS.iloc[-1])
+    shuffled_frame = shuffle_preserving_degree(true_frame, seed=7)
+    moved = (shuffled_frame["receiver_node"].to_numpy() != true_frame["receiver_node"].to_numpy())
+    assert moved.mean() > 0.8, "the placebo must move most links"
+    shuffled_links = [
+        peer_link(row.source_node, row.receiver_node, "shuffled")
+        for row in shuffled_frame.itertuples()
+    ]
+    shuffled_graph = graph_function(shuffled_links, tmp_path / "shuffled_links")
+    kwargs = {
+        "shocks": planted.shocks,
+        "price_loader_for_horizon": price_loader_for_horizon,
+        "folds": FOLDS,
+        "out_dir": tmp_path / "ladder",
+        "session_cutoffs_utc": CUTOFFS,
+        "sessions": SESSIONS,
+        "abnormal_returns": planted.abnormal_returns,
+        "lgb_params": LGB_PARAMS,
+        "rungs_dir": RUNGS_DIR,
+        "parser_version": "rules-test",
+    }
+    return PlantedMarket(true_graph, shuffled_graph, kwargs, planted)
+
+
+def test_true_graph_beats_its_shuffle_on_planted_spillover(planted_market):
+    # each receiver's next-session return is 0.5 times its source's shock, along the true links only
+    table = evaluate_graph_ladder(
+        {"true": planted_market.true_graph, "placebo": planted_market.shuffled_graph},
+        **planted_market.kwargs,
+        horizons=(1,),
+    )
+    ic = table.set_index("graph")["rank_ic_mean"]
+    print("planted ICs:", ic.to_dict())
+    assert ic["true"] > 0.1 and abs(ic["placebo"]) < 0.05
+    assert list(table.columns) == LADDER_COLUMNS
+    assert sorted(table["graph"]) == ["placebo", "true"] and (table["horizon"] == 1).all()
+    assert (table["baseline"] == "m0_price").all()
+    increments = table.set_index("graph")["incremental_rank_ic_vs_m1"]
+    assert increments["true"] > 0.1 and abs(increments["placebo"]) < 0.05
+    written = pd.read_csv(planted_market.kwargs["out_dir"] / "ladder.csv")
+    assert list(written.columns) == LADDER_COLUMNS
+    assert written["rank_ic_mean"].to_numpy() == pytest.approx(table["rank_ic_mean"].to_numpy())
+    fold_ics = load_fold_ics(planted_market.kwargs["out_dir"])
+    assert len(fold_ics) == 2 * len(FOLDS)  # two graphs, one row per fold
+    means = fold_ics.groupby("graph")["rank_ic_mean"].mean()
+    assert means["true"] == pytest.approx(ic["true"]) and means["placebo"] == pytest.approx(
+        ic["placebo"]
+    )
+
+
+def test_an_empty_ripple_panel_raises_in_the_ladder_and_the_spine_handler_zero_fills_it(
+    planted_market, tmp_path
+):
+    """Pins what the code does: the ladder refuses a graph that reached no receiver (scoring it
+    would read as "the graph carried nothing"), while the spine's dataset layer, given an empty
+    ripple panel, zero-fills every ripple column. Ripple's choice is the raise."""
+    from qlib.data.dataset.handler import DataHandlerLP
+
+    from precedent.ripple.ripple_factors import PANEL_COLUMNS, build_ripple_factor_panel
+    from precedent.spine.qlib_dataset import make_alpha_handler
+
+    no_links = graph_function([], tmp_path / "no_links")
+    with pytest.raises(ValueError, match="no ripple factor rows"):
+        evaluate_graph_ladder({"empty": no_links}, **planted_market.kwargs, horizons=(1,))
+    assert not (planted_market.kwargs["out_dir"] / "ladder.csv").exists()
+
+    kwargs = planted_market.kwargs
+    panel = build_ripple_factor_panel(
+        kwargs["shocks"], no_links, CUTOFFS, SESSIONS, kwargs["abnormal_returns"]
+    )
+    assert panel.empty and list(panel.columns) == PANEL_COLUMNS
+    start, end = SESSIONS[100].date().isoformat(), SESSIONS[110].date().isoformat()
+    handler, report = make_alpha_handler(price_loader_for_horizon(1), {"ripple_": panel}, start, end)
+    frame = handler.fetch(col_set="feature", data_key=DataHandlerLP.DK_I)
+    ripple = frame.filter(like="ripple_")
+    assert sorted(ripple.columns) == sorted(PANEL_COLUMNS) and len(frame) > 0
+    assert (ripple == 0.0).all().all()
+    assert report.events_without_price_row == 0
+
+
+def test_ladder_records_every_rung_with_the_horizon_label_and_calls_folds_per_horizon(
+    planted_market,
+):
+    calls = []
+
+    def folds_for(label_horizon):
+        calls.append(label_horizon)
+        return FOLDS
+
+    kwargs = {**planted_market.kwargs, "folds": folds_for}
+    table = evaluate_graph_ladder({"g1": planted_market.true_graph}, **kwargs, horizons=(1,))
+    assert calls == [2]  # label horizon is h + 1
+    manifest = json.loads(
+        (planted_market.kwargs["out_dir"] / "g1_h1" / "run_manifest.json").read_text("utf-8")
+    )
+    assert manifest["label_expr"] == "Ref($open, -2)/Ref($open, -1) - 1"
+    assert manifest["label_horizon"] == 2
+    assert manifest["trial_count"] == 2 * len(FOLDS)
+    rungs = {rung["name"]: rung["panel_prefixes"] for rung in manifest["rungs"]}
+    # no baseline panel: the baseline is price-only, and the shipped m3_ripple_g1 rung (which adds
+    # news_ too) cannot run, so the graph rung is built in memory with ripple_ only
+    assert rungs == {"m0_price": [], "m3_ripple_g1": ["ripple_"]}
+    assert table.loc[0, "baseline"] == "m0_price"
+
+
+def test_a_news_baseline_makes_the_baseline_m1_news_and_uses_the_shipped_graph_rung(
+    planted_market,
+):
+    rng = np.random.default_rng(2)
+    index = pd.MultiIndex.from_product(
+        [SESSIONS[100:200].as_unit("ns"), RECEIVERS[:5]], names=["datetime", "instrument"]
+    )
+    news = pd.DataFrame({"news_signed_1d": rng.normal(0, 1, len(index))}, index=index)
+    table = evaluate_graph_ladder(
+        {"g1": planted_market.true_graph},
+        **planted_market.kwargs,
+        baseline_panels={"news_": news},
+        horizons=(1,),
+    )
+    assert table.loc[0, "baseline"] == "m1_news"
+    manifest = json.loads(
+        (planted_market.kwargs["out_dir"] / "g1_h1" / "run_manifest.json").read_text("utf-8")
+    )
+    rungs = {rung["name"]: rung["panel_prefixes"] for rung in manifest["rungs"]}
+    assert rungs == {"m1_news": ["news_"], "m3_ripple_g1": ["news_", "ripple_"]}
+    assert set(manifest["panel_sha256"]) == {"news_", "ripple_"}
+
+
+@pytest.mark.parametrize(
+    "overrides, message",
+    [
+        ({"horizons": ()}, "horizon"),
+        ({"horizons": (0,)}, "positive"),
+        ({"horizons": (5, -1)}, "positive"),
+        ({"horizons": (1.5,)}, "positive"),
+        ({"horizons": (True,)}, "positive"),
+    ],
+)
+def test_ladder_rejects_bad_horizons_before_fitting(planted_market, overrides, message):
+    with pytest.raises(ValueError, match=message):
+        evaluate_graph_ladder(
+            {"g1": planted_market.true_graph}, **{**planted_market.kwargs, **overrides}
+        )
+    assert not planted_market.kwargs["out_dir"].exists()
+
+
+def test_ladder_rejects_bad_graph_sets_before_fitting(planted_market):
+    kwargs = planted_market.kwargs
+    with pytest.raises(ValueError, match="at least one graph"):
+        evaluate_graph_ladder({}, **kwargs, horizons=(1,))
+    with pytest.raises(ValueError, match="graph name"):
+        evaluate_graph_ladder({"../evil": planted_market.true_graph}, **kwargs, horizons=(1,))
+    with pytest.raises(ValueError, match="ripple_"):
+        evaluate_graph_ladder(
+            {"g1": planted_market.true_graph},
+            **kwargs,
+            baseline_panels={"ripple_": pd.DataFrame()},
+            horizons=(1,),
+        )
+    assert not kwargs["out_dir"].exists()
+
+
+def ladder_frame(horizons=(1, 5, 20, 60), graphs=("g1", "g1_placebo", "g2", "g2_placebo")):
+    rows = [
+        {
+            "graph": graph,
+            "horizon": horizon,
+            "rank_ic_mean": 0.01 * (index + 1) / horizon,
+            "icir": 0.1,
+            "incremental_rank_ic_vs_m1": 0.001 * (index + 1),
+            "baseline": "m0_price",
+        }
+        for horizon in horizons
+        for index, graph in enumerate(graphs)
+    ]
+    return pd.DataFrame(rows, columns=LADDER_COLUMNS)
+
+
+def test_diffusion_table_leads_with_20_and_has_a_column_per_graph():
+    text = diffusion_table(ladder_frame())
+    lines = text.splitlines()
+    head_at = [i for i, line in enumerate(lines) if line.startswith("| horizon")]
+    assert len(head_at) == 2
+    for position in head_at:
+        assert lines[position] == "| horizon | g1 | g1_placebo | g2 | g2_placebo |"
+    first_table = lines[head_at[0] + 2 : head_at[1] - 2]
+    horizons = [line.split("|")[1].strip() for line in first_table if line.startswith("|")]
+    assert horizons == ["20", "60", "5", "1"]
+    assert "0.0005" in text  # g1 at horizon 20: 0.01 * 1 / 20, to 4 decimals
+    assert "m0_price" in text  # the second table says what was subtracted
+
+
+def test_diffusion_table_without_a_20_session_horizon_keeps_every_horizon():
+    text = diffusion_table(ladder_frame(horizons=(1, 5)))
+    horizons = [
+        line.split("|")[1].strip()
+        for line in text.splitlines()
+        if line.startswith("|") and line.split("|")[1].strip().isdigit()
+    ]
+    assert horizons[:2] == ["5", "1"]
+
+
+def fold_ics_for(ladder, n_folds=2, spread=0.0):
+    """Per-fold rank ICs whose mean is each row's `rank_ic_mean`. With a `spread`, a graph's folds
+    sit at mean +/- spread and its placebo's at mean -/+ spread, so the per-fold difference
+    between them swings by 2 * spread around the margin."""
+    rows = []
+    for row in ladder.itertuples():
+        sign = -1.0 if row.graph.endswith("_placebo") else 1.0
+        for fold in range(n_folds):
+            offset = spread * sign * (1.0 if fold % 2 == 0 else -1.0)
+            rows.append(
+                {"graph": row.graph, "horizon": row.horizon, "fold": fold,
+                 "rank_ic_mean": row.rank_ic_mean + offset}
+            )
+    return pd.DataFrame(rows, columns=FOLD_COLUMNS)
+
+
+def pair_ladder(graph_ic, placebo_ic, horizon=20):
+    rows = [
+        {"graph": name, "horizon": horizon, "rank_ic_mean": ic, "icir": 0.1,
+         "incremental_rank_ic_vs_m1": ic, "baseline": "m0_price"}
+        for name, ic in (("g1", graph_ic), ("g1_placebo", placebo_ic))
+    ]
+    return pd.DataFrame(rows, columns=LADDER_COLUMNS)
+
+
+def test_placebo_pairs_put_each_graph_beside_its_placebo_and_demand_one():
+    ladder = ladder_frame(horizons=(20,))
+    pairs = placebo_pairs(ladder, fold_ics_for(ladder))
+    assert list(pairs["graph"]) == ["g1", "g2"]
+    assert list(pairs.columns) == PAIR_COLUMNS
+    assert pairs["margin_over_placebo"].to_numpy() == pytest.approx(
+        pairs["rank_ic_mean"] - pairs["placebo_rank_ic_mean"]
+    )
+    broken = ladder_frame(graphs=("g1", "g1_placebo", "g3"))
+    with pytest.raises(ValueError, match="g3"):
+        placebo_pairs(broken, fold_ics_for(broken))
+
+
+def test_a_tiny_positive_margin_is_within_noise_and_no_graph_is_said_to_beat_its_placebo():
+    ladder = pair_ladder(0.0303, 0.0300)  # +0.0003
+    text = render_report(
+        ladder, fold_ics=fold_ics_for(ladder), evidence_label="SYNTHETIC", counts={"shocks": 3}
+    )
+    assert text.splitlines()[0].startswith("SYNTHETIC —")
+    assert "No graph beats its placebo at any horizon." in text
+    assert "- g1 at 20 sessions: margin +0.0003, tolerance 0.0100: within noise." in text
+    assert "EXPLORATORY (survivorship-biased prices)" in text
+    assert "monthly" in text and "leads with 20" in text
+    assert "shocks: 3" in text
+    pairs = placebo_pairs(ladder, fold_ics_for(ladder))
+    assert not pairs.loc[0, "beats_placebo"]
+
+
+def test_a_placebo_ahead_beyond_the_tolerance_reads_below_its_placebo_not_within_noise():
+    ladder = pair_ladder(0.0, 0.05)  # margin -0.05, tolerance 0.01
+    text = render_report(ladder, fold_ics=fold_ics_for(ladder), evidence_label="SYNTHETIC", counts={})
+    assert (
+        "- g1 at 20 sessions: margin -0.0500, tolerance 0.0100: below its placebo "
+        "(beyond the tolerance)." in text
+    )
+    assert "within noise" not in text
+    inside = pair_ladder(0.0, 0.005)  # margin -0.005 is inside the tolerance: still noise
+    inside_text = render_report(
+        inside, fold_ics=fold_ics_for(inside), evidence_label="SYNTHETIC", counts={}
+    )
+    assert "margin -0.0050, tolerance 0.0100: within noise." in inside_text
+
+
+def test_the_report_prints_how_many_graph_versus_placebo_comparisons_were_made():
+    ladder = ladder_frame(graphs=("g1", "g1_placebo", "g2", "g2_placebo"))
+    pairs = placebo_pairs(ladder, fold_ics_for(ladder))
+    text = render_report(ladder, fold_ics=fold_ics_for(ladder), evidence_label="SYNTHETIC", counts={})
+    assert f"{len(pairs)} graph-versus-placebo comparisons were made at this rule" in text
+    assert len(pairs) == 2 * len(set(ladder["horizon"]))
+    assert "a single win among many comparisons is weak evidence" in text
+    tolerance_line = next(
+        line for line in text.splitlines() if line.startswith("A graph beats its placebo")
+    )
+    assert "comparisons were made" in tolerance_line  # printed beside the tolerance sentence
+
+
+def test_a_margin_clearly_above_the_tolerance_beats_the_placebo():
+    ladder = pair_ladder(0.05, 0.0)
+    text = render_report(ladder, fold_ics=fold_ics_for(ladder), evidence_label="SYNTHETIC", counts={})
+    assert "g1 beats its placebo at horizons 20." in text
+    assert "No graph beats its placebo" not in text
+    assert "- g1 at 20 sessions: margin +0.0500, tolerance 0.0100: beats its placebo." in text
+
+
+def test_the_standard_error_of_the_fold_differences_dominates_when_they_are_spread():
+    ladder = pair_ladder(0.03, 0.0)  # margin 0.03, above the 0.01 floor
+    folds = fold_ics_for(ladder, n_folds=4, spread=0.02)  # differences 0.03 +/- 0.04
+    pairs = placebo_pairs(ladder, folds)
+    differences = np.array([0.07, -0.01, 0.07, -0.01])
+    expected = 2.0 * differences.std(ddof=1) / np.sqrt(4)
+    assert pairs.loc[0, "tolerance"] == pytest.approx(expected)
+    assert expected > 0.01 and pairs.loc[0, "margin_over_placebo"] < expected
+    assert not pairs.loc[0, "beats_placebo"]
+    text = render_report(ladder, fold_ics=folds, evidence_label="SYNTHETIC", counts={})
+    assert f"tolerance {expected:.4f}: within noise." in text
+    assert "No graph beats its placebo at any horizon." in text
+
+
+def test_a_single_fold_uses_the_absolute_floor_only():
+    ladder = pair_ladder(0.0301, 0.0)
+    pairs = placebo_pairs(ladder, fold_ics_for(ladder, n_folds=1))
+    assert pairs.loc[0, "tolerance"] == 0.01 and pairs.loc[0, "beats_placebo"]
+
+
+def test_the_noise_numbers_come_from_the_params_file_unless_passed():
+    from precedent.ripple.params import load_ripple_params
+
+    params = load_ripple_params()
+    ladder = pair_ladder(0.05, 0.0)
+    folds = fold_ics_for(ladder, n_folds=4, spread=0.02)
+    from_file = placebo_pairs(ladder, folds).loc[0, "tolerance"]
+    assert params["placebo_margin_floor"] == 0.01 and params["placebo_margin_se_multiple"] == 2.0
+    differences = np.array([0.09, 0.01, 0.09, 0.01])
+    standard_error = differences.std(ddof=1) / np.sqrt(4)
+    assert from_file == pytest.approx(
+        max(params["placebo_margin_floor"], params["placebo_margin_se_multiple"] * standard_error)
+    )
+    larger_floor = placebo_pairs(ladder, folds, margin_floor=0.5).loc[0, "tolerance"]
+    assert larger_floor == 0.5
+    no_se = placebo_pairs(ladder, folds, se_multiple=0.0).loc[0, "tolerance"]
+    assert no_se == params["placebo_margin_floor"]
+
+
+def test_a_graph_whose_placebo_has_other_folds_is_rejected():
+    ladder = pair_ladder(0.05, 0.0)
+    folds = fold_ics_for(ladder)
+    folds = folds[~((folds["graph"] == "g1_placebo") & (folds["fold"] == 1))]
+    with pytest.raises(ValueError, match="same folds"):
+        placebo_pairs(ladder, folds)
+
+
+def test_the_report_says_beside_the_exploratory_line_that_the_sector_map_looks_ahead():
+    ladder = pair_ladder(0.05, 0.0)
+    text = render_report(ladder, fold_ics=fold_ics_for(ladder), evidence_label="SYNTHETIC", counts={})
+    lines = text.splitlines()
+    exploratory = next(i for i, line in enumerate(lines) if "EXPLORATORY" in line)
+    assert any("static sector map" in line and "looks" in line for line in lines[exploratory : exploratory + 4])
+    g2_only = pair_ladder(0.05, 0.0).assign(graph=lambda f: f["graph"].str.replace("g1", "g2"))
+    assert "sector map" not in render_report(
+        g2_only, fold_ics=fold_ics_for(g2_only), evidence_label="SYNTHETIC", counts={}
+    )
+
+
+def test_report_label_line_for_a_live_run_and_an_unknown_label():
+    ladder = ladder_frame()
+    folds = fold_ics_for(ladder)
+    text = render_report(ladder, fold_ics=folds, evidence_label="LIVE-DATA", counts={})
+    assert text.splitlines()[0].startswith("LIVE —")
+    with pytest.raises(ValueError, match="evidence_label"):
+        render_report(ladder, fold_ics=folds, evidence_label="PROBABLY-FINE", counts={})
+
+
+def test_the_ladder_and_the_graph_builders_share_one_writer_and_one_alias(tmp_path):
+    from precedent.ripple import evaluate, graph_builders
+
+    assert evaluate.write_text_atomically is graph_builders.write_text_atomically
+    assert evaluate.GraphForCutoff is graph_builders.GraphForCutoff
+    graph_builders.write_text_atomically(tmp_path / "a.txt", "x")
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "x"
+    assert [p.name for p in tmp_path.iterdir()] == ["a.txt"]
+
+
+# ---------------------------------------------------------------------------------------------
+# scripts/run_ripple_m1.py on a generated market (the real run is an owner gate and is not made)
+# ---------------------------------------------------------------------------------------------
+
+
+def load_script():
+    spec = importlib.util.spec_from_file_location("run_ripple_m1", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@dataclass(frozen=True)
+class ScriptInputs:
+    root: Path
+    prices_dir: Path
+    qlib_dir: Path
+    events_dir: Path
+    sector_map: Path
+    data_dir: Path
+    start: str
+    end: str
+
+    def arguments(self, *extra: str) -> list[str]:
+        return [
+            "--provider-dir", str(self.prices_dir),
+            "--qlib-dir", str(self.qlib_dir),
+            "--events-dir", str(self.events_dir),
+            "--parser-version", "rules-test",
+            "--sector-map", str(self.sector_map),
+            "--start", self.start,
+            "--end", self.end,
+            "--market", "MKT",
+            "--corr-window", "60",
+            "--corr-top-k", "5",
+            "--train-len", "100",
+            "--valid-len", "30",
+            "--test-len", "60",
+            "--step", "60",
+            *extra,
+        ]
+
+
+@pytest.fixture
+def script_inputs(tmp_path, monkeypatch) -> ScriptInputs:
+    monkeypatch.chdir(tmp_path)
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("PRECEDENT_DATA_DIR", str(data_dir))
+    planted = planted_data(market_sd=0.001)
+    qlib_dir, prices_dir = tmp_path / "qlib_us", tmp_path / "prices"
+    write_tiny_provider(qlib_dir, planted.prices)
+    prices_dir.mkdir()
+    for name, frame in planted.prices.items():
+        frame.rename_axis("date").reset_index().to_parquet(prices_dir / f"{name}.parquet")
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    records = [
+        make_event_record(
+            article_id=f"test:{position}:{column}",
+            parser_version="rules-test",
+            available_utc=(CUTOFFS.iloc[position] - pd.Timedelta(hours=1)).to_pydatetime(),
+            effective_session=SESSIONS[position].date(),
+            resolved_impacts=[
+                ResolvedImpact(
+                    instrument=SOURCES[column], kind="company", direction=1.0, match_method="test"
+                )
+            ],
+        )
+        for position, column in zip(*np.nonzero(planted.shock_matrix[:, :10]), strict=True)
+        if position >= FIRST_EVENT_POSITION
+    ]
+    EventStore(events_dir).append(records)
+    sector_map = tmp_path / "sectors.json"
+    sector_map.write_text(
+        json.dumps(
+            {
+                name: "ABC"[i % 3]
+                for i, name in enumerate([*SOURCES, *RECEIVERS])
+            }
+        ),
+        encoding="utf-8",
+    )
+    return ScriptInputs(
+        tmp_path, prices_dir, qlib_dir, events_dir, sector_map, data_dir,
+        SESSIONS[0].date().isoformat(), SESSIONS[-1].date().isoformat(),
+    )
+
+
+def files_under(root: Path) -> set[str]:
+    return {str(path.relative_to(root)) for path in root.rglob("*")}
+
+
+def run_script(*arguments, cwd):
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *arguments],
+        capture_output=True, text=True, cwd=cwd, check=False, timeout=120,
+    )
+
+
+def test_script_dry_run_validates_inputs_and_writes_nothing(script_inputs):
+    before = files_under(script_inputs.root)
+    out_dir = script_inputs.root / "out"
+    result = run_script(
+        *script_inputs.arguments("--dry-run", "--out-dir", str(out_dir)), cwd=script_inputs.root
+    )
+    assert result.returncode == 0, result.stderr
+    assert "dry run" in result.stdout.lower()
+    assert "rules-test" in result.stdout and "g1" in result.stdout
+    assert files_under(script_inputs.root) == before
+    assert not out_dir.exists() and not script_inputs.data_dir.exists()
+
+
+def test_script_dry_run_stops_when_the_qlib_calendar_and_the_price_files_disagree(script_inputs):
+    day_file = script_inputs.qlib_dir / "calendars" / "day.txt"
+    original = day_file.read_text(encoding="utf-8")
+    days = original.split()
+    missing = days[50]
+
+    day_file.write_text("\n".join(days[:50] + days[51:]) + "\n", encoding="utf-8")
+    result = run_script(*script_inputs.arguments("--dry-run"), cwd=script_inputs.root)
+    assert result.returncode == 1
+    assert missing in result.stderr and "only in the price files" in result.stderr
+
+    extra = "2022-01-08"  # a Saturday no price file has
+    day_file.write_text("\n".join(sorted([*days, extra])) + "\n", encoding="utf-8")
+    result = run_script(*script_inputs.arguments("--dry-run"), cwd=script_inputs.root)
+    assert result.returncode == 1
+    assert extra in result.stderr and "only in the Qlib calendar" in result.stderr
+
+    # days outside --start to --end are not compared
+    day_file.write_text(original + "2031-01-01\n", encoding="utf-8")
+    result = run_script(*script_inputs.arguments("--dry-run"), cwd=script_inputs.root)
+    assert result.returncode == 0, result.stderr
+
+
+def test_script_dry_run_reports_a_missing_input_on_stderr_with_exit_1(script_inputs):
+    arguments = script_inputs.arguments("--dry-run")
+    arguments[arguments.index("--events-dir") + 1] = str(script_inputs.root / "no_events")
+    result = run_script(*arguments, cwd=script_inputs.root)
+    assert result.returncode == 1
+    assert "events" in result.stderr.lower()
+
+
+def test_script_usage_errors_exit_2(script_inputs):
+    result = run_script("--dry-run", cwd=script_inputs.root)  # --start and --end are required
+    assert result.returncode == 2
+    result = run_script(*script_inputs.arguments("--dry-run", "--horizons", "1,zero"), cwd=script_inputs.root)
+    assert result.returncode == 2
+
+
+def test_script_main_writes_the_report_beside_the_placebo_and_publishes_only_when_asked(
+    script_inputs, monkeypatch
+):
+    script = load_script()
+
+    def small_loader_factory(horizon):
+        monkeypatch.setitem(C, "kernels", 1)  # called after Qlib is initialised
+        return price_loader_for_horizon(horizon)
+
+    out_dir = script_inputs.root / "run"
+    exit_code = script.main(
+        script_inputs.arguments(
+            "--evidence-label", "SYNTHETIC", "--horizons", "1", "--graphs", "g1,g2",
+            "--out-dir", str(out_dir),
+        ),
+        price_loader_factory=small_loader_factory,
+        lgb_params=LGB_PARAMS,
+    )
+    assert exit_code == 0
+    report = (out_dir / "report.md").read_text(encoding="utf-8")
+    assert report.splitlines()[0].startswith("SYNTHETIC —")
+    assert "g1_placebo" in report and "EXPLORATORY (survivorship-biased prices)" in report
+    assert "static sector map" in report and "tolerance" in report
+    assert "placebo_unshuffled" in report  # the count is always printed, zero or not
+    assert (out_dir / "ladder_folds.csv").exists()
+    ladder = pd.read_csv(out_dir / "ladder.csv")
+    assert sorted(ladder["graph"]) == ["g1", "g1_placebo", "g2", "g2_placebo"]
+    assert (out_dir / "links" / "g1" / "links.jsonl").exists()
+    assert (out_dir / "links" / "g2" / "links.jsonl").exists()
+    assert not script_inputs.data_dir.exists()  # nothing is written to the ledger by default
+
+    # --publish with two graphs needs --publish-graph: a usage error, nothing written
+    for stray in (
+        ("--publish",),  # two graphs, no choice
+        ("--publish", "--publish-graph", "g1", "--graphs", "g2"),  # not among the graphs
+        ("--publish-graph", "g1"),  # without --publish
+    ):
+        arguments = script_inputs.arguments("--out-dir", str(script_inputs.root / "no_run"), *stray)
+        result = run_script(*arguments, cwd=script_inputs.root)
+        assert result.returncode == 2, stray
+    assert not (script_inputs.root / "no_run").exists()
+    assert not script_inputs.data_dir.exists()
+
+
+def test_publish_then_the_daily_map_runs_end_to_end(script_inputs, monkeypatch):
+    from precedent.ripple.report import run as run_map
+
+    script = load_script()
+
+    def small_loader_factory(horizon):
+        monkeypatch.setitem(C, "kernels", 1)  # called after Qlib is initialised
+        return price_loader_for_horizon(horizon)
+
+    published = script_inputs.root / "run_published"
+    exit_code = script.main(
+        script_inputs.arguments(
+            "--evidence-label", "SYNTHETIC", "--horizons", "1", "--graphs", "g1",
+            "--out-dir", str(published), "--publish",  # one graph chosen: it is published
+        ),
+        price_loader_factory=small_loader_factory,
+        lgb_params=LGB_PARAMS,
+    )
+    assert exit_code == 0
+    ripple_dir = script_inputs.data_dir / "ripple"
+    assert {path.name for path in ripple_dir.iterdir()} == {
+        "shocks.parquet", "abnormal_returns.parquet", "MANIFEST.json", "links",
+    }
+    manifest = json.loads((ripple_dir / "MANIFEST.json").read_text(encoding="utf-8"))
+    assert manifest["evidence_label"] == "SYNTHETIC" and manifest["published_graph"] == "g1"
+    assert manifest["start"] == script_inputs.start and manifest["end"] == script_inputs.end
+    links_entry = manifest["files"]["links/links.jsonl"]
+    stored = ripple_dir / "links" / "links.jsonl"
+    assert links_entry["sha256"] == hashlib.sha256(stored.read_bytes()).hexdigest()
+    assert links_entry["rows"] > 0
+    # the published links are g1's, byte for byte, and no placebo was written
+    assert stored.read_bytes() == (published / "links" / "g1" / "links.jsonl").read_bytes()
+    assert not (published / "links" / "g1_placebo").exists()
+    shocks = pd.read_parquet(ripple_dir / "shocks.parquet")
+    assert len(shocks) > 0 and set(shocks["instrument"]) <= set(SOURCES[:10])
+    assert (shocks["datetime"] >= SESSIONS[FIRST_EVENT_POSITION]).all()
+
+    session = pd.Timestamp(shocks["datetime"].iloc[0]).date().isoformat()
+    map_path = script_inputs.root / "map.md"
+    assert run_map(["--date", session, "--out", str(map_path)]) == 0
+    text = map_path.read_text(encoding="utf-8")
+    link_rows = [line for line in text.splitlines() if line.startswith("| ->")]
+    assert link_rows and all("doc:" in line for line in link_rows)
+    assert text.startswith("SYNTHETIC —") and "Link graph: g1." in text
+    # a session after the run's end is outside the ledger, not "no shocks"
+    assert run_map(["--date", "2024-06-03"]) == 1

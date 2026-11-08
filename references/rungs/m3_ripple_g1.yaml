@@ -1,0 +1,3 @@
+name: m3_ripple_g1
+# The ladder supplies the G1 sector-membership graph for this rung. The graph identity lives in the supplied ripple_ panel, not in this file.
+panel_prefixes: ["news_", "ripple_"]

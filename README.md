@@ -8,7 +8,8 @@ Precedent takes a new event (a headline, a filing, a market question) and shows 
 |---|---|---|
 | Spine (ingest, typing, point-in-time alignment, prices, factors, ablation machinery) | Built and tested on synthetic data and fakes | `SYNTHETIC` / `NO LIVE RUN` |
 | Product track (library build, `precedent ask`, the card, MCP server) | Not started; `precedent-mcp` is a stub that exits 2 | none |
-| Research tracks (Ripple, Dream, Mechanism) | Planned only | none |
+| Ripple research track (dated link graph, factors, graph ladder, daily map) | Built and tested on synthetic data and fakes; live runs and model extraction are owner gates | `SYNTHETIC` / `NO LIVE RUN` |
+| Research tracks (Dream, Mechanism) | Planned only | none |
 | Live data (GDELT download, EDGAR fetch, Polymarket and Kalshi crawls) | Owner gate not exercised | `NO LIVE RUN` |
 | Model calls (Anthropic, Ollama typers) | Owner gate not exercised | `NO LIVE RUN` |
 | Real price provider or vendor prices | Owner gate not exercised | `NO LIVE RUN` |
@@ -33,7 +34,7 @@ The first command downloads packages; the rest touch neither the network nor a m
 
 I have never run any of this against live data, a language model, or a real price provider. Every result so far comes from synthetic data and fakes, so it shows the code does what its tests say and nothing about the real world. Specifically:
 
-- The NYSE holiday calendar for 2010 to 2014 was generated from rules and not compared with a published source; two special closures are also unverified.
+- The NYSE holiday calendar for 2010 and 2011 is rule-derived and unverified against an NYSE source. The July 3 and December 24 early closes in 2012 and 2013 rest on a secondary source only. Everything else, including the special closures, is verified against NYSE or NYSE Euronext sources.
 - The CAMEO-to-event-type table and the 8-K item rules are my proposals, not confirmed against their sources.
 - The time zone of EDGAR's `acceptanceDateTime` is unconfirmed. The code reads its `Z` suffix as UTC; if that is wrong, every 8-K result is early by four to five hours. The check to run on the first live fetch is in `stages/01_ingest/CONTEXT.md`.
 - Free price data is survivorship-biased, so any result on it is exploratory.
