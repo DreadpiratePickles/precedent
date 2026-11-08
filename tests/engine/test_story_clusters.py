@@ -84,3 +84,39 @@ def test_missing_columns_are_named():
     events = events_frame([("a", "k1", "X", 0)]).drop(columns=["key", "available_utc"])
     with pytest.raises(ValueError, match="available_utc.*key|key.*available_utc"):
         assign_story_clusters(events)
+
+
+def test_duplicate_index_with_permuted_sort_keeps_index_and_clusters():
+    events = events_frame([("b", "k1", "X", 5), ("a", "k1", "X", 4), ("c", "k2", "X", 1)])
+    events.index = pd.Index([0, 0, 1])
+    out = assign_story_clusters(events)
+    assert out["story_cluster_id"].tolist() == ["a", "a", "c"]
+    assert out["is_first_report"].tolist() == [False, True, True]
+    assert out.index.tolist() == [0, 0, 1]
+
+
+@pytest.mark.parametrize("column", ["key", "primary_actor", "effective_position"])
+def test_null_in_a_required_column_raises_naming_it(column):
+    events = events_frame([("a", "k1", "X", 0), ("b", "k1", "X", 1)])
+    events[column] = events[column].astype(object)
+    events.loc[1, column] = None
+    with pytest.raises(ValueError, match=column):
+        assign_story_clusters(events)
+
+
+def test_negative_window_raises():
+    with pytest.raises(ValueError, match="window_sessions"):
+        assign_story_clusters(events_frame([("a", "k1", "X", 0)]), window_sessions=-1)
+
+
+def test_zero_window_merges_only_the_same_position():
+    out = assign_story_clusters(
+        events_frame([("a", "k1", "X", 2), ("b", "k1", "X", 2), ("c", "k1", "X", 3)]),
+        window_sessions=0,
+    )
+    assert out["story_cluster_id"].tolist() == ["a", "a", "c"]
+
+
+def test_events_frame_fixture_matches_the_helper(events_frame):
+    out = assign_story_clusters(events_frame([("a", "k1", "X", 0), ("b", "k1", "X", 1)]))
+    assert out["story_cluster_id"].tolist() == ["a", "a"]
