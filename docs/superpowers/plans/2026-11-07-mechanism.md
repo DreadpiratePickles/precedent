@@ -228,7 +228,7 @@ def test_intervention_with_no_asset_descendant_is_reported(fitted_graph_with_lea
 ### Task 5: Ladder scoring against Precedent
 
 **Files:**
-- Create: `src/precedent/mechanism/evaluate.py`, `references/rungs/m4_mechanism_template.yaml`, `references/rungs/m4_mechanism_placebo.yaml`, Test: `tests/mechanism/test_evaluate.py`
+- Create: `src/precedent/mechanism/evaluate.py`, `references/rungs/m4_mechanism_template.yaml`, `references/rungs/m4_mechanism_placebo.yaml`, Test: `tests/mechanism/test_placebo.py`
 
 **Interfaces:**
 - Consumes: `pinball_loss`, `score_precedent_ladder` (Precedent Task 9).
