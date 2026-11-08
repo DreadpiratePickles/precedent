@@ -1,0 +1,66 @@
+{
+  "proposed": true,
+  "attributes": [
+    "guidance_direction",
+    "capex_direction",
+    "headcount_direction",
+    "capacity_direction",
+    "demand_direction",
+    "pricing_direction",
+    "credit_outlook",
+    "supplier_relationship",
+    "customer_relationship",
+    "regulatory_status",
+    "litigation_status",
+    "event_direction"
+  ],
+  "periods": [
+    "current_quarter",
+    "next_quarter",
+    "fiscal_year",
+    "unspecified"
+  ],
+  "values": [
+    "up",
+    "down",
+    "flat",
+    "started",
+    "ended",
+    "ongoing",
+    "positive",
+    "negative",
+    "neutral"
+  ],
+  "conflicting_value_pairs": [
+    [
+      "up",
+      "down"
+    ],
+    [
+      "started",
+      "ended"
+    ],
+    [
+      "positive",
+      "negative"
+    ]
+  ],
+  "item_map_8k": {
+    "proposed": true,
+    "2.05": {
+      "attribute": "headcount_direction",
+      "value": "down"
+    },
+    "1.01": {
+      "attribute": "relationship",
+      "value": "started"
+    },
+    "1.02": {
+      "attribute": "relationship",
+      "value": "ended"
+    },
+    "8.01": null,
+    "7.01": null,
+    "note": "1.01 and 1.02 resolve to supplier_relationship or customer_relationship when the counterparty resolves; Task 2 confirms the item numbers against SEC Form 8-K."
+  }
+}
