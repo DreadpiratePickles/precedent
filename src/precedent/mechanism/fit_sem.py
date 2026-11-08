@@ -1,0 +1,250 @@
+"""Structural equation fitting: the numbers on a causal graph, read from a guarded panel."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+from precedent.mechanism.graph_schema import CausalGraph, NodeKind, descendants
+
+_ZERO_TOL = 1e-12
+_MIN_ROWS_BEYOND_PARENTS = 2
+
+
+@dataclass(frozen=True)
+class GuardedPanel:
+    """The per-precedent observations a fit may see: event variables and abnormal returns."""
+
+    event_values: pd.DataFrame
+    asset_returns: pd.DataFrame
+    horizon: int
+    asof_utc: pd.Timestamp
+
+    def __post_init__(self) -> None:
+        if self.asof_utc.tzinfo is None:
+            raise ValueError("asof_utc must be tz-aware UTC; got a naive timestamp")
+        if self.asof_utc.utcoffset() != timedelta(0):
+            raise ValueError(f"asof_utc must be in UTC; got offset {self.asof_utc.utcoffset()}")
+        if not self.event_values.index.equals(self.asset_returns.index):
+            raise ValueError("event_values and asset_returns must have the same index")
+        if self.event_values.index.has_duplicates:
+            raise ValueError("duplicate precedent ids in the panel index")
+        if len(self.event_values) < 1:
+            raise ValueError("a guarded panel needs at least one row")
+
+    @property
+    def n_obs(self) -> int:
+        """Number of precedent events in the panel."""
+        return len(self.event_values)
+
+
+@dataclass(frozen=True)
+class FittedSEM:
+    """Fitted equations for one graph; `residual_cov` is over `assets`, in that order."""
+
+    coefficients: dict[str, dict[str, float]]
+    intercepts: dict[str, float]
+    residual_cov: np.ndarray
+    assets: list[str]
+    n_obs: int
+    underdetermined: frozenset[str]
+    sign_disagreements: tuple[tuple[str, str], ...]
+    graph_id: str
+    graph_version: str
+    fitted_asof_utc: pd.Timestamp
+    horizon: int
+
+    def to_json_dict(self) -> dict[str, Any]:
+        """Plain floats, strings and nested lists, ready for `json.dumps`."""
+        return {
+            "coefficients": {n: dict(c) for n, c in self.coefficients.items()},
+            "intercepts": dict(self.intercepts),
+            "residual_cov": self.residual_cov.tolist(),
+            "assets": list(self.assets),
+            "n_obs": self.n_obs,
+            "underdetermined": sorted(self.underdetermined),
+            "sign_disagreements": [list(pair) for pair in self.sign_disagreements],
+            "graph_id": self.graph_id,
+            "graph_version": self.graph_version,
+            "fitted_asof_utc": self.fitted_asof_utc.isoformat(),
+            "horizon": self.horizon,
+        }
+
+    @classmethod
+    def from_json_dict(cls, payload: dict[str, Any]) -> FittedSEM:
+        """Rebuild a fit from `to_json_dict` output; a naive timestamp or bad shape is an error."""
+        asof = pd.Timestamp(payload["fitted_asof_utc"])
+        if asof.tzinfo is None:
+            raise ValueError("fitted_asof_utc must be tz-aware")
+        assets = [str(a) for a in payload["assets"]]
+        cov = np.array(payload["residual_cov"], dtype=float).reshape(len(assets), len(assets))
+        return cls(
+            coefficients={n: dict(c) for n, c in payload["coefficients"].items()},
+            intercepts=dict(payload["intercepts"]),
+            residual_cov=cov,
+            assets=assets,
+            n_obs=int(payload["n_obs"]),
+            underdetermined=frozenset(payload["underdetermined"]),
+            sign_disagreements=tuple((s, t) for s, t in payload["sign_disagreements"]),
+            graph_id=payload["graph_id"],
+            graph_version=payload["graph_version"],
+            fitted_asof_utc=asof.tz_convert("UTC"),
+            horizon=int(payload["horizon"]),
+        )
+
+
+def _ridge(x: np.ndarray, y: np.ndarray, ridge: float) -> tuple[np.ndarray, np.ndarray]:
+    """Ridge slopes (p x d) and free intercepts (d) of y on x; the penalty skips the intercept."""
+    x_mean, y_mean = x.mean(axis=0), y.mean(axis=0)
+    x_centred, y_centred = x - x_mean, y - y_mean
+    gram = x_centred.T @ x_centred + ridge * np.eye(x.shape[1])
+    slopes = np.linalg.lstsq(gram, x_centred.T @ y_centred, rcond=None)[0]
+    return slopes, y_mean - x_mean @ slopes
+
+
+def _anchor_flips_weights(
+    graph: CausalGraph, node: str, weights: np.ndarray, child_loadings: dict[str, float]
+) -> bool:
+    """Whether the weights must flip so the template's edge signs read the right way round."""
+    first_in = next(edge for edge in graph.edges if edge.target == node)
+    if abs(weights[0]) > _ZERO_TOL:  # parents() follows edge order, so the first parent is index 0
+        return (weights[0] > 0) != (first_in.sign > 0)
+    for edge in graph.edges:
+        loading = child_loadings.get(edge.target, 0.0)
+        if edge.source == node and abs(loading) > _ZERO_TOL:
+            return (loading > 0) != (edge.sign > 0)
+    return False
+
+
+def _identify_latent(
+    graph: CausalGraph,
+    node: str,
+    series: dict[str, np.ndarray],
+    observed_assets: list[str],
+    ridge: float,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Parent weights and per-row score of an unobserved node, or None when not identifiable."""
+    parents = graph.parents(node)
+    reached = descendants(graph, node)
+    children = [a for a in observed_assets if a in reached]
+    if not parents or not children:
+        return None
+    parent_matrix = np.column_stack([series[p] for p in parents])
+    child_matrix = np.column_stack([series[a] for a in children])
+    usable = ~np.isnan(parent_matrix).any(axis=1) & ~np.isnan(child_matrix).any(axis=1)
+    if usable.sum() < len(parents) + _MIN_ROWS_BEYOND_PARENTS:
+        return None
+    slopes, _ = _ridge(parent_matrix[usable], child_matrix[usable], ridge)
+    left, singular, right_t = np.linalg.svd(slopes, full_matrices=False)
+    if singular[0] == 0.0:
+        return None
+    weights = left[:, 0]
+    loadings = dict(zip(children, singular[0] * right_t[0], strict=True))
+    if _anchor_flips_weights(graph, node, weights, loadings):
+        weights = -weights
+    score = (parent_matrix - parent_matrix[usable].mean(axis=0)) @ weights
+    return weights, score
+
+
+def _fit_asset(
+    parents: list[str], series: dict[str, np.ndarray], node: str, ridge: float
+) -> tuple[dict[str, float], float, np.ndarray, bool]:
+    """Coefficients, intercept, residuals (NaN where unobserved) and the underdetermined flag."""
+    target = series[node]
+    design = np.column_stack([series[p] for p in parents]) if parents else None
+    usable = ~np.isnan(target)
+    if design is not None:
+        usable &= ~np.isnan(design).any(axis=1)
+    residuals = np.full(len(target), np.nan)
+    count = int(usable.sum())
+    if parents and count >= len(parents) + _MIN_ROWS_BEYOND_PARENTS:
+        slopes, intercept = _ridge(design[usable], target[usable, None], ridge)
+        residuals[usable] = target[usable] - design[usable] @ slopes[:, 0] - intercept[0]
+        coefs = {p: float(b) for p, b in zip(parents, slopes[:, 0], strict=True)}
+        return coefs, float(intercept[0]), residuals, False
+    intercept = float(target[usable].mean()) if count else 0.0
+    residuals[usable] = target[usable] - intercept
+    return {}, intercept, residuals, bool(parents) or count == 0
+
+
+def _residual_covariance(residuals: np.ndarray) -> np.ndarray:
+    """Pairwise-complete sample covariance (a x a); a pair with under two common rows is 0."""
+    size = residuals.shape[0]
+    cov = np.zeros((size, size))
+    for i in range(size):
+        for j in range(i, size):
+            both = ~np.isnan(residuals[i]) & ~np.isnan(residuals[j])
+            if both.sum() < 2:
+                continue
+            a, b = residuals[i, both], residuals[j, both]
+            cov[i, j] = cov[j, i] = float(
+                ((a - a.mean()) * (b - b.mean())).sum() / (both.sum() - 1)
+            )
+    return cov
+
+
+def _column(frame: pd.DataFrame, name: str, what: str) -> np.ndarray:
+    if name not in frame.columns:
+        raise ValueError(f"panel has no {what} column for node {name!r}")
+    return frame[name].to_numpy(dtype=float)
+
+
+def fit_sem(graph: CausalGraph, panel: GuardedPanel, ridge: float = 1.0) -> FittedSEM:
+    """Fit every non-event node of the graph on the panel, in topological order."""
+    if ridge < 0:
+        raise ValueError(f"ridge must not be negative; got {ridge}")
+    kinds = {node.id: node.kind for node in graph.nodes}
+    assets = [node.id for node in graph.nodes if node.kind is NodeKind.ASSET]
+    series = {a: _column(panel.asset_returns, a, "asset return") for a in assets}
+    observed_assets = [a for a in assets if not np.isnan(series[a]).all()]
+    coefficients: dict[str, dict[str, float]] = {}
+    intercepts: dict[str, float] = {}
+    residuals: dict[str, np.ndarray] = {}
+    underdetermined: set[str] = set()
+    for node in graph.topological_order():
+        kind = kinds[node]
+        if kind is NodeKind.EVENT:
+            series[node] = _column(panel.event_values, node, "event")
+        elif kind is NodeKind.INTERMEDIATE:
+            latent = _identify_latent(graph, node, series, observed_assets, ridge)
+            if latent is None:
+                coefficients[node], series[node] = {}, np.zeros(panel.n_obs)
+                underdetermined.add(node)
+            else:
+                weights, series[node] = latent
+                coefficients[node] = dict(
+                    zip(graph.parents(node), map(float, weights), strict=True)
+                )
+            intercepts[node] = 0.0
+        else:
+            parents = graph.parents(node)
+            coefs, intercepts[node], residuals[node], flagged = _fit_asset(
+                parents, series, node, ridge
+            )
+            coefficients[node] = coefs
+            if flagged:
+                underdetermined.add(node)
+    disagreements = tuple(
+        (edge.source, edge.target)
+        for edge in graph.edges
+        if (coef := coefficients[edge.target].get(edge.source, 0.0)) != 0.0
+        and (coef > 0) != (edge.sign > 0)
+    )
+    residual_matrix = np.vstack([residuals[a] for a in assets]) if assets else np.empty((0, 0))
+    return FittedSEM(
+        coefficients=coefficients,
+        intercepts=intercepts,
+        residual_cov=_residual_covariance(residual_matrix),
+        assets=assets,
+        n_obs=panel.n_obs,
+        underdetermined=frozenset(underdetermined),
+        sign_disagreements=disagreements,
+        graph_id=graph.graph_id,
+        graph_version=graph.graph_version,
+        fitted_asof_utc=panel.asof_utc,
+        horizon=panel.horizon,
+    )
