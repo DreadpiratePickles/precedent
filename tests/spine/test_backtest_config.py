@@ -122,7 +122,8 @@ def test_cost_assumptions_file_agrees_with_the_function_defaults():
     for name in ("topk", "n_drop", "impact_cost", "min_cost", "benchmark", "account"):
         assert recorded[name]["value"] == defaults[name], name
     assert recorded["open_cost"]["value"] == recorded["close_cost"]["value"] == defaults["cost_per_side"]
-    assert recorded["deal_price"]["value"] == "open"
+    built = build_port_analysis_config("2024-01-02", "2024-01-10")
+    assert recorded["deal_price"]["value"] == built["backtest"]["exchange_kwargs"]["deal_price"]
     assert recorded["region"]["value"] == "us"
     for name, entry in recorded.items():
         assert entry["basis"].strip(), name

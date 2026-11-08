@@ -16,9 +16,13 @@ LEG_COLUMNS = ("gross", "cost", "borrow", "net")
 
 
 def _leg_weights(scores: pd.Series, count: int) -> tuple[pd.Series, pd.Series]:
-    """Equal weights (summing to 1) for the top and bottom `count` names, indexed by instrument."""
+    """Equal weights (summing to 1) for the top and bottom `count` names, indexed by instrument.
+
+    The short leg is drawn from the names left after the long leg, so tied scores cannot put one
+    name on both sides (ties break by position in `scores`).
+    """
     long_names = scores.nlargest(count).index
-    short_names = scores.nsmallest(count).index
+    short_names = scores.drop(long_names).nsmallest(count).index
     return (
         pd.Series(1.0 / count, index=long_names),
         pd.Series(1.0 / count, index=short_names),
@@ -42,6 +46,9 @@ def long_short_returns(
 
     `pred` has a (datetime, instrument) MultiIndex; `known_returns` is dates by instruments.
     Each day goes long the top `quantile` of names by score and short the bottom `quantile`.
+    `known_returns[t]` is the forward return of the session the day-t signal trades (the caller
+    shifts). A selected name with a NaN or absent return, or a day with fewer than two scored
+    names, raises `ValueError` rather than counting as zero.
     """
     if not 0.0 < quantile <= 0.5:
         raise ValueError(f"quantile must be in (0, 0.5] so the legs are disjoint, got {quantile}")
@@ -57,9 +64,17 @@ def long_short_returns(
     rows = {}
     for day, scores in scores_by_day:
         scores = scores.droplevel("datetime")
+        if len(scores) < 2:
+            raise ValueError(f"{day:%Y-%m-%d}: need at least two scored names for two legs")
         count = max(1, math.floor(len(scores) * quantile))
         long_weights, short_weights = _leg_weights(scores, count)
         day_returns = known_returns.loc[day]
+        selected = long_weights.index.append(short_weights.index)
+        unknown = day_returns.reindex(selected)[lambda found: found.isna()].index
+        if len(unknown) > 0:
+            raise ValueError(
+                f"no known return on {day:%Y-%m-%d} for {', '.join(map(str, unknown))}"
+            )
         long_return = float((long_weights * day_returns.reindex(long_weights.index)).sum())
         short_return = float((short_weights * day_returns.reindex(short_weights.index)).sum())
         gross = (long_return - short_return) / 2

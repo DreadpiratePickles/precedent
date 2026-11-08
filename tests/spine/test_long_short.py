@@ -71,3 +71,47 @@ def test_a_day_without_known_returns_is_an_error_not_a_zero():
         long_short_returns(
             PRED, RETURNS.iloc[:2], 0.5, cost_per_side=0.0, annual_borrow_fee=0.0
         )
+
+
+@pytest.mark.parametrize("bad_return", [float("nan"), None])
+def test_a_selected_name_without_a_return_is_an_error_not_a_zero(bad_return):
+    returns = RETURNS.copy()
+    returns.loc[DAYS[0], "B"] = bad_return  # B is in the long leg on day 1
+    with pytest.raises(ValueError, match=r"2024-01-02.*B"):
+        long_short_returns(PRED, returns, 0.5, cost_per_side=0.0, annual_borrow_fee=0.0)
+
+
+def test_a_selected_name_missing_from_the_returns_columns_is_an_error():
+    with pytest.raises(ValueError, match=r"2024-01-02.*B"):
+        long_short_returns(
+            PRED, RETURNS.drop(columns="B"), 0.5, cost_per_side=0.0, annual_borrow_fee=0.0
+        )
+
+
+def test_an_unselected_name_without_a_return_is_ignored():
+    returns = RETURNS.copy()
+    returns.loc[DAYS[0], "B"] = float("nan")
+    # quantile 0.25 of four names: A long, D short; B and C are not held
+    out = long_short_returns(
+        _pred([[4, 3, 2, 1]]), returns, 0.25, cost_per_side=0.0, annual_borrow_fee=0.0
+    )
+    assert out["gross"].iloc[0] == pytest.approx((0.02 - (-0.01)) / 2)
+
+
+def test_tied_scores_never_put_a_name_on_both_legs():
+    tied = _pred([[1, 1, 1, 1]])
+    returns = pd.DataFrame(
+        {"A": [0.04], "B": [0.04], "C": [-0.02], "D": [-0.02]}, index=DAYS[:1]
+    )
+    out = long_short_returns(tied, returns, 0.5, cost_per_side=0.0, annual_borrow_fee=0.0)
+    # Ties break by position: A, B long and C, D short, never the same name twice.
+    assert out["gross"].iloc[0] == pytest.approx((0.04 - (-0.02)) / 2)
+
+
+def test_fewer_than_two_scored_names_cannot_form_two_legs():
+    one_name = pd.Series(
+        [1.0],
+        index=pd.MultiIndex.from_tuples([(DAYS[0], "A")], names=["datetime", "instrument"]),
+    )
+    with pytest.raises(ValueError, match="two"):
+        long_short_returns(one_name, RETURNS, 0.5, cost_per_side=0.0, annual_borrow_fee=0.0)

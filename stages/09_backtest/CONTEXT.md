@@ -32,3 +32,5 @@ A human reviews the backtest before it is cited. Nothing here trades, publishes 
 A missing benchmark or price gap stops the stage with a typed error; it never becomes a zero return. No retries.
 
 Loop: single pass. Looping on a backtest is how it gets overfit (design 10.2).
+
+Note (Task 15): Qlib's last trading step reads the following session, so a backtest must end at least one session before the provider's last session, and the final signal day is never traded.

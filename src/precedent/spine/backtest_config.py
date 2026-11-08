@@ -20,7 +20,11 @@ def build_port_analysis_config(
     benchmark: str = "SPY",
     account: float = 1_000_000,
 ) -> dict:
-    """Return the `config` argument of `PortAnaRecord`: strategy, executor and backtest blocks."""
+    """Return the `config` argument of `PortAnaRecord`: strategy, executor and backtest blocks.
+
+    Qlib's last step reads the following session, so a backtest must end at least one session
+    before the provider's last, and the final signal day is never traded.
+    """
     return {
         "strategy": {
             "class": "TopkDropoutStrategy",
