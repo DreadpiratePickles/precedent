@@ -178,7 +178,8 @@ def render_text(result: MechanismResult) -> str:
         f"mechanism      {fitted['graph_version']} for {result.graph.event_key.event_type}, "
         f"fitted on {fitted['n_obs']} precedents as of "
         f"{result.asof_utc.astimezone(UTC):%Y-%m-%d}; "
-        f"{len(fitted['underdetermined'])} equations underdetermined",
+        f"{len(fitted['underdetermined'])} nodes uninformative "
+        "(own fit failed, or an unidentified latent upstream)",
         f"{'asset':<{_ASSET_WIDTH}}{'window':<{_WINDOW_WIDTH}}"
         f"{'mechanism p10/median/p90':<{_MECHANISM_WIDTH}}"
         f"{'precedent p10/median/p90':<{_PRECEDENT_WIDTH}}agree?",

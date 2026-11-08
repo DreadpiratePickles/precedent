@@ -172,7 +172,7 @@ def test_text_header_and_rows_show_both_bands_and_both_sample_sizes():
     lines = render_text(hand_result()).splitlines()
     assert lines[0] == (
         "mechanism      template-v1 for central_bank, fitted on 42 precedents as of 2026-11-07; "
-        "1 equations underdetermined"
+        "1 nodes uninformative (own fit failed, or an unidentified latent upstream)"
     )
     assert lines[1].split() == [
         "asset", "window", "mechanism", "p10/median/p90",

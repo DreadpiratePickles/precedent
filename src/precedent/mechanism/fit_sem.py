@@ -142,9 +142,11 @@ def _identify_latent(
     A row joins the identification when every parent is observed and at least one child is;
     requiring all children on one row would throw away history. Each child is regressed on
     the rows where that child is observed, and a child seen on fewer than parents + 2 rows
-    takes no part in the identification. The score is centred on the identifying rows'
-    parent mean, and the intercept is -(parent mean @ weights), so intercept +
-    sum(weight * parent) reproduces the score exactly.
+    takes no part in the identification. Because each child is fitted on its own rows, the
+    ridge shrinkage differs between children and the SVD weighs their slope columns fitted
+    on different sample sizes; accepted as a disclosed approximation. The score is centred
+    on the identifying rows' parent mean, and the intercept is -(parent mean @ weights), so
+    intercept + sum(weight * parent) reproduces the score exactly.
     """
     parents = graph.parents(node)
     reached = descendants(graph, node)
@@ -240,7 +242,10 @@ def fit_sem(graph: CausalGraph, panel: GuardedPanel, ridge: float = 1.0) -> Fitt
     `underdetermined` holds every node whose equation could not be fitted (too little data,
     a singular latent, no observations) and, propagated downstream, every node with an
     underdetermined parent: an asset below an unidentified latent is fitted against a zero
-    score and must be read as uninformative.
+    score and must be read as uninformative. The propagation passes through observed
+    intermediates and also flags a node that has a second, identified path from the event:
+    that is conservative for rollouts, where the event's effect through the broken path is
+    lost, at the cost of over-flagging the fit itself.
     """
     if ridge < 0:
         raise ValueError(f"ridge must not be negative; got {ridge}")

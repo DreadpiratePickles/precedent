@@ -362,8 +362,10 @@ def score_mechanism_ladder(
     graph, no precedent passed the guard, or fewer than `min_neff` events did. Output columns
     are `OUTPUT_COLUMNS`, one row per `(rung, event_type, quantile)` sorted on those keys;
     `coverage_80` is the share of realised values inside the rung's own [q0.1, q0.9]; and
-    `n_underdetermined` counts scored units whose asset equation had too little data to fit
-    (always 0 for P-B1). Quantiles must be among the engine's `QUANTILE_LEVELS`.
+    `n_underdetermined` counts scored units whose asset is uninformative: its own equation
+    had too little data to fit, or an unidentified latent sits upstream of it and the fit
+    ran against a zero score (always 0 for P-B1). Quantiles must be among the engine's
+    `QUANTILE_LEVELS`.
     """
     if PRECEDENT_RUNG in graphs_by_rung:
         raise ValueError(

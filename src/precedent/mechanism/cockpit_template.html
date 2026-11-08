@@ -294,7 +294,7 @@ footer { padding-bottom: 28px; font-size: 13px; }
     const bands = {};
     payload.precedent.filter((b) => b.horizon === horizon).forEach((b) => { bands[b.asset] = b; });
     document.getElementById("heading").textContent = "Mechanism cockpit: " + payload.graph.event_key.event_type + " (" + fitted.graph_version + ")";
-    document.getElementById("subtitle").textContent = "Fitted on " + fitted.n_obs + " precedents as of " + payload.asof_utc.slice(0, 10) + "; window " + horizon + " sessions; " + fitted.underdetermined.length + " equations underdetermined.";
+    document.getElementById("subtitle").textContent = "Fitted on " + fitted.n_obs + " precedents as of " + payload.asof_utc.slice(0, 10) + "; window " + horizon + " sessions; " + fitted.underdetermined.length + " nodes uninformative (own fit failed, or an unidentified latent upstream).";
     document.getElementById("fanheading").textContent = "Simulated outcomes over " + horizon + " sessions";
     document.getElementById("manifest").textContent = ["graph " + fitted.graph_version, "fitted as of " + fitted.fitted_asof_utc.slice(0, 10), "seed " + payload.seed, payload.n_paths + " paths", "commit " + (payload.code_commit || "unknown")].join(" | ");
     drawDag(payload);
