@@ -2,8 +2,9 @@
 
 The model emits structure only: who the filer's counterparty is, which relation, and a quote.
 It never supplies a weight and never forecasts. A link is kept only if its quoted evidence is
-in the passage the model was shown and its counterparty resolves to a known node. Nothing here
-calls a model: the extractor is injected (`EventExtractor`), so tests use a fake.
+in the passage the model was shown, its counterparty resolves to a known node and the
+counterparty is named inside that quote. Nothing here calls a model: the extractor is injected
+(`EventExtractor`), so tests use a fake.
 
 Core dependencies only (pydantic, pandas).
 """
@@ -90,11 +91,13 @@ class LinkParseReport:
 
     `proposed` is the number of links the model returned; `evidence_missing` those whose quote
     is not in the passage; `unresolved` those whose counterparty did not resolve (a counterparty
-    that resolves to the filer itself, a self-link, is counted here); `kept` the links returned
+    that resolves to the filer itself, a self-link, is counted here); `name_not_in_evidence`
+    those whose counterparty name does not occur inside the quoted span (a true sentence that
+    does not name the counterparty is no evidence for the link); `kept` the links returned
     (a repeat of the same source and relation is dropped and counted in `duplicates`), so
-    `proposed == evidence_missing + unresolved + duplicates + kept`. When the whole output is
-    unusable (bad JSON or a schema violation), `invalid_output` is True, `error` says why without
-    echoing the output, and every count is 0.
+    `proposed == evidence_missing + name_not_in_evidence + unresolved + duplicates + kept`.
+    When the whole output is unusable (bad JSON or a schema violation), `invalid_output` is
+    True, `error` says why without echoing the output, and every count is 0.
     """
 
     proposed: int
@@ -104,6 +107,7 @@ class LinkParseReport:
     invalid_output: bool = False
     error: str | None = None
     duplicates: int = 0
+    name_not_in_evidence: int = 0
 
 
 def _check_prompt_file(prompt_file: str) -> None:
@@ -148,13 +152,18 @@ def _failure_text(exc: ValidationError) -> str:
     return text[:_MAX_ERROR_CHARS]
 
 
-def _quote_is_in(span: str, passage: str) -> bool:
+def _quote_is_in(span: str, passage: str, *, ignore_case: bool = False) -> bool:
     """True if the whitespace-normalised span occurs in the normalised passage on word edges.
 
     A span edge that is a letter or digit must not sit inside a longer word, so a quote cut
-    mid-word ("... for 1" out of "... for 14%") does not count.
+    mid-word ("... for 1" out of "... for 14%") does not count. `ignore_case` compares
+    case-insensitively (used for the counterparty name inside the span).
     """
     quote, text = _normalise_whitespace(span), _normalise_whitespace(passage)
+    if ignore_case:
+        quote, text = quote.casefold(), text.casefold()
+    if not quote:
+        return False
     start = text.find(quote)
     while start != -1:
         end = start + len(quote)
@@ -185,7 +194,10 @@ def parse_links(
     customer of the filer. Every kept link starts at `accepted_utc` (the filing's acceptance
     time), expires after `annual_link_expiry_months` and has weight 1.0; the model never gives
     a weight. `resolve` maps a counterparty name to a node name, or None (or an empty name) when
-    it is unknown. `prompt_file` names the prompt version under `references/` (see
+    it is unknown. A link is kept only if the counterparty name occurs inside its evidence span
+    (whitespace-normalised, case-insensitive, on word edges): a model must not attach a true
+    sentence that never names the counterparty (`LinkParseReport.name_not_in_evidence`).
+    `prompt_file` names the prompt version under `references/` (see
     `load_link_prompt`); the revision loop's runner passes it.
 
     Never raises on bad model output (see `LinkParseReport.invalid_output`). Raises ValueError
@@ -218,7 +230,7 @@ def parse_links(
     except ValidationError as exc:
         return [], LinkParseReport(0, 0, 0, 0, invalid_output=True, error=_failure_text(exc))
 
-    evidence_missing = unresolved = duplicates = 0
+    evidence_missing = unresolved = duplicates = name_not_in_evidence = 0
     kept: dict[tuple[str, Relation], Link] = {}
     for proposal in proposed:
         if not _quote_is_in(proposal.evidence_span, passage):
@@ -227,6 +239,9 @@ def parse_links(
         source = resolve(proposal.counterparty_name)
         if source is None or not source.strip() or source == filer:
             unresolved += 1
+            continue
+        if not _quote_is_in(proposal.counterparty_name, proposal.evidence_span, ignore_case=True):
+            name_not_in_evidence += 1
             continue
         key = (source, proposal.relation)
         if key in kept:
@@ -244,6 +259,15 @@ def parse_links(
             extractor_version=extractor_version,
         )
     links = list(kept.values())
-    return links, LinkParseReport(
-        len(proposed), evidence_missing, unresolved, len(links), duplicates=duplicates
+    report = LinkParseReport(
+        len(proposed),
+        evidence_missing,
+        unresolved,
+        len(links),
+        duplicates=duplicates,
+        name_not_in_evidence=name_not_in_evidence,
     )
+    assert report.proposed == (
+        evidence_missing + name_not_in_evidence + unresolved + duplicates + len(links)
+    )
+    return links, report

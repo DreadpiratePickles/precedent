@@ -361,9 +361,15 @@ def test_mid_word_cut_of_the_evidence_is_dropped():
 
 
 def test_evidence_ending_in_punctuation_or_at_the_passage_edges_is_accepted():
-    for span in ("Globex Inc accounted for 14% of revenue in 2019.", "Item 1. Business.",
-                 "We buy copper from several mines."):
-        _, report = run(json_links([("customer_of", "Globex Inc", "company", span)]))
+    # (counterparty name, span): each name sits inside its span, so only the edges are tested.
+    for name, span in (
+        ("Globex Inc", "Globex Inc accounted for 14% of revenue in 2019."),
+        ("Business", "Item 1. Business."),
+        ("mines", "We buy copper from several mines."),
+    ):
+        _, report = run(
+            json_links([("customer_of", name, "company", span)]), resolve=lambda name: "GLBX"
+        )
         assert report.kept == 1, span
 
 
@@ -438,3 +444,72 @@ def test_bad_prompt_file_name_is_rejected_before_the_model_is_called(name):
     assert extractor.calls == []
     with pytest.raises(ValueError, match="prompt_file"):
         load_link_prompt(prompt_file=name)
+
+
+def test_model_invented_counterparty_with_an_unrelated_true_sentence_is_dropped():
+    # The reviewer's reproduction (final review C1): the quote is in the passage, the name is not.
+    reply = json_links(
+        [
+            (
+                "customer_of",
+                "Globex Inc",
+                "company",
+                "One customer accounted for 12% of our revenue",
+            )
+        ]
+    )
+    links, report = run(reply, passage=UNNAMED_PASSAGE)
+    assert links == [] and report.kept == 0
+    assert report.name_not_in_evidence == 1
+    assert report.evidence_missing == 0 and report.unresolved == 0
+
+
+def test_name_in_the_passage_but_outside_the_span_is_dropped():
+    # "Globex Inc" is in PASSAGE, but the quoted run is the copper sentence.
+    reply = json_links([("customer_of", "Globex Inc", "company", "We buy copper from several mines")])
+    links, report = run(reply)
+    assert links == [] and report.name_not_in_evidence == 1 and report.kept == 0
+
+
+def test_name_match_is_case_insensitive_and_whitespace_normalised():
+    # Pinned: case is ignored (filings change case, e.g. headings in capitals); whitespace is
+    # collapsed on both sides; the stored span stays the model's (stripped) text.
+    shouting = "ITEM 1. GLOBEX INC accounted for 14% of revenue."  # the filing's own case
+    span = "GLOBEX   INC accounted for 14% of revenue"
+    links, report = run(
+        json_links([("customer_of", "Globex Inc", "company", span)]), passage=shouting
+    )
+    assert report.kept == 1 and report.name_not_in_evidence == 0
+    assert links[0].evidence_span == span
+    spaced_name = json_links([("customer_of", "Globex\n Inc", "company", GLOBEX_SPAN)])
+    _, report = run(spaced_name, resolve=lambda name: "GLBX")
+    assert report.kept == 1
+
+
+def test_name_must_sit_on_word_edges_inside_the_span():
+    # "Globe" is a prefix of "Globex": a name that only matches inside a longer word is dropped.
+    reply = json_links([("customer_of", "Globe", "company", GLOBEX_SPAN)])
+    links, report = run(reply, resolve=lambda name: "GLB")
+    assert links == [] and report.name_not_in_evidence == 1
+
+
+def test_name_check_runs_after_resolution_and_the_counts_add_up():
+    reply = json_links(
+        [
+            GLOBEX_ROW,  # kept
+            GLOBEX_ROW,  # duplicate
+            ("customer_of", "Globex Inc", "company", "not in the passage"),  # evidence missing
+            ("supplier_of", "Initech LLC", "company", "We buy copper"),  # unresolved
+            ("peer_of", "Globex Inc", "company", "We buy copper from several mines"),  # no name
+        ]
+    )
+    links, report = run(reply)
+    assert (report.proposed, report.kept, report.duplicates) == (5, 1, 1) == (5, len(links), 1)
+    assert (report.evidence_missing, report.unresolved, report.name_not_in_evidence) == (1, 1, 1)
+    assert report.proposed == (
+        report.evidence_missing
+        + report.name_not_in_evidence
+        + report.unresolved
+        + report.duplicates
+        + report.kept
+    )
