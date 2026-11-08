@@ -105,6 +105,14 @@ def test_hash_uniform_pinned_values():
     np.testing.assert_allclose(got, expected, rtol=0, atol=5e-13)
 
 
+def test_hash_uniform_pins_the_32_bit_wraps():
+    # These pin the `seed * 0x9E3779B1` and `index + base` wraps mod 2**32; the JavaScript twin
+    # must reproduce them with Math.imul and `>>> 0`.
+    index = np.array([4294967295, 2**31, 7], dtype=np.uint32)
+    expected = [0.351858842303, 0.458710182807, 0.062277476420]
+    np.testing.assert_allclose(hash_uniform(12345, index), expected, rtol=0, atol=5e-13)
+
+
 def test_hash_uniform_is_open_unit_interval():
     u = hash_uniform(7, np.arange(100_000, dtype=np.uint32))
     assert u.min() > 0.0 and u.max() < 1.0
@@ -239,6 +247,15 @@ def test_unreachable_intervention_leaves_the_fan_unchanged(fitted_graph_with_lea
     )
     pd.testing.assert_frame_equal(fan(plain), fan(forced))
     assert forced.unreachable_interventions == [DEAD_END]
+
+
+def test_intervened_asset_reaches_itself(fitted_graph):
+    plain = simulate(*fitted_graph, EVENT, seed=5)
+    forced = simulate(*fitted_graph, EVENT, interventions=(Intervention("TLT", 0.1),), seed=5)
+    assert forced.unreachable_interventions == []
+    assert np.all(forced.paths[:, 0] == 0.1)  # TLT is the first asset column
+    assert not np.array_equal(forced.paths[:, 0], plain.paths[:, 0])
+    np.testing.assert_array_equal(forced.paths[:, 1], plain.paths[:, 1])
 
 
 def test_reachable_intervention_is_not_reported(fitted_graph_with_leaf):

@@ -70,7 +70,11 @@ class Intervention:
 
 @dataclass(frozen=True)
 class Rollout:
-    """Simulated asset outcomes, with the seed and interventions that produced them."""
+    """Simulated asset outcomes, with the seed and interventions that produced them.
+
+    `unreachable_interventions` lists intervened nodes that are not assets and have no asset
+    descendant: the fan is unchanged by them.
+    """
 
     paths: np.ndarray
     assets: list[str]
@@ -111,8 +115,9 @@ def _check_inputs(
 
 
 def _unreachable(graph: CausalGraph, interventions: tuple[Intervention, ...]) -> list[str]:
+    """Intervened nodes that reach no asset, themselves included: the fan is unchanged by them."""
     assets = {node.id for node in graph.nodes if node.kind is NodeKind.ASSET}
-    return [i.node for i in interventions if not (descendants(graph, i.node) & assets)]
+    return [i.node for i in interventions if not (({i.node} | descendants(graph, i.node)) & assets)]
 
 
 def _evaluate(
