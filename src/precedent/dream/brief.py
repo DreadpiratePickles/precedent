@@ -38,6 +38,8 @@ TEMPLATE_NAME = "brief_template.md"
 README_NAME = "README.md"
 BANNER_TOKENS = ("SYNTHETIC —", "LIVE —", "NO LIVE RUN —")
 SYNTHETIC_BANNER = "SYNTHETIC — built from a synthetic sample library; not market data."
+_README_LABEL = re.compile(r"^(SYNTHETIC|NO LIVE RUN|LIVE)\b")
+EVIDENCE_CHOICES = ("LIVE", "SYNTHETIC")
 DEMOTE_LEVELS = 2
 MAX_HEADING_LEVEL = 6
 _HEADING = re.compile(r"^(#{1,6})(\s)")
@@ -65,6 +67,12 @@ def _parser() -> argparse.ArgumentParser:
         "--outcome-type", choices=OUTCOME_TYPES, default=DEFAULT_OUTCOME_TYPE, dest="outcome_type"
     )
     parser.add_argument("--mechanism", type=Path, help="a short note; an empty file adds nothing")
+    parser.add_argument(
+        "--evidence",
+        choices=EVIDENCE_CHOICES,
+        help="the evidence label, for a library whose README.md has none: a human statement of "
+        "where it came from, never inferred; it may not contradict a README label",
+    )
     return parser
 
 
@@ -102,7 +110,9 @@ def _build(args: argparse.Namespace) -> str:
         run_card(headline, args.horizon, args.outcome_type, data_dir, typer, asof_utc=asof_utc)
         for headline in headlines
     ]
-    return render_brief(args.date, _banner(data_dir), cards, dream, mechanism, template)
+    return render_brief(
+        args.date, _banner(data_dir, args.evidence), cards, dream, mechanism, template
+    )
 
 
 def _read_headlines(path: Path) -> list[str]:
@@ -144,15 +154,36 @@ def _session_cutoff(session: date) -> pd.Timestamp:
         raise BriefError(f"{session} is not a session on the NYSE calendar") from error
 
 
-def _banner(data_dir: Path) -> str:
-    """The evidence label comes from the data dir's README, never from its path (D57)."""
+def _readme_label(data_dir: Path) -> str | None:
+    """The evidence label on the first line of the data dir's README: SYNTHETIC, LIVE or
+    NO LIVE RUN; None when there is no README or its first line carries none."""
     try:
         first = (data_dir / README_NAME).read_text(encoding="utf-8").lstrip().splitlines()[0]
     except (OSError, IndexError):
-        first = ""
-    if first.startswith("SYNTHETIC"):
+        return None
+    found = _README_LABEL.match(first)
+    return found.group(1) if found else None
+
+
+def _banner(data_dir: Path, evidence: str | None = None) -> str:
+    """The banner passes through the data dir's README label, never inferred from its path (D57,
+    D64). A library with no label needs `--evidence` (a human statement of provenance); a flag
+    that contradicts the README is refused. Only the data dir's final component is printed."""
+    label = _readme_label(data_dir)
+    if label is None and evidence is None:
+        raise BriefError(
+            f"{data_dir / README_NAME} carries no evidence label (SYNTHETIC, LIVE or NO LIVE "
+            f"RUN on its first line); label it, or pass --evidence {'|'.join(EVIDENCE_CHOICES)}"
+        )
+    if label is not None and evidence is not None and evidence != label:
+        raise BriefError(f"--evidence {evidence} contradicts the README label {label}")
+    label = label or evidence
+    name = data_dir.resolve().name
+    if label == "SYNTHETIC":
         return SYNTHETIC_BANNER
-    return f"LIVE — cards built from the library under {data_dir}."
+    if label == "NO LIVE RUN":
+        return f"NO LIVE RUN — cards built from the library under {name}; no live run made it."
+    return f"LIVE — cards built from the library under {name}."
 
 
 def _embed_dream(markdown: str) -> str:

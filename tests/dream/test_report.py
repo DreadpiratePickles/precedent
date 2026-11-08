@@ -672,3 +672,46 @@ def test_replaying_a_session_after_a_proposal_was_appended_later_gives_the_same_
     assert dream_bytes(tmp_path, SESSION) == first
     assert dream(tmp_path, "2024-06-11", "--allow-gap") == 0
     assert b"## Proposed resolutions awaiting review (1)" in dream_bytes(tmp_path, "2024-06-11")[0]
+
+
+# --- the price axis (D68, M13) ---------------------------------------------------------------------
+
+
+def short_history_with_long_prices(tmp_path, monkeypatch, first_price):
+    """F-5: events only from the day before the session; prices from long before."""
+    monkeypatch.setenv("PRECEDENT_DATA_DIR", str(tmp_path / "data"))
+    write_events(
+        tmp_path / "data" / "events",
+        [
+            gdelt_record(1, "2024-05-31T15:00:00Z", instrument="BETA", event_type="product"),
+            gdelt_record(2, "2024-06-03T14:00:00Z", span="Acme raised its full-year outlook"),
+        ],
+    )
+    write_prices(tmp_path / "prices", first_price, "2024-06-07", shocks={("ACME", SESSION): -0.08})
+    return ["--prices", str(tmp_path / "prices"), "--market", "MKT"]
+
+
+def test_a_short_event_history_with_long_prices_still_scores_text_vs_price(tmp_path, monkeypatch):
+    flags = short_history_with_long_prices(tmp_path, monkeypatch, "2023-01-03")
+    assert dream(tmp_path, SESSION, *flags) == 0
+    text = markdown(tmp_path)
+    assert "[text_vs_price] ACME" in text
+    assert "text_vs_price: no prices" not in text
+
+
+def test_price_dates_reach_back_only_one_estimation_window_before_the_first_event(
+    tmp_path, monkeypatch
+):
+    flags = short_history_with_long_prices(tmp_path, monkeypatch, "2016-01-04")
+    seen = []
+    real = report_module.abnormal_returns_panel
+
+    def recording(returns, market, sessions, *args, **kwargs):
+        seen.append(len(sessions))
+        return real(returns, market, sessions, *args, **kwargs)
+
+    monkeypatch.setattr(report_module, "abnormal_returns_panel", recording)
+    assert dream(tmp_path, SESSION, *flags) == 0
+    [axis_length] = seen
+    assert 250 <= axis_length <= 250 + 5  # 250 sessions before 2024-05-31, then up to 06-03
+    assert "[text_vs_price] ACME" in markdown(tmp_path)

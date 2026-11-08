@@ -209,18 +209,47 @@ def _load_links(root: Path | None) -> tuple[LinkStore | None, list[Link]]:
     return store, store.read_all()
 
 
-def _price_inputs(
-    args: argparse.Namespace, axis: pd.Series, params: dict[str, Any]
-) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
-    """The returns and the abnormal-returns panel, built once for this invocation."""
+def _load_price_returns(args: argparse.Namespace) -> pd.DataFrame | None:
+    """The returns of every symbol in `--prices` up to the session; None without `--prices`."""
     if args.prices is None:
-        return None, None
+        return None
     symbols = sorted(path.stem for path in args.prices.glob("*.parquet"))
     if args.market not in symbols:
         raise UsageError(f"market {args.market!r} has no parquet file in {args.prices}")
-    returns = load_returns(
+    return load_returns(
         symbols, "1900-01-01", args.date.isoformat(), RETURN_KIND, ParquetPriceProvider(args.prices)
     )
+
+
+def _price_axis_start(
+    returns: pd.DataFrame, first: date, session: date, window_start: int, calendar: NyseCalendar
+) -> date | None:
+    """The first price date the session axis must reach back to (D68, M13), or None.
+
+    The market model needs `-window_start` sessions of returns before a session, so the axis
+    reaches back to the earliest price date, but no further than that many sessions before the
+    first event, link or session: decades of prices would otherwise stretch the axis every night.
+    """
+    floor = max(
+        first - timedelta(days=int(abs(window_start) * 1.6) + 30), date(calendar.first_year, 1, 1)
+    )
+    sessions = weekday_sessions(floor, first, calendar)
+    earliest = (
+        sessions[-(abs(window_start) + 1)] if len(sessions) > abs(window_start) else sessions[0]
+    )
+    stamps = returns.index[(returns.index >= earliest) & (returns.index <= pd.Timestamp(session))]
+    return stamps.min().date() if len(stamps) else None
+
+
+def _price_panel(
+    args: argparse.Namespace,
+    returns: pd.DataFrame | None,
+    axis: pd.Series,
+    params: dict[str, Any],
+) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+    """The returns and the abnormal-returns panel, built once for this invocation."""
+    if returns is None:
+        return None, None
     window = params["abnormal_returns"]
     panel = abnormal_returns_panel(
         returns, args.market, axis.index, tuple(window["est_window"]), window["min_obs"]
@@ -426,6 +455,13 @@ def _compute(
     links = [link for link in all_links if link.valid_from_utc <= cutoff]
     dates = {r.available_utc.date() for r in visible if r.available_utc is not None} | {session}
     dates |= {link.valid_from_utc.date() for link in links}
+    all_returns = _load_price_returns(args)
+    if all_returns is not None:
+        start = _price_axis_start(
+            all_returns, min(dates), session, params["abnormal_returns"]["est_window"][0], calendar
+        )
+        if start is not None:
+            dates.add(start)
     story_window = params["story_window_sessions"]
     full = default_cutoffs_for(sorted(dates), calendar, story_window * 3 + 14)
     axis = full.loc[: pd.Timestamp(session)]
@@ -437,7 +473,7 @@ def _compute(
     )
     _expire_annual_claims(claim_store, cutoff, params["annual_claim_expiry_months"])
 
-    returns, panel = _price_inputs(args, axis, params)
+    returns, panel = _price_panel(args, all_returns, axis, params)
     prices_missing = args.prices is not None and panel is None
     stores = DreamStores(
         claim_store=claim_store,

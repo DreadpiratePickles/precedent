@@ -183,18 +183,66 @@ def test_a_missing_library_is_exit_2_through_the_real_run_card(tmp_path, capsys)
 # --- banner from the data dir's README (D57) ----------------------------------------------------
 
 
-def test_a_live_readme_gives_the_live_banner(tmp_path, data_dir):
+def test_a_live_readme_gives_the_live_banner_naming_only_the_final_path_component(
+    tmp_path, data_dir
+):
     (data_dir / "README.md").write_text("LIVE — the built sample.\n", encoding="utf-8")
     run_brief(tmp_path, data_dir)
-    assert brief_text(tmp_path).splitlines()[0] == (
-        f"LIVE — cards built from the library under {data_dir}."
-    )
+    first = brief_text(tmp_path).splitlines()[0]
+    assert first == f"LIVE — cards built from the library under {data_dir.name}."
+    assert str(data_dir.parent) not in brief_text(tmp_path).split("\n\n")[0]  # D64: no abs path
 
 
-def test_no_readme_gives_the_live_banner(tmp_path, data_dir):
+def test_a_no_live_run_readme_passes_through_to_the_banner(tmp_path, data_dir):
+    (data_dir / "README.md").write_text("NO LIVE RUN — a designed shape.\n", encoding="utf-8")
+    assert run_brief(tmp_path, data_dir) == 0
+    first = brief_text(tmp_path).splitlines()[0]
+    assert first.startswith("NO LIVE RUN —") and data_dir.name in first
+    assert not first.startswith("LIVE")
+
+
+def test_a_readme_without_a_label_is_refused_and_writes_nothing(tmp_path, data_dir, capsys):
+    (data_dir / "README.md").write_text("A sample library.\n", encoding="utf-8")
+    assert run_brief(tmp_path, data_dir) == 2
+    error = capsys.readouterr().err
+    assert "no evidence label" in error and "--evidence" in error
+    assert not (tmp_path / "out" / f"brief_{DATE}.md").exists()
+
+
+def test_no_readme_is_refused_the_same_way(tmp_path, data_dir, capsys):
     (data_dir / "README.md").unlink()
-    run_brief(tmp_path, data_dir)
-    assert brief_text(tmp_path).splitlines()[0].startswith("LIVE — cards built from the library")
+    assert run_brief(tmp_path, data_dir) == 2
+    assert "no evidence label" in capsys.readouterr().err
+    assert not (tmp_path / "out" / f"brief_{DATE}.md").exists()
+
+
+@pytest.mark.parametrize("label", ["LIVE", "SYNTHETIC"])
+def test_the_evidence_flag_labels_a_library_whose_readme_has_none(tmp_path, data_dir, label):
+    (data_dir / "README.md").unlink()
+    assert run_brief(tmp_path, data_dir, "--evidence", label) == 0
+    assert brief_text(tmp_path).splitlines()[0].startswith(f"{label} —")
+
+
+@pytest.mark.parametrize(
+    ("readme", "flag"),
+    [
+        ("SYNTHETIC — x\n", "LIVE"),
+        ("LIVE — x\n", "SYNTHETIC"),
+        ("NO LIVE RUN — x\n", "LIVE"),
+        ("NO LIVE RUN — x\n", "SYNTHETIC"),
+    ],
+)
+def test_a_flag_that_contradicts_the_readme_label_is_refused(
+    tmp_path, data_dir, capsys, readme, flag
+):
+    (data_dir / "README.md").write_text(readme, encoding="utf-8")
+    assert run_brief(tmp_path, data_dir, "--evidence", flag) == 2
+    assert "contradicts" in capsys.readouterr().err
+    assert not (tmp_path / "out" / f"brief_{DATE}.md").exists()
+
+
+def test_a_flag_equal_to_the_readme_label_is_accepted(tmp_path, data_dir):
+    assert run_brief(tmp_path, data_dir, "--evidence", "SYNTHETIC") == 0
 
 
 def test_the_path_never_decides_the_banner(tmp_path, data_dir):
@@ -213,7 +261,8 @@ def test_dream_diff_is_embedded_demoted_and_without_its_own_banner_or_disclaimer
 ):
     run_brief(tmp_path, data_dir)
     text = brief_text(tmp_path)
-    assert "## Overnight" in text and "#### Opened tensions (1)" in text
+    # the fixture is the real output for the generated stores (D67): three opened tensions
+    assert "## Overnight" in text and "#### Opened tensions (3)" in text
     assert "### Dream for 2024-06-03" in text
     assert "\n## Opened tensions" not in text and "\n# Dream for" not in text
     assert text.count("SYNTHETIC —") == 1  # the Dream fixture's own banner line is dropped
@@ -325,6 +374,19 @@ def _example_script():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_the_dream_fixture_is_the_real_renderer_output_with_a_banner(tmp_path):
+    # D67: the example's overnight part is what `precedent dream` writes, not a hand-written shape
+    import sys
+
+    sys.path.insert(0, str(ROOT / "tests" / "dream"))
+    from example_dream import fixture_text
+
+    fixture = (FIX / f"dream_{DATE}.md").read_text(encoding="utf-8")
+    assert fixture == fixture_text(tmp_path)
+    assert fixture.startswith("SYNTHETIC —")
+    assert "event_direction positive" in fixture and "event_direction 1.0" not in fixture  # F-4
 
 
 def test_the_committed_example_is_reproduced_byte_for_byte(tmp_path):
