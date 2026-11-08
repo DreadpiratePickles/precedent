@@ -24,6 +24,10 @@ from precedent.ripple.link_store import GRAPH_COLUMNS, graph_asof
 
 SHIFT_DETECTOR_VERSION = "dream-shift-v1"
 _DIRECTION_STEP = {"positive": 1.0, "neutral": 0.0, "negative": -1.0}
+SKIP_NO_LINK_STORE = "no_link_store"
+SKIP_SHORT_HISTORY = "short_history"
+SKIP_NO_BASELINE_EVENTS = "no_baseline_events"
+SKIP_REASONS = (SKIP_NO_LINK_STORE, SKIP_SHORT_HISTORY, SKIP_NO_BASELINE_EVENTS)
 
 
 def _position_of(session: date, sessions: pd.DatetimeIndex) -> int:
@@ -70,6 +74,36 @@ def _window_and_baseline(here: int, window: int, baseline: int) -> tuple[range, 
     )
 
 
+def _event_counts(events: pd.DataFrame, subject: str, sessions: pd.DatetimeIndex) -> np.ndarray:
+    """The subject's event count at each position of `sessions`."""
+    mine = events.loc[events["subject"] == subject, "session"]
+    positions = sessions.get_indexer(pd.DatetimeIndex(mine))
+    return np.bincount(positions[positions >= 0], minlength=len(sessions))
+
+
+def _rate_z(
+    per_position: np.ndarray, here: int, window: int, baseline: int, gap: np.ndarray
+) -> tuple[float | None, str | None]:
+    """The Poisson z of the window against the baseline, or None and the reason it is undefined.
+
+    Reasons are `short_history` (fewer than `window` positions end at `here`, or none precede
+    the window) and `no_baseline_events`; a window or baseline made only of feed gaps has no
+    reason to report and gives (None, None).
+    """
+    if here < window:
+        return None, SKIP_SHORT_HISTORY
+    window_range, baseline_range = _window_and_baseline(here, window, baseline)
+    window_live = [p for p in window_range if not gap[p]]
+    baseline_live = [p for p in baseline_range if not gap[p]]
+    if not window_live or not baseline_live:
+        return None, None
+    baseline_events = int(per_position[baseline_live].sum())
+    if baseline_events == 0:
+        return None, SKIP_NO_BASELINE_EVENTS
+    expected = baseline_events / len(baseline_live) * len(window_live)
+    return (int(per_position[window_live].sum()) - expected) / float(np.sqrt(expected)), None
+
+
 def event_rate_shift(
     events: pd.DataFrame,
     subject: str,
@@ -93,25 +127,16 @@ def event_rate_shift(
     session, or when the baseline holds no event.
     """
     here = _position_of(session, sessions)
-    if here + 1 < window:
+    z, _ = _rate_z(
+        _event_counts(events, subject, sessions),
+        here,
+        window,
+        baseline,
+        _gap_positions(coverage, sessions),
+    )
+    if z is None or z <= threshold:
         return None
-    window_range, baseline_range = _window_and_baseline(here, window, baseline)
-    gap = _gap_positions(coverage, sessions)
-    window_live = [p for p in window_range if not gap[p]]
-    baseline_live = [p for p in baseline_range if not gap[p]]
-    if not window_live or not baseline_live:
-        return None
-    mine = events.loc[events["subject"] == subject, "session"]
-    positions = sessions.get_indexer(pd.DatetimeIndex(mine))
-    per_position = np.bincount(positions[positions >= 0], minlength=len(sessions))
-    baseline_events = int(per_position[baseline_live].sum())
-    if baseline_events == 0:
-        return None
-    expected = baseline_events / len(baseline_live) * len(window_live)
-    z = (int(per_position[window_live].sum()) - expected) / np.sqrt(expected)
-    if z <= threshold:
-        return None
-    return _shift(ShiftKind.event_rate, subject, session, float(z), threshold, window, recorded_utc)
+    return _shift(ShiftKind.event_rate, subject, session, z, threshold, window, recorded_utc)
 
 
 def direction_drift(
@@ -129,10 +154,12 @@ def direction_drift(
 
     `claims` is the `claims_asof` frame at the session's cutoff, so the sums are recomputed from
     what was visible then and a backfill agrees with a live run. The sequence is ordered by
-    `valid_from_utc` then `claim_id` and mapped positive +1, neutral 0, negative -1;
-    `S+ = max(0, S+ + x - k)` and `S- = max(0, S- - x - k)` start at zero. `statistic` is the
-    larger sum, negative when it is `S-`; `window_sessions` is the sessions from the first claim
-    in the sequence to `session`, inclusive.
+    `valid_from_utc` then `claim_id` and mapped positive +1, neutral 0, negative -1. The CUSUM
+    runs on each value's deviation from the mean of the values before it (the first deviation is
+    0), so a steady direction never fires and a flip does: `S+ = max(0, S+ + d - k)` and
+    `S- = max(0, S- - d - k)` start at zero. `statistic` is the larger sum, negative when it is
+    `S-`; `window_sessions` is the sessions from the first claim in the sequence to `session`,
+    inclusive.
     """
     here = _position_of(session, sessions)
     mine = claims[(claims["subject"] == subject) & (claims["attribute"] == "event_direction")]
@@ -141,13 +168,15 @@ def direction_drift(
     ordered = mine.assign(_valid_from=pd.to_datetime(mine["valid_from_utc"], utc=True)).sort_values(
         ["_valid_from", "claim_id"], kind="stable"
     )
-    upper = lower = 0.0
-    for value in ordered["value"]:
+    upper = lower = earlier_total = 0.0
+    for count, value in enumerate(ordered["value"]):
         if value not in _DIRECTION_STEP:
             raise ValueError(f"event_direction claim for {subject!r} has unknown value {value!r}")
         step = _DIRECTION_STEP[value]
-        upper = max(0.0, upper + step - k)
-        lower = max(0.0, lower - step - k)
+        deviation = step - earlier_total / count if count else 0.0
+        upper = max(0.0, upper + deviation - k)
+        lower = max(0.0, lower - deviation - k)
+        earlier_total += step
     if max(upper, lower) <= h:
         return None
     first = ordered["_valid_from"].iloc[0].tz_convert("UTC").tz_localize(None).normalize()
@@ -196,11 +225,17 @@ def link_churn(
 
 @dataclass(frozen=True)
 class ShiftReport:
-    """What one shift run saw and set aside, so no silence is mistaken for a clean session."""
+    """What one shift run saw and set aside, so no silence is mistaken for a clean session.
+
+    `skipped` maps each reason in `SKIP_REASONS` to a count: `no_link_store` and `short_history`
+    count detectors not run (one each; the rate test and link churn can each lack history), and
+    `no_baseline_events` counts subjects whose baseline held no event, so no rate was tested.
+    """
 
     by_kind: dict[str, int]
     subjects_checked: int
     feed_gap_sessions_excluded: int
+    skipped: dict[str, int]
 
 
 def _events_frame(stores: DreamStores, cutoffs: pd.Series) -> pd.DataFrame:
@@ -236,7 +271,8 @@ def run_shift_detectors(
     Sessions with no documents are feed gaps and leave the rate windows. Subjects are the
     instruments with an event in the baseline and window, the instruments with an
     `event_direction` claim, and every node of the link graph now or `baseline` sessions ago;
-    churn is skipped without a link store or when fewer than `baseline` sessions precede. A shift
+    churn is skipped without a link store or when fewer than `baseline` sessions precede, and the
+    rate test when fewer than `window` sessions precede; `ShiftReport.skipped` counts each. A shift
     whose id already has a stored record, recorded by this cutoff, is returned only when its
     statistic grew by more than `shift_rereport_growth` of the stored one; the caller then uses
     `ShiftStore.refire`.
@@ -251,7 +287,10 @@ def run_shift_detectors(
     coverage = documents_per_session(stores.event_records, cutoffs)
     window_range, baseline_range = _window_and_baseline(here, window, baseline)
     gaps = _gap_positions(coverage, sessions)
-    enough_history = here + 1 >= window
+    skipped = dict.fromkeys(SKIP_REASONS, 0)
+    enough_history = here >= window
+    if not enough_history:
+        skipped[SKIP_SHORT_HISTORY] += 1
     excluded = sum(bool(gaps[p]) for p in (*baseline_range, *window_range)) if enough_history else 0
 
     events = _events_frame(stores, cutoffs)
@@ -262,19 +301,21 @@ def run_shift_detectors(
 
     found: list[Shift] = []
     for subject in rate_subjects:
-        shift = event_rate_shift(
-            events,
-            subject,
-            session,
-            sessions,
-            window,
-            baseline,
-            rate["z_threshold"],
-            coverage=coverage,
-            recorded_utc=recorded,
-        )
-        if shift is not None:
-            found.append(shift)
+        z, reason = _rate_z(_event_counts(events, subject, sessions), here, window, baseline, gaps)
+        if reason is not None:
+            skipped[reason] += 1
+        elif z is not None and z > rate["z_threshold"]:
+            found.append(
+                _shift(
+                    ShiftKind.event_rate,
+                    subject,
+                    session,
+                    z,
+                    rate["z_threshold"],
+                    window,
+                    recorded,
+                )
+            )
     for subject in drift_subjects:
         shift = direction_drift(
             claims, subject, session, sessions, drift["k"], drift["h"], recorded_utc=recorded
@@ -283,7 +324,11 @@ def run_shift_detectors(
             found.append(shift)
 
     churn_subjects: list[str] = []
-    if stores.link_store is not None and here >= baseline:
+    if stores.link_store is None:
+        skipped[SKIP_NO_LINK_STORE] += 1
+    elif here < baseline:
+        skipped[SKIP_SHORT_HISTORY] += 1
+    else:
         graph_now = graph_asof(stores.link_store, cutoff)
         graph_then = graph_asof(stores.link_store, cutoffs.iloc[here - baseline])
         nodes = pd.concat(
@@ -314,5 +359,8 @@ def run_shift_detectors(
     by_kind = {kind.value: sum(s.kind is kind for s in reported) for kind in ShiftKind}
     subjects = set(rate_subjects) | set(drift_subjects) | set(churn_subjects)
     return reported, ShiftReport(
-        by_kind=by_kind, subjects_checked=len(subjects), feed_gap_sessions_excluded=excluded
+        by_kind=by_kind,
+        subjects_checked=len(subjects),
+        feed_gap_sessions_excluded=excluded,
+        skipped=skipped,
     )
