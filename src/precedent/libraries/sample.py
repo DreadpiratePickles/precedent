@@ -18,21 +18,21 @@ from typing import Literal
 
 import pandas as pd
 
-from precedent.libraries.build import _CITATIONS, _EVENT_SOURCES
 from precedent.libraries.bundle import PLACEBO_COLUMNS, LibraryBundle, load_bundle, write_bundle
 from precedent.libraries.common import empty_library_rows
 from precedent.libraries.manifest import Manifest, ManifestSource
 from precedent.libraries.market_resolution import MARKETS_FRAME_COLUMNS
+from precedent.libraries.sources import CITATIONS, EVENT_SOURCES
 from precedent.spine.market_store import VENUES
 
 __all__ = ["GDELT_CITATION", "MAX_SAMPLE_BYTES", "SampleTooLargeError", "build_sample"]
 
-GDELT_CITATION = _CITATIONS["gdelt2"]
+GDELT_CITATION = CITATIONS["gdelt2"]
 MAX_SAMPLE_BYTES = 2_000_000
 _EVIDENCE_LABELS = ("LIVE", "SYNTHETIC")
 _LIBRARY_DIR = "library"
 _README = "README.md"
-_EVENT_SOURCE_OF = dict(_EVENT_SOURCES)
+_EVENT_SOURCE_OF = dict(EVENT_SOURCES)
 
 
 class SampleTooLargeError(ValueError):

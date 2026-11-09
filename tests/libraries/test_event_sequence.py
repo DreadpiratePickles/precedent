@@ -1,3 +1,4 @@
+import pandas as pd
 import pytest
 from library_synthetic import SESSIONS, table
 
@@ -100,3 +101,39 @@ def test_unconditional_rate_counts_countries_from_any_row_and_ignores_later_repo
     groups = {"MLI": "EM", "NER": "EM"}
     # two countries x 8 starts; only MLI has a first-report hit at s = 3, 4
     assert unconditional_sequence_rate(events, "trade_or_sanctions", "EM", 2, 9, groups) == pytest.approx(2 / 16)
+
+
+def test_windows_past_the_feed_end_are_skipped_and_counted_not_zero():
+    """P-45 (V-1): the padded calendar must not make windows past the last feed session look complete."""
+    sessions = pd.DatetimeIndex(pd.bdate_range("2021-01-04", periods=200))
+    feed_end = int(sessions.get_loc(pd.Timestamp("2021-06-30")))
+    events = table([("last", "armed_conflict", ["USA"], feed_end)])
+    rows, report = build_event_sequence_library(
+        events, sessions, ("trade_or_sanctions",), (5, 20, 60), feed_end_position=feed_end
+    )
+    assert rows.empty and report.rows == 0 and report.skipped_incomplete_window == 3
+
+
+def test_the_feed_end_defaults_to_the_last_session():
+    events = table([("p", "armed_conflict", ["MLI"], len(SESSIONS) - 30)])
+    rows, report = build_event_sequence_library(events, SESSIONS, TYPES, (5, 20))
+    assert len(rows) == 4 and report.skipped_incomplete_window == 0
+
+
+def test_the_ordinary_range_is_truncation_invariant():
+    """P-44 (I2): an event after the query time must not change the base rate."""
+    groups = {"FRA": "DM", "DEU": "DM"}
+    past = table([
+        ("a", "trade_or_sanctions", ["FRA"], 2),
+        ("b", "trade_or_sanctions", ["FRA"], 4),
+        ("c", "trade_or_sanctions", ["FRA"], 9),
+    ])
+    with_future = table([
+        ("a", "trade_or_sanctions", ["FRA"], 2),
+        ("b", "trade_or_sanctions", ["FRA"], 4),
+        ("c", "trade_or_sanctions", ["FRA"], 9),
+        ("z", "trade_or_sanctions", ["DEU"], 200),
+    ])
+    before = unconditional_sequence_rate(past, "trade_or_sanctions", "DM", 5, 20, groups)
+    after = unconditional_sequence_rate(with_future, "trade_or_sanctions", "DM", 5, 20, groups)
+    assert before is not None and after == before

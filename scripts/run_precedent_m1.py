@@ -5,8 +5,10 @@
 Loads the bundle under `<data dir>/library` and holds out the events whose effective session
 falls within the last `--holdout-days` days before the library's last session. Every event
 still serves as a precedent through the time guard; only hold-out events are scored. B0 and B1
-are scored for every outcome type present, at each of its horizons. Writes `report.md` and
-`results.json` under `<out-root>/<run-id>/`. Exit 0 on success, 2 when there is no library.
+are scored for every outcome type present, at each of its horizons, on paired units only: a unit
+either rung refuses is scored by neither, and refusals are reported per rung (P-46).
+Writes `report.md` and `results.json` under `<out-root>/<run-id>/`. Exit 0 on success, 2 when
+there is no library.
 
 This script reads local files only; it fetches nothing and calls no model.
 """

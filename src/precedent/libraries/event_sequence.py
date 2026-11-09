@@ -44,18 +44,22 @@ def build_event_sequence_library(
     sessions: pd.DatetimeIndex,
     event_types: tuple[str, ...],
     horizons: tuple[int, ...] = (5, 20, 60),
+    feed_end_position: int | None = None,
 ) -> tuple[pd.DataFrame, SequenceLibraryReport]:
     """One binary row per first report, event type and horizon.
 
     For a first report `e` at position `p` with actor country `c = e.linked_countries[0]`,
     `value` is 1.0 when a first report of the type, from another story, linked to `c`, has
     `effective_position` in `p + 1 .. p + h`, else 0.0. `h` is counted from `p` itself (no
-    trade-open shift). A triple with `p + h` past the last session is skipped and counted in
+    trade-open shift). A triple with `p + h` past `feed_end_position` (the last session the
+    feed covers; default the last session of `sessions`, which a padded calendar overstates,
+    P-45) is skipped and counted in
     `skipped_incomplete_window`; a first report without a linked country is counted once in
     `skipped_no_country`. No rows gives `empty_library_rows()`.
     """
     if any(horizon < 1 for horizon in horizons):
         raise ValueError(f"horizons must be positive session counts, got {horizons}")
+    last_covered = len(sessions) - 1 if feed_end_position is None else feed_end_position
     index = _first_reports_by_type_and_country(events, set(event_types))
     records: list[dict[str, object]] = []
     skipped_incomplete = 0
@@ -70,7 +74,7 @@ def build_event_sequence_library(
         for event_type in event_types:
             later = index.get((event_type, country))
             for horizon in horizons:
-                if position + horizon >= len(sessions):
+                if position + horizon > last_covered:
                     skipped_incomplete += 1
                     continue
                 records.append(
@@ -107,7 +111,8 @@ def unconditional_sequence_rate(
     """The base rate of a follow-on of `event_type` for a country of `country_group`.
 
     The countries are those in `country_groups` with this group that appear in any row's
-    `linked_countries`. Over each such country and each start `s` in `0 .. end_position -
+    `linked_countries` of an event at `effective_position <= end_position` (later events are
+    not yet known, P-44). Over each such country and each start `s` in `0 .. end_position -
     horizon`, a hit is a first report of `event_type` linked to the country at a position in
     `s + 1 .. s + horizon`. Returns hits / (countries x starts); `None` when the group has no
     such country or `end_position < horizon`.
@@ -116,6 +121,7 @@ def unconditional_sequence_rate(
         raise ValueError(f"horizon must be a positive session count, got {horizon}")
     if end_position - horizon < 0:
         return None
+    events = events.loc[events["effective_position"] <= end_position]  # P-44: known by then
     countries = sorted(
         {
             country
