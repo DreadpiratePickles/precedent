@@ -22,13 +22,22 @@ from precedent.mechanism.simulate import DEFAULT_QUANTILES, Intervention, fan, s
 DISCLAIMER = "A fitted model of past co-movement under an assumed structure, not a forecast."
 TEMPLATE_PATH = Path(__file__).with_name("cockpit_template.html")
 _LOW, _MEDIAN, _HIGH = "0.1", "0.5", "0.9"
+DIAGONAL_LINE = (
+    "residual covariance is not positive definite: the fan uses its diagonal, so cross-asset "
+    "correlation is dropped (each row's own fan is unaffected)"
+)
 _NO_AGREEMENT = "n/a"
 _DISAGREE = "no (median outside the other's band)"
-_ASSET_WIDTH, _WINDOW_WIDTH, _MECHANISM_WIDTH, _PRECEDENT_WIDTH = 8, 9, 30, 27
+_ASSET_WIDTH, _WINDOW_WIDTH, _MECHANISM_WIDTH, _PRECEDENT_WIDTH = 8, 9, 30, 34
 
 
 class BandRow(BaseModel):
-    """Precedent's p10/median/p90 for one asset and window, with its sample sizes."""
+    """Precedent's p10/median/p90 for one asset and window, with its sample sizes.
+
+    `basis` is `abnormal_return` for every asset but the market: the library has no market
+    row, so the market's band is computed from its own cumulative return (raw), while all
+    other bands and every fitted equation are abnormal returns against the market model.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -40,6 +49,7 @@ class BandRow(BaseModel):
     n: int
     n_eff: float
     refused: bool
+    basis: Literal["abnormal_return", "raw_return"] = "abnormal_return"
 
 
 class InterventionRow(BaseModel):
@@ -53,7 +63,16 @@ class MechanismResult(BaseModel):
     """Everything one mechanism run reports; the three outputs are views of this value.
 
     `fitted` is `FittedSEM.to_json_dict()` and `rollout_fan` maps asset -> quantile (as the
-    string `fan()` columns print, e.g. "0.1") -> simulated value.
+    string `fan()` columns print, e.g. "0.1") -> simulated value, one entry per row that
+    survived the band gate. `no_data_assets` and `refused_assets` name the suppressed rows
+    (ruling I-2, the addendum of `docs/verification/mechanism-2026-11-08.md`): assets with
+    zero observations, and assets whose exact-key band is refused. Suppressed assets are
+    simulated like every other node — dropping them when the fan is read out keeps the
+    counter-based PRNG draws identical — and the text and the page print the reason ("no
+    data", "band refused: n_eff=X < min_neff=Y") instead of a fan. `min_neff` is the
+    threshold the rows were gated on (the engine's, from `references/precedent_params.json`).
+    `precedent[].basis` marks the market row's band as computed on raw market returns (see
+    `BandRow`).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -64,11 +83,21 @@ class MechanismResult(BaseModel):
     interventions: list[InterventionRow]
     rollout_fan: dict[str, dict[str, float]]
     precedent: list[BandRow]
+    no_data_assets: list[str] = []
+    refused_assets: list[str] = []
+    # the engine's value, required: the CLI passes load_engine_params().min_neff and there is
+    # no default, so a result can only carry the parameter the engine was configured with
+    min_neff: float
     seed: int
     n_paths: int
     asof_utc: AwareDatetime
     unreachable_interventions: list[str]
     diagonal_fallback: bool
+    # the lower Cholesky factor of fitted.residual_cov, or its clamped diagonal when
+    # diagonal_fallback: computed once by simulate() and embedded so the page never factorises
+    residual_factor: list[list[float]] = []
+    # event and intermediate node -> (p5, p95) of the fitted panel, the sliders' range
+    slider_ranges: dict[str, tuple[float, float]] = {}
     code_commit: str | None
     disclaimer: Literal[DISCLAIMER] = DISCLAIMER
 
@@ -89,14 +118,26 @@ def build_result(
     event_values: dict[str, float],
     interventions: tuple[Intervention, ...],
     precedent: list[BandRow],
+    no_data_assets: tuple[str, ...] = (),
+    refused_assets: tuple[str, ...] = (),
+    min_neff: float,
     seed: int,
     n_paths: int,
     asof_utc: Any,
     code_commit: str | None,
 ) -> MechanismResult:
-    """Simulate the fitted graph and bundle the fan with its inputs."""
+    """Simulate the fitted graph and bundle the fan with its inputs.
+
+    The simulation always covers every graph asset — dropping `no_data_assets` and
+    `refused_assets` only when the fan is read out keeps the counter-based PRNG draws
+    identical for the rows that survived, in Python and in the page's JavaScript twin.
+    """
     rollout = simulate(fitted, graph, event_values, interventions, n_paths=n_paths, seed=seed)
     table = fan(rollout, DEFAULT_QUANTILES)
+    suppressed = set(no_data_assets) | set(refused_assets)
+    unknown = suppressed - set(rollout.assets)
+    if unknown:
+        raise ValueError(f"suppressed assets are not asset nodes with a fan: {sorted(unknown)}")
     return MechanismResult(
         graph=graph,
         fitted=fitted.to_json_dict(),
@@ -105,13 +146,19 @@ def build_result(
         rollout_fan={
             asset: {str(q): float(table.loc[asset, q]) for q in DEFAULT_QUANTILES}
             for asset in rollout.assets
+            if asset not in suppressed
         },
         precedent=precedent,
+        no_data_assets=[asset for asset in rollout.assets if asset in no_data_assets],
+        refused_assets=[asset for asset in rollout.assets if asset in refused_assets],
+        min_neff=min_neff,
         seed=seed,
         n_paths=n_paths,
         asof_utc=asof_utc,
         unreachable_interventions=list(rollout.unreachable_interventions),
         diagonal_fallback=rollout.diagonal_fallback,
+        residual_factor=rollout.factor.tolist(),
+        slider_ranges=dict(fitted.node_ranges),
         code_commit=code_commit,
     )
 
@@ -145,7 +192,19 @@ def _precedent_cell(band: BandRow | None) -> str:
     if band.refused or None in (band.p10, band.median, band.p90):
         return f"refused: n_eff={band.n_eff:.1f}"
     assert band.p10 is not None and band.median is not None and band.p90 is not None
-    return _triple(band.p10, band.median, band.p90)
+    cell = _triple(band.p10, band.median, band.p90)
+    return cell + " (raw)" if band.basis == "raw_return" else cell
+
+
+def _suppressed_reason(
+    asset: str, result: MechanismResult, band: BandRow | None
+) -> str | None:
+    """Why a row shows no fan: "no data" (zero observations) or its refused band's numbers."""
+    if asset in result.no_data_assets:
+        return "no data"
+    if band is not None and band.refused:
+        return f"band refused: n_eff={band.n_eff:.1f} < min_neff={result.min_neff:.1f}"
+    return None
 
 
 def _row(asset: str, result: MechanismResult, band: BandRow | None) -> str:
@@ -159,6 +218,11 @@ def _row(asset: str, result: MechanismResult, band: BandRow | None) -> str:
     )
 
 
+def _reason_row(asset: str, result: MechanismResult, reason: str) -> str:
+    window = result.fitted["horizon"]
+    return f"{asset:<{_ASSET_WIDTH}}{window:<{_WINDOW_WIDTH}}{reason}"
+
+
 def _disagreement_line(result: MechanismResult) -> str:
     template_signs = {(e.source, e.target): e.sign for e in result.graph.edges}
     fitted = result.fitted
@@ -170,23 +234,54 @@ def _disagreement_line(result: MechanismResult) -> str:
     return "edges the data disagrees with: " + ("; ".join(parts) if parts else "none")
 
 
+def disclosure_lines(result: MechanismResult) -> list[str]:
+    """Lines naming what the fit could not determine: the underdetermined equations (node ids)
+    and, when it happened, the fall-back of the residual covariance to its diagonal. The page
+    prints the same lines (`mechanismDisclosures` in the template; a test pins the parity)."""
+    lines = []
+    if result.fitted["underdetermined"]:
+        lines.append("underdetermined equations: " + ", ".join(result.fitted["underdetermined"]))
+    if result.diagonal_fallback:
+        lines.append(DIAGONAL_LINE)
+    return lines
+
+
 def render_text(result: MechanismResult) -> str:
-    """The plain-text block: header, one row per asset, disagreeing edges, disclaimer last."""
+    """The plain-text block: header, one row per graph asset, disagreeing edges, disclaimer.
+
+    A row shows its fan only when the asset has observations and its Precedent band is not
+    refused; a suppressed row prints the reason instead ("no data", or the refused band's
+    `n_eff` against `min_neff`) — never a fabricated fan. The market row, whose band and fan
+    are raw cumulative returns, is labelled `(raw)` and explained once.
+    """
     fitted = result.fitted
     bands = {(b.asset, b.horizon): b for b in result.precedent}
     lines = [
         f"mechanism      {fitted['graph_version']} for {result.graph.event_key.event_type}, "
         f"fitted on {fitted['n_obs']} precedents as of "
         f"{result.asof_utc.astimezone(UTC):%Y-%m-%d}; "
-        f"{len(fitted['underdetermined'])} equations underdetermined",
+        f"{len(fitted['underdetermined'])} nodes uninformative "
+        "(own fit failed, or an unidentified latent upstream)",
         f"{'asset':<{_ASSET_WIDTH}}{'window':<{_WINDOW_WIDTH}}"
         f"{'mechanism p10/median/p90':<{_MECHANISM_WIDTH}}"
         f"{'precedent p10/median/p90':<{_PRECEDENT_WIDTH}}agree?",
     ]
-    lines += [
-        _row(asset, result, bands.get((asset, fitted["horizon"]))) for asset in fitted["assets"]
-    ]
+    for asset in fitted["assets"]:
+        band = bands.get((asset, fitted["horizon"]))
+        reason = _suppressed_reason(asset, result, band)
+        lines.append(
+            _reason_row(asset, result, reason)
+            if reason is not None
+            else _row(asset, result, band)
+        )
+    raw = sorted(b.asset for b in result.precedent if b.basis == "raw_return")
+    if raw:
+        lines.append(
+            f"{', '.join(raw)}: the market's own cumulative return (raw), not an abnormal "
+            "return; every other row is abnormal against the market model."
+        )
     lines.append(_disagreement_line(result))
+    lines += disclosure_lines(result)
     lines += [
         f"intervention on {node} reaches no asset; the fan equals the no-intervention fan."
         for node in result.unreachable_interventions
@@ -210,5 +305,18 @@ def render_html(result: MechanismResult) -> str:
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
     title = f"Mechanism cockpit — {result.graph.event_key.event_type} — {DISCLAIMER}"
     payload = _json_for_script_tag(result.model_dump_json())
-    values = {"TITLE": html.escape(title), "PAYLOAD_JSON": payload}
-    return re.sub(r"\{\{(TITLE|PAYLOAD_JSON)\}\}", lambda match: values[match[1]], template)
+    raw = sorted({band.asset for band in result.precedent if band.basis == "raw_return"})
+    raw_note = (
+        f"{', '.join(raw)}: the market's own cumulative return (raw), not an abnormal "
+        "return; every other row is abnormal against the market model."
+        if raw
+        else ""
+    )
+    values = {
+        "TITLE": html.escape(title),
+        "PAYLOAD_JSON": payload,
+        "RAW_NOTE": html.escape(raw_note),
+    }
+    return re.sub(
+        r"\{\{(TITLE|PAYLOAD_JSON|RAW_NOTE)\}\}", lambda match: values[match[1]], template
+    )

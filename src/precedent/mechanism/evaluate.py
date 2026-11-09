@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from precedent.engine.aggregate import summarize_responses
+from precedent.engine.aggregate import effective_sample_size, summarize_responses
 from precedent.engine.evaluate import pinball_loss, score_precedent_ladder
 from precedent.engine.keys import EventKey
 from precedent.engine.params import load_engine_params
@@ -252,7 +252,10 @@ def _forecast(
     min_neff: float,
 ) -> tuple[pd.DataFrame, frozenset[str]] | None:
     """The graph's per-asset fan for the event and its underdetermined assets, or None when
-    the graph is absent, no precedent passed the guard, or fewer than `min_neff` events did."""
+    the graph is absent, no precedent passed the guard, or fewer than `min_neff` effective
+    precedents did — the same refusal the command applies, so a ladder score and the command
+    never disagree on whether a query is thin. `min_neff` is the engine's, from
+    `references/precedent_params.json` via `load_engine_params`."""
     if graph is None:
         return None
     query = mechanism_query(key, event["available_utc"], event["story_cluster_id"])
@@ -271,7 +274,13 @@ def _forecast(
         )
     except NoPrecedentError:
         return None
-    if panel.n_obs < min_neff:
+    positions = events.set_index("event_id")["effective_position"]
+    n_eff = effective_sample_size(
+        np.ones(panel.n_obs),
+        positions.loc[panel.event_values.index].to_numpy("int64"),
+        horizon,
+    )
+    if n_eff < min_neff:
         return None
     fitted = fit_sem(graph, panel)
     values = {node: float(v) for node, v in event_values_of(key, graph.event_node_ids).items()}
@@ -359,11 +368,14 @@ def score_mechanism_ladder(
     For each event the graph is fitted on the guarded panel of `mechanism_query` (direction-free)
     and rolled out with the event's own key values; the forecast of an asset is the fan's
     quantile of its node. A unit is refused when the graph is None, the asset is not in the
-    graph, no precedent passed the guard, or fewer than `min_neff` events did. Output columns
+    graph, no precedent passed the guard, or fewer than `min_neff` effective precedents did
+    (`effective_sample_size`, as the command refuses). Output columns
     are `OUTPUT_COLUMNS`, one row per `(rung, event_type, quantile)` sorted on those keys;
     `coverage_80` is the share of realised values inside the rung's own [q0.1, q0.9]; and
-    `n_underdetermined` counts scored units whose asset equation had too little data to fit
-    (always 0 for P-B1). Quantiles must be among the engine's `QUANTILE_LEVELS`.
+    `n_underdetermined` counts scored units whose asset is uninformative: its own equation
+    had too little data to fit, or an unidentified latent sits upstream of it and the fit
+    ran against a zero score (always 0 for P-B1). Quantiles must be among the engine's
+    `QUANTILE_LEVELS`.
     """
     if PRECEDENT_RUNG in graphs_by_rung:
         raise ValueError(

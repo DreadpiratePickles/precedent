@@ -14,6 +14,7 @@ Score the mechanism's forecasts against the ablation ladder and against Preceden
 ## Process
 1. Deterministic: run the mechanism and each ladder rung over the same purged folds.
 2. Deterministic: compare against Precedent per event key and in total, with the leak checks the spine uses.
+   Reading note: on the central_bank template M-P equals M-T by construction (every template latent has one parent, and degree-preserving swaps keep the reached set), so M-T versus M-P ranks nothing and any M-T gain over P-B1 measures pooling plus a slope, not structure. What M-P should be (M6) is an open owner decision.
 3. Deterministic: write the comparison table with its label; the held-out period is read once.
 
 ## Outputs

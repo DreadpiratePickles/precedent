@@ -110,3 +110,136 @@ Counts: see the last line of this file.
 - Precedent's own engine code (retrieval, aggregation, asset library) beyond what the Mechanism tests exercise.
 
 Counts: PASS 22, FAIL 3, BLOCKED 4 (29 requirement rows; Review Focus: PASS 4, BLOCKED 1).
+
+
+## Addendum 2026-11-08 — fix-wave ruling I-2 (implementation record)
+
+Source: "Opus final review, Mechanism hand-over note I-2; implemented by Kimi". This addendum
+records how finding V-1 (above) was resolved; it is not an owner ruling. The owner-rulings
+file stays owner-only.
+
+V-1 as first worded in the Opus review would over-refuse. Ruling I-2 (hand-over note,
+`predate-git/.superpowers/handoff-2026-11-08/notes/mechanism-handover-2026-11-08.md`): refuse
+per asset row instead. Implemented on `kimi/mechanism-fix-wave`:
+
+- A row survives only if its Precedent band is not refused (exact-key precedent exists,
+  `n_eff >= min_neff`) and the asset has observations. `min_neff` is the engine's, from
+  `references/precedent_params.json` via `load_engine_params`.
+- A non-surviving row shows no fan. It prints the reason — "no data" (zero observations), or
+  "band refused: n_eff=X < min_neff=Y" — in the text output and on the page, and the JSON
+  lists the assets: `no_data_assets` and `refused_assets`.
+- Exit 2 only when no row survives, with two distinct messages: every asset with data has a
+  refused band (`MechanismRefused`, band=True), or every asset lacks rows (`NoDataAssets`).
+  In particular, with no exact-key precedent at all every row is refused, so the command
+  still exits 2 — consistent with this ruling.
+- Suppressed assets are still simulated (simulate-then-drop), so the counter-based PRNG
+  draws stay identical for the surviving rows; the page's JavaScript twin suppresses the same
+  rows and a node test pins the parity.
+- The market row's band and fan are its own cumulative return, labelled `(raw)`; the JSON
+  band rows carry `basis` (`abnormal_return` by default, `raw_return` for the market).
+
+A mixed panel (one thin asset among good ones) succeeds: good rows show fans, the thin row
+prints the refusal with no fan and no fabricated "+0.0%".
+
+
+## Addendum 2026-11-08 — scoped re-review of the fix wave and re-run of the FAIL and BLOCKED rows (at 28d78a6)
+
+Run by an independent Sonnet reviewer and verifier for the supervising session; it wrote none of the fixes. Probe scripts were kept outside the repository and are not committed.
+
+
+### Review and verification: mechanism fix wave, 44c3eba..28d78a6
+
+Checkout: scratchpad/wt-mech, detached at 28d78a6. I wrote none of this code. Reverts were done by script (review-work-mech2/exp.py), each restored with `git checkout -- <file>`. `git status --porcelain` is empty at the end. No network, no model call, no data download, no commit.
+
+### Part 1. Per-item table
+
+"Revert" = I removed the fix hunk in wt-mech and ran the named test (no `-x`); "fails" means the named test went red for the right reason. H = template `src/precedent/mechanism/cockpit_template.html`.
+
+| Item | Requirement (quoted) | Code | Pinning test | Fails when reverted? | Verdict |
+|---|---|---|---|---|---|
+| V-10 pin | ladder "refuses on n_eff (effective_sample_size) like the CLI, not raw n_obs" | evaluate.py:277-284 (`n_eff < min_neff`) | test_ladder.py::test_the_ladder_guard_refuses_on_the_effective_size_not_the_raw_count | Yes. `if panel.n_obs < min_neff` makes it FAIL (1 failed, 16 passed). The test asserts `n_obs >= min_neff` and `n_eff < min_neff` first, so it is not vacuous | fixed |
+| M-5 pin | "Use `event_values_of` everywhere"; the earlier review found the test vacuous | cli.py:195-207 `_event_values` -> panel.event_values_of | test_cockpit_cli.py::test_event_values_follow_the_panel_encoding_for_every_key_field (graph with severity_band and is_scheduled event nodes, all 3x2 key values) | Yes. A private map with high=5.0 FAILS. The earlier vacuity is closed | fixed |
+| raw label (page) | "(raw)" label unpinned | H `mechanismFanRows` (` (raw)` on name and Precedent cell); cockpit.py `render_html` RAW_NOTE | test_cockpit.py::test_the_market_row_is_labelled_raw_on_the_page; test_cockpit_page.py::test_page_market_row_stays_labelled_raw_beside_its_band (runs the page under node) | Yes. Removing both ` (raw)` literals fails both tests; blanking RAW_NOTE fails the first | fixed. Note: the first test checks only that the substring ` (raw)` exists in the template file; the node test is the real pin |
+| min_neff default | "no hard-coded min_neff"; must come from engine params | cockpit.py:90 `min_neff: float`, :123 required keyword; cli.py:277,431 `params.min_neff`; evaluate.py:205,400 | structural: every construction in tests passes `load_engine_params().min_neff` | Omitting it is a `TypeError` (field and keyword have no default). `grep -n "8\.0" src/precedent/mechanism/*.py`: none. Only literal left is the test fixture value 3.2 / 8.0 text in a hand-built row | fixed |
+| docstring | stale pointer to owner-rulings file | test_cockpit_cli.py:275-277 now names the addendum of docs/verification/mechanism-2026-11-08.md | n/a (docstring) | n/a | fixed |
+| V4 | "a test pinning that only config-named typers/extractors reach a model from mechanism (grep test)" | cli.py:41 is the only `precedent.spine.typers` import | test_model_seam.py (3 tests, incl. a self-test of the scanner) | Yes. `import requests` in panel.py fails test_no_network...; `from precedent.spine.typers.anthropic import AnthropicTyper` fails test_the_only_model_seam | fixed; scanner has gaps, see N-1 |
+| V5 | "a mechanism test of own-story exclusion" | panel.py:80-84 `story_cluster_id` into PrecedentQuery | test_panel.py::test_query_story_excludes_that_story_from_the_fit_panel (also asserts the event IS in the panel without the story id) | Yes (`story_cluster_id=None` makes it FAIL) | fixed |
+| V12 | stale STATUS rows 3a and 7a refreshed; plan line 231 edit noted | docs/STATUS.md rows 3a, 7a | none (docs) | n/a | fixed. The 7a row still says "At the time ... `not built yet`; superseded by 7b", accurate |
+| V13 | "stage 40 Loop names the oracle protection mechanism ... still marked proposed" | stages/40_mechanism_graphs/CONTEXT.md Oracle protection | none (docs); workspace-contract test still green | n/a | fixed. The claim "neither the gold set, the pin file nor the test exists" is true: `references/gold` holds only `typing_cases.json`, no hash-pin file |
+| I-1 wording | "M-P equals M-T by construction (a theorem)" fixed in the rung comment, STATUS 5b row and stage 42 | m4_mechanism_placebo.yaml:3-6; STATUS 5b; stage 42 Process step 2 note | test_ladder.py::test_on_the_central_bank_template_the_placebo_forecasts_like_the_template (characterisation, unchanged) | n/a (wording) | fixed. I reproduced the premise: all 8 templates have latents with exactly one parent (lat.py); 40 seeds x 6 templates give the same reached asset set and a real rewiring (reach.py); earnings and macro_data_release raise PlaceboError (no placebo at all) |
+| M-8 | "stage 41 CONTEXT:12 still names params.json as authoritative for the asset panel" | stages/41_mechanism_fit/CONTEXT.md:12-13 now names `references/precedent_params.json` via `load_engine_params` and limits params.json to `n_paths` | existing test_mechanism_asset_panel_cannot_drift_from_the_engine_panel | n/a (docs) | fixed. params.json still has an `asset_panel` key (stated as a placeholder) |
+| M-10 | "ledger figure is stale ... M-T 0.00260 vs P-B1 0.00271, coverage_80 0.74 vs 0.64" | STATUS 5b row: M-T 0.00260, P-B1 0.00271, coverage 0.73 / 0.64 | none | n/a | REPRODUCED (m10.py, `ladder` helper over `make_world()`, h=5, 500 paths): pinball {M-T 0.002599, M-P 0.002599, P-B1 0.002712}; coverage_80 {0.727, 0.727, 0.636}. The row's 0.73 is right; the handover's 0.74 was a rounding of an older run |
+| V2 | "the HTML page shows Precedent's p10/median/p90 and both sample sizes per asset, like the text" | H `mechanismFanRows`, `drawFans`; cockpit_template grid columns | test_cockpit_page.py::test_page_rows_show_precedent_p10_median_p90_and_both_sample_sizes, ::test_page_suppressed_rows_keep_their_reason_and_no_fan, ::test_page_market_row_stays_labelled_raw_beside_its_band | Yes. Precedent cell -> "n/a": FAIL; sizes -> "": FAIL; removing the refused reason: FAIL | fixed. I-2 per-row refusal still correct on the page: see below |
+| V6 | "text names the underdetermined equations and prints a line when the covariance fell back to the diagonal" (text and page) | cockpit.py `disclosure_lines`, DIAGONAL_LINE; H `mechanismDisclosures` | test_cockpit_page.py::test_text_names_the_underdetermined_equations, ::test_text_prints_one_line_when_the_covariance_fell_back_to_the_diagonal, ::test_page_mirrors_both_disclosure_lines | Yes (text `return []` fails the text test; page `return []` fails the parity test) | fixed |
+| V7 | "sliders run from the fitted panel's 5th to 95th percentile" widened to the query value | fit_sem.py:314-318 `node_ranges` (np.nanpercentile 5/95 of the fitted series, assets excluded); cockpit.py `slider_ranges=dict(fitted.node_ranges)`; H `sliderBounds` | test_cockpit_page.py::test_fit_records_each_non_asset_nodes_panel_percentiles, ::test_payload_embeds_the_ranges_and_the_page_has_no_fixed_range, ::test_slider_range_is_the_panel_percentile_widened_to_include_the_query_value, ::test_a_node_without_a_panel_range_is_pinned_to_its_value_not_a_default_range | Yes, four separate reverts (page fixed [-3,3]; fit node_ranges {}; payload {}; no widening) each fail a different test | fixed. End to end on the CLI (sliders.py, `--do rates_expectation=5.0`): `slider_ranges == fitted.node_ranges`; page controls: rates min -0.690 max 5 (widened), risk -1.310..0.690, event -1..1 step 1; no `EVENT_RANGES` or `Math.min(-3` left. A latent range is its centred fitted score, which the new test recomputes independently |
+| M-1 | "embed the factor in the payload" | simulate.py `Rollout.factor` from `_draw_residuals`; cockpit.py `residual_factor=rollout.factor.tolist()`; H `residualDraws(factor, ...)` | test_payload_factor_is_the_one_simulate_used (bit equality with numpy, PD and non-PD); test_js_fans_match_python_on_seeded_near_boundary_matrices_and_the_page_never_factorises (120 matrices) | Yes. Scaling the embedded factor by 1.01 fails 3 tests incl. both pins; re-adding a `choleskyFactor` to the template fails the "cholesky not in html" check | fixed. The page has no factorisation (grep: no "cholesky" in the template; `residualDraws` only multiplies). The test's matrices matter: the removed JS factoriser disagrees with numpy's PD decision on 3 of those 120 (oldchol.py), so the parity test would fail against the old code |
+| Ruling MF-1 | fixture gains `node_ranges` with the old fixed values, no assertion changed | tests/mechanism/test_cockpit.py `NODE_RANGES`, `make_fitted(... node_ranges=dict(NODE_RANGES))` | test_js_do_intervention_and_controls_follow_python | Removing the fixture line makes exactly that one test fail, because controls are now pinned without ranges | JUDGED SOUND. The fixture supplies data the new field requires; the diff has no changed assertion (see section "tests in the range"). Side effect worth knowing: that test now checks payload-to-page plumbing only; the real range behaviour is tested in test_cockpit_page.py |
+
+Targeted checks requested:
+- Per-row refusal (I-2) after V2: cli sweep (sweep2.py, 12 as-of positions, both directions) on the synthetic world. Thin fit exits 2 with "the fit has"; thin exact-key band exits 2 with "Precedent's exact-key band"; both with empty stdout. Where it exits 0 (positions 468, 500, 700 at direction +1) the JSON suppressed set, the page rows (run under node) and the text rows agree, every graph asset is covered once, and `rollout_fan` keys equal assets minus suppressed. Page row for a survivor: `['HYG','','+0.5% / +1.1% / +1.7%','+0.7% / +1.0% / +2.0%','yes','n=29/21 n_eff=21.0']`; suppressed rows show `no data`. The mixed refused/surviving case is only reachable by hand-built fixtures (test_page_suppressed_rows_keep_their_reason_and_no_fan, HYG refused, TLT and SPY survive).
+- PRNG draw parity (simulate-then-drop): `build_result` simulates every graph asset and only filters `rollout_fan` afterwards (cockpit.py:140-150); the page drops after `simulate` (H:192-193). 12 runs through the real CLI (jsparity.py: seeds 0, 7, 123456789, 2**40+3 x three do-sets, 2000 paths, all with diagonal_fallback True): max |JS - Python| = 3.5e-18.
+- Embedded factor used by JS, no factorisation in the template: confirmed by reading `residualDraws` (throws if the payload factor is not nAssets x nAssets) and the "cholesky" grep test.
+- Sliders: confirmed above. No hard-coded min_neff: confirmed.
+- Docs numbers I could not reproduce: none that are checkable offline. The 5b-row figures reproduce (above). "Seeded 120-matrix near-boundary test" is 120 (test_cockpit_page.py). The handover's "8 to 43 of 200 matrices" disagreement count was not reproduced (my generator is the test's, 3 of 120); STATUS does not repeat that number.
+
+### Tests in the range (git diff 44c3eba 28d78a6 -- tests)
+
+- Removed tests: none (`git diff` has no removed `def test_`).
+- Renamed tests: none.
+- Loosened or changed assertions: none. Only two removed lines in test_cockpit.py: `min_neff=8.0` (now `load_engine_params().min_neff`, a stricter provenance, not a loosening) and a one-line `precedent=[], seed=1, ...` split to add `min_neff`.
+- Fixture changes: `make_fitted` gains `node_ranges` (MF-1); `hand_result`, `simulated_result`, `no_data_fixture`, `build_result` calls gain the now-required `min_neff` argument.
+- New test files/tests: test_cockpit_page.py (18 tests), test_model_seam.py (3), plus 1 each in test_cockpit.py, test_cockpit_cli.py, test_ladder.py, test_panel.py. Count 215 -> 234 in tests/mechanism; no skip, no xfail added.
+
+### New defects and observations
+
+| ID | File:line | Concrete failing input | Severity |
+|---|---|---|---|
+| N-1 | tests/mechanism/test_model_seam.py:`seam_imports`, `forbidden_imports` | Add to any mechanism module `from precedent.spine import typers`, or `import precedent.spine.typers.anthropic as T`, or `importlib.import_module("httpx")`: all three leave test_model_seam.py green (probed, panel.py reverted each time). Only `import httpx as _h` and `from precedent.spine.typers import anthropic` are caught. The V-4 guarantee is a static name scan, not a proof | Minor |
+| N-2 | src/precedent/mechanism/cockpit_template.html `sliderBounds` (step = span/60 to 1 s.f., min not on the step grid) | CLI `--do rates_expectation=5.0` gives min -0.6897, max 5, step 0.09: 5 is off the browser's step grid (min + k*step). A real range input snaps its value to the grid, and `read()` (on the do() checkbox `change`) takes `slider.value`, so ticking do() on an untouched slider can silently set the value to the snapped number, not the query's. Same for a free latent at 0 on a grid anchored at -1.3103. NOT verified in a browser (only a node DOM stub). Fix: round min down to the step grid or use `step="any"` | Minor, unverified |
+| N-3 | stages/43_mechanism_cockpit/CONTEXT.md step 3 vs cockpit.py `_row` | Step 3 says each row shows "fit n, band n, and Precedent's `n_eff`". The text row prints `n=29/21` only (no n_eff, sweep2.py text rows); only the page prints n_eff for surviving rows. STATUS B1 says "the page shows", so the status row is right and the contract wording is broader than the text output | Minor |
+| N-4 | cli.py `_load_inputs` docstring (:224-229), docs/STATUS.md rows for 7b `_load_inputs` and Task 10 Step 1, test_cockpit_cli.py:405-408 | These say `precedent.libraries.bundle` "is not merged into this track". It is: `git merge-base --is-ancestor 032f110 a3eb6a4` is true (bundle, manifest, sample builder all exist in the checkout). The real loader now runs (see V-R24 below). Stale claim, not a behaviour bug; predates this range but the range re-touched these rows | Minor |
+| N-5 | cockpit.py `residual_factor: list = []`, `slider_ranges: dict = {}` defaults | A MechanismResult built without them (or an old JSON) validates; the page then throws "payload has no residual factor of size N" for any non-empty asset set, and sliders pin to their value. Failing loudly is intended for the factor; defaults on a required-in-practice field is looseness | Minor |
+| N-6 | H `mechanismFanRows` | If an asset is in `refused_assets` but has no band row, the page prints the generic reason "no data" (fan absent from the table) where the text prints a refusal. Not reachable from the CLI (refused assets always have a refused band row); only a hand-built payload triggers it | Minor, unreachable |
+| N-7 | test_ladder.py V-10 pin docstring | The test says a natural scored unit never reaches the effective-size guard (P-B1's own rule scores it first), so in the real ladder the guard is close to dead code and is exercised only through the patched-panel seam. Honest, but the V-10 behaviour has no natural-path test | Minor |
+
+No Critical or Important defect found. I could not construct an input where the command refuses while a row would have survived, or prints a fan beside a refused band.
+
+### Part 2. Requirement rows re-run
+
+Same evidence classes as the original report. SYNTHETIC = synthetic world through real engine code; NO LIVE RUN = needs an owner gate or live library.
+
+| ID | Requirement | Verdict | Label | Evidence |
+|---|---|---|---|---|
+| V-R7 | Every fan chart beside Precedent's band for the same query, asset and horizon, with both sample sizes; below `min_neff` the mechanism refuses (as amended by I-2: per asset row; exit 2 only when no row survives) | PASS (was FAIL) | SYNTHETIC | Text, JSON and page all carry both sizes (page also n_eff and Precedent's p10/median/p90): sweep2.py, node-run page rows equal text rows. Refusals: fit thin exit 2, exact-key band thin exit 2, empty stdout (12 positions). Pins and revert results above (V2, I-2 rows). Caveat: "refuses" now means per row, by ruling I-2; the text omits n_eff on surviving rows (N-3) |
+| V-R9 | Only `parser_graph.py` calls a model directly; `cli.py` only through `typer_from_env()` | PASS (was FAIL) | SYNTHETIC | test_model_seam.py pins it and fails on both a network import and a second typers import. Caveats: `parser_graph.py` does not exist yet (Task 8), so "only parser_graph" is vacuous today; scanner gaps N-1 |
+| V-R17 | True structure beats the placebo on the planted mechanism | FAIL (stays) | SYNTHETIC | No test named `test_true_structure_beats_placebo_on_planted_mechanism` exists (`grep -rn true_structure_beats tests`: only the unrelated "...leaves_the_event_out"). M-P equals M-T by construction: M-P pinball 0.002599 = M-T 0.002599, coverage 0.727 = 0.727 (m10.py); all 8 templates' latents have one parent; 240 placebo draws reach the same asset set, and 2 of 8 templates have no placebo (reach.py). Wording is honest and not hidden: rung file comment, STATUS 5b row ("cannot rank anything ... pooling plus a slope, not structure ... open OWNER decision (M6)"), stage 42 step 2 note, and the unchanged characterisation test. No document I found still claims M-T beats M-P (grep for "beats the placebo", "must lose to M-T", "forecasts exactly like": only the verifier's own report rows). Owner decision M6 open |
+| V-R24 | `precedent mechanism ... --html` on the sample library | BLOCKED | NO LIVE RUN | There is still no `data/sample/` or any real library (`ls data`: absent) and the sample is an owner gate. The recorded reason "bundle not merged" is stale (N-4). New partial evidence, SYNTHETIC: with the REAL `write_bundle` and `load_bundle`, the synthetic world and synthetic SPY prices in a scratch dir (realbundle.py), the unmodified `run()` exits 0, writes a 34,685-byte page and prints 4 bands plus 18 "no data" rows; flipping one byte of events.parquet gives exit 2, empty stdout, "events.parquet: sha256 differs from the manifest", no traceback. An empty data dir gives exit 2 "no library ... MANIFEST.json is absent". Still no real library, so the row stays BLOCKED |
+| V-R25 | Task 6 first real run (M-M1) | BLOCKED | NO LIVE RUN | Owner gate; `scripts/run_mechanism_m1.py` absent (`ls scripts`) |
+| V-R26 | Task 8 model-proposed graphs | BLOCKED | NO LIVE RUN | `parser_graph.py`, `graph_prompt_v1.txt`, `m4_mechanism_model.yaml` absent (`ls src/precedent/mechanism`, `references/mechanism`); owner gate |
+| V-R27 | Task 9 mechanism factors for Qlib | BLOCKED | NO LIVE RUN | No factor builder in the track; conditional on Task 6 or 8 |
+| V-R5 | Deterministic rollouts given a seed; seed, n_paths, code_commit in manifest | PASS (spot) | SYNTHETIC | `uv run pytest -q tests/mechanism` includes test_same_seed_same_paths and test_params_file; the JSON from the CLI carries `seed`, `n_paths`, `code_commit`; 12 seeded runs reproduce in JS to 3.5e-18 |
+| V-R8 | Disclaimer line in text, page title and footer, JSON field | PASS (spot) | SYNTHETIC | test_key_query_prints_both_bands_and_the_disclaimer, test_html_is_self_contained_and_carries_the_disclaimer green; the new disclosure lines are inserted before the disclaimer, and test_text_prints_one_line_when_the_covariance_fell_back asserts the disclaimer is still last |
+| V-R18 | Task 7 by-key command, text/JSON/HTML | PASS (spot) | SYNTHETIC | test_cockpit_cli.py and test_cockpit.py green (suite below); sweep2.py runs text, JSON and HTML on the same query |
+| V-R19 | Page JS simulate equals Python on the same seed (tolerance 5e-4) | PASS (spot) | SYNTHETIC | node v26.8.1, no skip. My own 12 runs through the CLI (4 seeds x 3 do-sets), max diff 3.5e-18; plus the new 120-matrix near-boundary test |
+
+Counts for the 11 rows re-run: PASS 6, FAIL 1, BLOCKED 4. (The original report's own counts, PASS 22 / FAIL 3 / BLOCKED 4, are not updated by this review; docs/verification/mechanism-2026-11-08.md is unchanged in this range.)
+
+### Commands and exit codes (wt-mech)
+
+| Command | Exit | Result |
+|---|---|---|
+| `uv run ruff check .` | 0 | All checks passed! |
+| `uv run pytest -q` | 0 | 2126 passed, 1 skipped in 141.62s (the one skip is outside mechanism) |
+| `uv run pytest -q tests/mechanism -rs` | 0 | 234 passed in 17.75s; no skip listed, so no node test skipped |
+| `git status --porcelain` | 0 | empty (checked after every revert batch and at the end) |
+| revert experiments (exp.py, 18 variants, all restored) | | all red for the intended reason, table above |
+| probes: sweep2.py, jsparity.py, sliders.py, realbundle.py, m10.py, reach.py, lat.py, oldchol.py | 0 | results quoted above |
+
+Scratch files: <scratch>/review-work-mech2/ (exp.py and the probes; realbundle_data/ holds the synthetic bundle).
+
+### Could not verify
+
+- The page in a real browser: only the script under node with a DOM stub. N-2 (range input step snapping) therefore stays unverified, and SVG layout of the new six-column row grid was not seen.
+- Any real library, real prices or model output: none exist offline (V-R24 to V-R27).
+- The handover's "8 to 43 of 200" and "diagonal fallback almost always on at n<=22": not reproduced; I only reproduced a PD-decision mismatch (3 of 120) between numpy and the removed JS factoriser, and that the fallback is on in every one of my 12 CLI runs on the synthetic world.
+- Mixed refused/surviving rows from a natural world: the synthetic world cannot produce them; covered by hand-built fixtures only.

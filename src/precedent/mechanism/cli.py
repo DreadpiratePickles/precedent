@@ -45,20 +45,44 @@ if TYPE_CHECKING:
 
 USAGE_ERROR = 2
 DEFAULT_HORIZON = 5
-_SEVERITY_LEVEL = {"low": 0.0, "mid": 1.0, "high": 2.0}
 _MISSING_ENGINE = "not built yet: mechanism needs {module} from the Precedent track"
 _PRECEDENT_PACKAGES = ("precedent.engine", "precedent.libraries")
 
 
 class MechanismRefused(Exception):
-    """The fit has too few effective precedents: below Precedent's `min_neff` nothing is shown."""
+    """Too few effective precedents to show anything: for the fit or the exact-key band.
 
-    def __init__(self, n_eff: float, min_neff: float) -> None:
+    With `band=False` the direction-free fit is below Precedent's `min_neff`; with
+    `band=True` Precedent's exact-key band for the query is refused (no exact-key precedent,
+    or a data-having asset's band below `min_neff`) — either way nothing is shown, because a
+    mechanism result without its Precedent band is not reported.
+    """
+
+    def __init__(self, n_eff: float, min_neff: float, *, band: bool = False) -> None:
         self.n_eff = n_eff
         self.min_neff = min_neff
+        self.band = band
+        subject = "Precedent's exact-key band has" if band else "the fit has"
         super().__init__(
-            f"refused: the fit has n_eff={n_eff:.1f} below min_neff={min_neff:.1f}; "
+            f"refused: {subject} n_eff={n_eff:.1f} below min_neff={min_neff:.1f}; "
             "no mechanism is shown"
+        )
+
+
+class NoDataAssets(Exception):
+    """Every asset of the graph lacks library rows at this horizon: there is nothing to show.
+
+    Distinct from `MechanismRefused`, which needs precedents but too few of them; here the
+    library may hold plenty of events and simply no rows for any of the graph's assets.
+    """
+
+    def __init__(self, assets: list[str], horizon: int) -> None:
+        self.assets = list(assets)
+        self.horizon = horizon
+        names = ", ".join(self.assets)
+        super().__init__(
+            f"no data: none of the graph's assets has a library row at horizon {horizon} "
+            f"({names}); no mechanism is shown"
         )
 
 
@@ -108,10 +132,15 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def parse_do_flags(flags: list[str], graph: CausalGraph) -> tuple[Intervention, ...]:
-    """`NODE=VALUE` strings to interventions on intermediate or asset nodes with a finite value."""
+    """`NODE=VALUE` strings to interventions on intermediate or asset nodes with a finite value.
+
+    A repeated node is a usage error: two do() values for one node would silently keep only
+    one of them.
+    """
     node_ids = {node.id for node in graph.nodes}
     event_ids = set(graph.event_node_ids)
     parsed = []
+    seen: set[str] = set()
     for flag in flags:
         node, separator, raw = flag.rpartition("=")
         if not separator or not node:
@@ -123,6 +152,9 @@ def parse_do_flags(flags: list[str], graph: CausalGraph) -> tuple[Intervention, 
                 f"--do {flag!r}: {node!r} is an event variable, which is set by its key flag "
                 "(for example --direction), not by do()"
             )
+        if node in seen:
+            raise ValueError(f"--do {flag!r}: duplicate intervention on {node!r}")
+        seen.add(node)
         try:
             value = float(raw)
         except ValueError as error:
@@ -160,20 +192,19 @@ def _key_from_text(text: str) -> EventKey | None:
     return None
 
 
-def event_values_for(key: EventKey, graph: CausalGraph) -> dict[str, float]:
-    """A number for each event node of the graph, read off the key."""
-    values: dict[str, float] = {}
-    for node_id in graph.event_node_ids:
-        field = node_id.rsplit(":", 1)[-1]
-        if field == "direction_sign":
-            values[node_id] = float(key.direction_sign)
-        elif field == "severity_band":
-            values[node_id] = _SEVERITY_LEVEL[key.severity_band]
-        elif field == "is_scheduled":
-            values[node_id] = 1.0 if key.is_scheduled else 0.0
-        else:
-            raise ValueError(f"event node {node_id!r} has no known value encoding")
-    return values
+def _event_values(key: EventKey, graph: CausalGraph) -> dict[str, float]:
+    """The graph's event-node values for `key`, in the panel's one encoding.
+
+    `panel.event_values_of` is the single event-column encoding (the panel reads it off every
+    precedent's key); a query's values are the same mapping, as floats. The import is lazy so a
+    spine-only checkout still starts the command.
+    """
+    from precedent.mechanism.panel import event_values_of
+
+    return {
+        node_id: float(value)
+        for node_id, value in event_values_of(key, graph.event_node_ids).items()
+    }
 
 
 def _vocabulary() -> frozenset[str]:
@@ -190,12 +221,12 @@ def _vocabulary() -> frozenset[str]:
 def _load_inputs(directory: Path) -> MechanismInputs:
     """Read the library bundle and the market's open-to-open returns under `directory`.
 
-    NO LIVE RUN: `precedent.libraries.bundle` is Precedent Task 10, not merged into this track
-    yet, so this body is written against its interface (`load_bundle(<dir>/library)` with
-    `events`, `rows`, `sessions`, `session_cutoffs_utc`) and has only run against a fake bundle.
-    Until it merges the import below raises `ModuleNotFoundError`, which `run` reports as
-    `not built yet`. Only the market's returns are loaded: the panel takes every asset's value
-    from the library rows and the market's own from `returns`.
+    NO LIVE RUN: `precedent.libraries.bundle` is in this branch and a synthetic bundle round trip
+    works (`load_bundle(<dir>/library)` with `events`, `rows`, `sessions`,
+    `session_cutoffs_utc`), but the loader has been exercised on a synthetic bundle only, never a
+    real library. A checkout without the engine still reports `not built yet`, because `run`
+    catches the `ModuleNotFoundError`. Only the market's returns are loaded: the panel takes
+    every asset's value from the library rows and the market's own from `returns`.
     """
     from precedent.engine.params import load_engine_params
     from precedent.libraries.bundle import load_bundle
@@ -226,7 +257,11 @@ def _band_rows(
     horizon: int,
     params: EngineParams,
 ) -> list[BandRow]:
-    """Precedent's band per asset from one guarded panel: `summarize_responses` per column."""
+    """Precedent's band per asset from one guarded panel: `summarize_responses` per column.
+
+    Every band is abnormal returns against the market model except the market's own: the
+    library has no market row, so its band is the raw cumulative return (`basis` says so).
+    """
     from precedent.engine.aggregate import summarize_responses
 
     rows = []
@@ -253,17 +288,10 @@ def _band_rows(
                 n=summary.n,
                 n_eff=summary.n_eff,
                 refused=summary.refused,
+                basis="raw_return" if asset == params.market else "abnormal_return",
             )
         )
     return rows
-
-
-def _refused_rows(assets: list[str], horizon: int) -> list[BandRow]:
-    return [
-        BandRow(asset=a, horizon=horizon, p10=None, median=None, p90=None, n=0, n_eff=0.0,
-                refused=True)
-        for a in assets
-    ]  # fmt: skip
 
 
 def _fit_and_band(
@@ -273,14 +301,24 @@ def _fit_and_band(
     horizon: int,
     inputs: MechanismInputs,
     params: EngineParams,
-) -> tuple[FittedSEM, list[BandRow]]:
+) -> tuple[FittedSEM, list[BandRow], list[str], list[str]]:
     """Fit the graph on the guarded panel and read Precedent's band for the same key.
 
     Pure given its inputs. `asof_utc` is the query time: the fit and the band see only what was
     available at that instant. The fit's query leaves `direction_sign` free (`mechanism_query`,
     so the direction column varies); Precedent's band keeps the exact key. Below `min_neff` the
-    fit is refused (`MechanismRefused`); a band with no exact-key precedent is a refused band
-    row, not a refusal of the command.
+    fit is refused (`MechanismRefused`).
+
+    The band gates per asset row, not the command (ruling I-2, addendum of
+    `docs/verification/mechanism-2026-11-08.md`): a row is suppressed — fan, band and sample
+    sizes not shown — when the asset has no observations (an all-NaN panel column) or its
+    exact-key band is refused; the renderers print the reason ("no data", or
+    "band refused: n_eff=X < min_neff=Y"). `no_data_assets` and `refused_assets` name the two
+    groups; every observed asset keeps its `BandRow` in `bands`, refused ones included, so the
+    reason can quote `n_eff`. The command refuses (exit 2) only when no row survives: every
+    asset with data has a refused band (`MechanismRefused`, band=True), or every asset lacks
+    rows (`NoDataAssets`). Suppressed assets are still simulated — dropping them when the fan
+    is read out keeps the counter-based PRNG draws identical.
     """
     from precedent.engine.aggregate import effective_sample_size
     from precedent.engine.retrieval import PrecedentQuery
@@ -313,17 +351,29 @@ def _fit_and_band(
     if n_eff < params.min_neff:
         raise MechanismRefused(n_eff, params.min_neff)
     fitted = fit_sem(graph, panel)
+    no_data_assets = [a for a in assets if panel.asset_returns[a].isna().all()]
+    observed = [a for a in assets if a not in no_data_assets]
+    if not observed:
+        raise NoDataAssets(list(no_data_assets), horizon)
+    band_shared = {**shared, "assets": observed}
     try:
-        band_panel = build_guarded_panel(PrecedentQuery(key, available), **shared)
+        band_panel = build_guarded_panel(PrecedentQuery(key, available), **band_shared)
     except NoPrecedentError:
-        return fitted, _refused_rows(assets, horizon)
-    return fitted, _band_rows(band_panel.asset_returns, positions, assets, horizon, params)
+        raise MechanismRefused(0.0, params.min_neff, band=True) from None
+    bands = _band_rows(band_panel.asset_returns, positions, observed, horizon, params)
+    refused_assets = [b.asset for b in bands if b.refused]
+    if len(no_data_assets) + len(refused_assets) == len(assets):
+        raise MechanismRefused(
+            max(b.n_eff for b in bands), params.min_neff, band=True
+        )  # fmt: skip
+    return fitted, bands, no_data_assets, refused_assets
 
 
 def _code_commit() -> str | None:
+    """The commit the run was made from, marked `-dirty` when the working tree has changes."""
     try:
         done = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
+            ["git", "describe", "--always", "--dirty"],
             capture_output=True, text=True, timeout=10, check=True,
             cwd=Path(__file__).resolve().parent,
         )  # fmt: skip
@@ -365,19 +415,34 @@ def _result_for(args: argparse.Namespace, key: EventKey, graph: CausalGraph) -> 
     asof_utc = _parse_asof(args.asof)
     from precedent.engine.params import load_engine_params
 
+    params = load_engine_params()
     inputs = _load_inputs(args.data_dir or data_dir())
-    fitted, bands = _fit_and_band(key, graph, asof_utc, args.horizon, inputs, load_engine_params())
+    fitted, bands, no_data_assets, refused_assets = _fit_and_band(
+        key, graph, asof_utc, args.horizon, inputs, params
+    )
     return build_result(
         graph=graph,
         fitted=fitted,
-        event_values=event_values_for(key, graph),
+        event_values=_event_values(key, graph),
         interventions=interventions,
         precedent=bands,
+        no_data_assets=tuple(no_data_assets),
+        refused_assets=tuple(refused_assets),
+        min_neff=params.min_neff,
         seed=args.seed,
         n_paths=load_params().n_paths if args.n_paths is None else args.n_paths,
         asof_utc=asof_utc,
         code_commit=_code_commit(),
     )
+
+
+def _library_integrity_errors() -> tuple[type[Exception], ...]:
+    """The corrupt-library error, when the libraries package this loader needs is importable."""
+    try:
+        from precedent.libraries.manifest import LibraryIntegrityError
+    except ImportError:
+        return ()  # spine-only checkout: the loader reports "not built yet" instead
+    return (LibraryIntegrityError,)
 
 
 def run(argv: list[str]) -> int:
@@ -401,6 +466,10 @@ def run(argv: list[str]) -> int:
         parse_do_flags(args.do, graph)  # fail on a bad --do before any data is read
         result = _result_for(args, key, graph)
     except MechanismRefused as error:
+        return _usage_error(str(error))
+    except NoDataAssets as error:
+        return _usage_error(str(error))
+    except _library_integrity_errors() as error:
         return _usage_error(str(error))
     except (ConfigError, FileNotFoundError) as error:
         return _usage_error(str(error))

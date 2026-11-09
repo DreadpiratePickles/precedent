@@ -32,7 +32,7 @@ section { background: var(--card); border: 1px solid var(--line); border-radius:
 .control .value { text-align: right; font-variant-numeric: tabular-nums; }
 button { font: inherit; padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--card); color: var(--fg); cursor: pointer; margin-top: 8px; }
-.fanrow { display: grid; grid-template-columns: 56px minmax(180px, 1fr) 190px minmax(120px, 190px);
+.fanrow { display: grid; grid-template-columns: 70px minmax(150px, 1fr) 170px 170px minmax(80px, 120px) 130px;
   gap: 8px; align-items: center; padding: 2px 0; font-size: 13px; }
 .fanrow svg { width: 100%; height: 22px; display: block; }
 .fanrow .nums { font-variant-numeric: tabular-nums; }
@@ -55,12 +55,15 @@ footer { padding-bottom: 28px; font-size: 13px; }
   <section><h2>What if</h2>
     <div id="controls"></div><button id="reset" type="button">Reset to the query</button>
     <p class="muted" id="notes"></p></section>
+  <section id="disclosure-section"><h2>What the fit could not determine</h2>
+    <div id="disclosures" class="warn"></div></section>
   <section><h2 id="fanheading">Simulated outcomes</h2>
     <p class="legend muted"><span><i class="swatch" style="background:var(--band)"></i>Precedent p10 to p90</span>
       <span><i class="swatch" style="background:var(--fan-outer)"></i>mechanism p10 to p90</span>
       <span><i class="swatch" style="background:var(--fan-inner)"></i>p25 to p75</span>
       <span>tick: median</span></p>
-    <div id="fans"></div></section>
+    <p class="muted">Columns: asset, fan, mechanism p10 / median / p90, Precedent p10 / median / p90, agreement, then n = fit rows / Precedent rows and Precedent's effective sample size.</p>
+    <div id="fans"></div><p class="muted" id="raw-note">{{RAW_NOTE}}</p></section>
 </main>
 <footer>
   <p><strong>A fitted model of past co-movement under an assumed structure, not a forecast.</strong></p>
@@ -98,32 +101,16 @@ footer { padding-bottom: 28px; font-size: 13px; }
     return z;
   }
 
-  // Lower Cholesky factor; a pivot <= 0 means numpy raises, so use the clamped diagonal.
-  function choleskyFactor(cov) {
-    const n = cov.length, factor = cov.map(() => new Float64Array(n));
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j <= i; j++) {
-        let sum = cov[i][j];
-        for (let k = 0; k < j; k++) sum -= factor[i][k] * factor[j][k];
-        if (i === j) {
-          if (!(sum > 0)) return { factor: diagonalFactor(cov), fallback: true };
-          factor[i][i] = Math.sqrt(sum);
-        } else {
-          factor[i][j] = sum / factor[j][j];
-        }
-      }
-    }
-    return { factor, fallback: false };
-  }
-  function diagonalFactor(cov) {
-    return cov.map((row, i) => Float64Array.from(row, (_, j) => (i === j ? Math.sqrt(Math.max(row[i], 0)) : 0)));
-  }
-
+  // The residual draws scale the normals by the factor the payload embeds: Python computed it
+  // once (and chose the diagonal fallback), so the page never factorises on its own.
   let drawCache = { key: null, noise: null };
-  function residualDraws(cov, nPaths, seed) {
-    const key = [seed, nPaths, JSON.stringify(cov)].join("|");
+  function residualDraws(factor, nAssets, nPaths, seed) {
+    if (factor.length !== nAssets || factor.some((row) => row.length !== nAssets)) {
+      throw new Error("payload has no residual factor of size " + nAssets);
+    }
+    const key = [seed, nPaths, JSON.stringify(factor)].join("|");
     if (drawCache.key === key) return drawCache.noise;
-    const n = cov.length, factor = choleskyFactor(cov).factor, z = hashNormals(seed, nPaths, n);
+    const n = nAssets, z = hashNormals(seed, nPaths, n);
     const noise = new Float64Array(nPaths * n);
     for (let p = 0; p < nPaths; p++) {
       for (let j = 0; j < n; j++) {
@@ -174,7 +161,7 @@ footer { padding-bottom: 28px; font-size: 13px; }
     });
     const nAssets = assets.length, column = {};
     assets.forEach((a, j) => { column[a] = j; });
-    const noise = residualDraws(fitted.residual_cov, nPaths, seed);
+    const noise = residualDraws(payload.residual_factor || [], nAssets, nPaths, seed);
     const order = topologicalOrder(graph.nodes, graph.edges);
     const outcomes = assets.map(() => new Float64Array(nPaths)), values = {};
     for (let p = 0; p < nPaths; p++) {
@@ -199,10 +186,14 @@ footer { padding-bottom: 28px; font-size: 13px; }
       out[a] = {};
       QUANTILES.forEach((q) => { out[a][String(q)] = quantile(sorted, q); });
     });
+    // No-data and refused-band assets are simulated like every other node (their columns sit
+    // in the residual draw, so dropping them here keeps the counter-based PRNG draws
+    // identical) and dropped on read-out, exactly as build_result does for rollout_fan.
+    const suppressed = new Set([...(payload.no_data_assets || []), ...(payload.refused_assets || [])]);
+    Object.keys(out).forEach((a) => { if (suppressed.has(a)) delete out[a]; });
     return out;
   }
 
-  const EVENT_RANGES = { direction_sign: [-1, 1, 1], severity_band: [0, 2, 1], is_scheduled: [0, 1, 1] };
   // The page starts from the query: its event values and every do() it was run with, whatever
   // the node's kind (an asset has no slider but its intervention still applies). Event nodes are
   // never intervened on: their sliders set the event value and the payload cannot carry a do().
@@ -211,15 +202,26 @@ footer { padding-bottom: 28px; font-size: 13px; }
     payload.interventions.forEach((i) => { forced[i.node] = i.value; });
     return { events: Object.assign({}, payload.event_values), forced };
   }
+  // A slider runs over the fitted panel's 5th to 95th percentile of its node (embedded in the
+  // payload), widened to include the query value. A node with no recorded range is pinned to its
+  // value: no range is invented. An event is an enum moved in whole steps, so its range widens
+  // outward to whole numbers; an intermediate's step is a 60th of its span, to one significant figure.
+  function sliderBounds(payload, node, value, isEvent) {
+    const range = (payload.slider_ranges || {})[node];
+    let min = Math.min(range ? range[0] : value, value), max = Math.max(range ? range[1] : value, value);
+    if (isEvent) { min = Math.floor(min); max = Math.ceil(max); }
+    const step = isEvent ? 1 : (Number(((max - min) / 60).toPrecision(1)) || 0.1);
+    return { min, max, step };
+  }
   function mechanismControls(payload) {
     const forced = mechanismInitialState(payload).forced;
     return payload.graph.nodes.filter((n) => n.kind !== "asset").map((n) => {
       if (n.kind === "event") {
-        const [min, max, step] = EVENT_RANGES[n.id.split(":").pop()] || [-1, 1, 1];
-        return { node: n.id, kind: "event", min, max, step, value: payload.event_values[n.id] ?? 0, free: false };
+        const value = payload.event_values[n.id] ?? 0;
+        return { node: n.id, kind: "event", ...sliderBounds(payload, n.id, value, true), value, free: false };
       }
       const set = has(forced, n.id), value = set ? forced[n.id] : 0;
-      return { node: n.id, kind: "intermediate", min: Math.min(-3, value), max: Math.max(3, value), step: 0.1, value, free: !set };
+      return { node: n.id, kind: "intermediate", ...sliderBounds(payload, n.id, value, false), value, free: !set };
     });
   }
 
@@ -237,6 +239,42 @@ footer { padding-bottom: 28px; font-size: 13px; }
     const both = inside(mech["0.5"], band.p10, band.p90) && inside(band.median, mech["0.1"], mech["0.9"]);
     return both ? "yes" : "no (median outside the other's band)";
   }
+  // The lines naming what the fit could not determine; cockpit.disclosure_lines is the twin.
+  function mechanismDisclosures(payload) {
+    const lines = [], undetermined = payload.fitted.underdetermined;
+    if (undetermined.length) lines.push("underdetermined equations: " + undetermined.join(", "));
+    if (payload.diagonal_fallback) {
+      lines.push("residual covariance is not positive definite: the fan uses its diagonal, so cross-asset correlation is dropped (each row's own fan is unaffected)");
+    }
+    return lines;
+  }
+  // One descriptor per asset row, drawn by drawFans: a suppressed row (no data, or a refused
+  // band) carries its reason and no fan; the others carry both triples, the agreement and both
+  // sample sizes (fit n / Precedent n, and Precedent's effective sample size).
+  function mechanismFanRows(payload, fanTable) {
+    const fitted = payload.fitted, noData = new Set(payload.no_data_assets || []);
+    const bands = {};
+    payload.precedent.filter((b) => b.horizon === fitted.horizon).forEach((b) => { bands[b.asset] = b; });
+    return fitted.assets.map((a) => {
+      const b = bands[a], label = a + (b && b.basis === "raw_return" ? " (raw)" : "");
+      let reason = null;
+      if (noData.has(a)) reason = "no data";
+      else if (b && b.refused) reason = "band refused: n_eff=" + b.n_eff.toFixed(1) + " < min_neff=" + payload.min_neff.toFixed(1);
+      if (reason === null && !has(fanTable, a)) reason = "no data";  // no fan to show
+      if (reason !== null) return { asset: a, label, reason, fan: null, band: null };
+      const q = fanTable[a], usable = b && !b.refused && b.p10 != null && b.median != null && b.p90 != null;
+      return {
+        asset: a, label, reason: null, fan: q, band: usable ? b : null,
+        mechanism: triple(q["0.1"], q["0.5"], q["0.9"]),
+        precedent: usable ? triple(b.p10, b.median, b.p90) + (b.basis === "raw_return" ? " (raw)" : "") : "n/a",
+        verdict: agreement(q, b),
+        sizes: "n=" + fitted.n_obs + "/" + (b ? b.n : 0) + (b ? " n_eff=" + b.n_eff.toFixed(1) : ""),
+      };
+    });
+  }
+  window.mechanismDisclosures = mechanismDisclosures;
+  window.mechanismFanRows = mechanismFanRows;
+
   function svgEl(name, attrs, text) {
     const el = document.createElementNS(SVG_NS, name);
     Object.keys(attrs).forEach((k) => el.setAttribute(k, attrs[k]));
@@ -291,12 +329,15 @@ footer { padding-bottom: 28px; font-size: 13px; }
   function init() {
     const payload = JSON.parse(document.getElementById("payload").textContent);
     const fitted = payload.fitted, horizon = fitted.horizon;
-    const bands = {};
-    payload.precedent.filter((b) => b.horizon === horizon).forEach((b) => { bands[b.asset] = b; });
     document.getElementById("heading").textContent = "Mechanism cockpit: " + payload.graph.event_key.event_type + " (" + fitted.graph_version + ")";
-    document.getElementById("subtitle").textContent = "Fitted on " + fitted.n_obs + " precedents as of " + payload.asof_utc.slice(0, 10) + "; window " + horizon + " sessions; " + fitted.underdetermined.length + " equations underdetermined.";
+    document.getElementById("subtitle").textContent = "Fitted on " + fitted.n_obs + " precedents as of " + payload.asof_utc.slice(0, 10) + "; window " + horizon + " sessions; " + fitted.underdetermined.length + " nodes uninformative (own fit failed, or an unidentified latent upstream).";
     document.getElementById("fanheading").textContent = "Simulated outcomes over " + horizon + " sessions";
     document.getElementById("manifest").textContent = ["graph " + fitted.graph_version, "fitted as of " + fitted.fitted_asof_utc.slice(0, 10), "seed " + payload.seed, payload.n_paths + " paths", "commit " + (payload.code_commit || "unknown")].join(" | ");
+    const disclosures = document.getElementById("disclosures");
+    mechanismDisclosures(payload).forEach((line) => {
+      const p = document.createElement("p"); p.textContent = line; disclosures.appendChild(p);
+    });
+    document.getElementById("disclosure-section").hidden = !disclosures.children.length;
     drawDag(payload);
 
     const state = mechanismInitialState(payload);
@@ -353,30 +394,38 @@ footer { padding-bottom: 28px; font-size: 13px; }
     }
 
     function drawFans(fanTable) {
+      const descriptors = mechanismFanRows(payload, fanTable);
       let low = 0, high = 0;
-      fitted.assets.forEach((a) => {
-        low = Math.min(low, fanTable[a]["0.1"]); high = Math.max(high, fanTable[a]["0.9"]);
-        const b = bands[a];
-        if (b && !b.refused && b.p10 != null) { low = Math.min(low, b.p10); high = Math.max(high, b.p90); }
+      descriptors.forEach((d) => {  // a suppressed row has no fan to range over
+        if (d.fan === null) return;
+        low = Math.min(low, d.fan["0.1"]); high = Math.max(high, d.fan["0.9"]);
+        if (d.band) { low = Math.min(low, d.band.p10); high = Math.max(high, d.band.p90); }
       });
       const pad = (high - low) * 0.05 || 0.01, lo = low - pad, span = high - low + 2 * pad;
       const x = (v) => ((v - lo) / span) * 300;
       const host = document.getElementById("fans"); host.textContent = "";
-      fitted.assets.forEach((a) => {
-        const q = fanTable[a], b = bands[a], row = document.createElement("div"); row.className = "fanrow";
+      descriptors.forEach((d) => {
+        const row = document.createElement("div"); row.className = "fanrow";
+        const name = document.createElement("strong"); name.textContent = d.label;
+        if (d.reason !== null) {  // a suppressed row: the reason, no fan and no band
+          const why = document.createElement("span"); why.className = "nums warn"; why.textContent = d.reason;
+          row.append(name, svgEl("svg", { viewBox: "0 0 300 22", preserveAspectRatio: "none" }), why);
+          host.appendChild(row);
+          return;
+        }
+        const q = d.fan, b = d.band;
         const svg = svgEl("svg", { viewBox: "0 0 300 22", preserveAspectRatio: "none" });
-        if (b && !b.refused && b.p10 != null) svg.appendChild(svgEl("rect", { x: x(b.p10), y: 0, width: Math.max(1, x(b.p90) - x(b.p10)), height: 22, fill: "var(--band)" }));
+        if (b) svg.appendChild(svgEl("rect", { x: x(b.p10), y: 0, width: Math.max(1, x(b.p90) - x(b.p10)), height: 22, fill: "var(--band)" }));
         svg.appendChild(svgEl("line", { x1: x(0), y1: 0, x2: x(0), y2: 22, stroke: "var(--muted)", "stroke-width": 0.6 }));
         svg.appendChild(svgEl("rect", { x: x(q["0.1"]), y: 7, width: Math.max(1, x(q["0.9"]) - x(q["0.1"])), height: 8, fill: "var(--fan-outer)" }));
         svg.appendChild(svgEl("rect", { x: x(q["0.25"]), y: 4, width: Math.max(1, x(q["0.75"]) - x(q["0.25"])), height: 14, fill: "var(--fan-inner)" }));
         svg.appendChild(svgEl("line", { x1: x(q["0.5"]), y1: 1, x2: x(q["0.5"]), y2: 21, stroke: "var(--fg)", "stroke-width": 1.5 }));
-        const name = document.createElement("strong"); name.textContent = a;
-        const nums = document.createElement("span"); nums.className = "nums"; nums.textContent = triple(q["0.1"], q["0.5"], q["0.9"]);
-        const verdict = document.createElement("span");
-        const text = agreement(q, b);
-        verdict.textContent = b && b.refused ? "refused: n_eff=" + b.n_eff.toFixed(1) : text;
-        if (text.startsWith("no")) verdict.className = "warn";
-        row.append(name, svg, nums, verdict); host.appendChild(row);
+        const nums = document.createElement("span"); nums.className = "nums"; nums.textContent = d.mechanism;
+        const precedent = document.createElement("span"); precedent.className = "nums"; precedent.textContent = d.precedent;
+        const verdict = document.createElement("span"); verdict.textContent = d.verdict;
+        if (d.verdict.startsWith("no")) verdict.className = "warn";
+        const sizes = document.createElement("span"); sizes.className = "nums muted"; sizes.textContent = d.sizes;
+        row.append(name, svg, nums, precedent, verdict, sizes); host.appendChild(row);
       });
     }
     render();

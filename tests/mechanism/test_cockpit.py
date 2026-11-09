@@ -13,10 +13,12 @@ import pandas as pd
 import pytest
 
 from precedent.config import references_dir
+from precedent.engine.params import load_engine_params
 from precedent.mechanism import cli
 from precedent.mechanism.cli import parse_do_flags, run
 from precedent.mechanism.cockpit import (
     DISCLAIMER,
+    TEMPLATE_PATH,
     BandRow,
     InterventionRow,
     MechanismResult,
@@ -92,6 +94,11 @@ def make_graph(edges=EDGES) -> CausalGraph:
     )
 
 
+# the fitted panel's 5th and 95th percentile per event and intermediate node, which the page's
+# sliders run over (these were the page's fixed ranges before they came from the payload)
+NODE_RANGES = {SIGN: (-1.0, 1.0), RATES: (-3.0, 3.0), RISK: (-3.0, 3.0)}
+
+
 def make_fitted(graph, coefficients=None, cov=None, disagreements=()) -> FittedSEM:
     coefficients = COEFFICIENTS if coefficients is None else coefficients
     assets = [n.id for n in graph.nodes if n.kind.value == "asset"]
@@ -108,6 +115,7 @@ def make_fitted(graph, coefficients=None, cov=None, disagreements=()) -> FittedS
         graph_version=graph.graph_version,
         fitted_asof_utc=pd.Timestamp(ASOF),
         horizon=5,
+        node_ranges=dict(NODE_RANGES),
     )
 
 
@@ -138,6 +146,7 @@ def hand_result(**overrides) -> MechanismResult:
             BandRow(asset="HYG", horizon=5, p10=None, median=None, p90=None,
                     n=4, n_eff=3.24, refused=True),
         ],
+        "min_neff": load_engine_params().min_neff,
         "seed": 0,
         "n_paths": 2000,
         "asof_utc": ASOF,
@@ -158,11 +167,46 @@ def simulated_result(interventions=(), bands=(), n_paths=4000, seed=0) -> Mechan
         event_values={SIGN: -1.0},
         interventions=tuple(interventions),
         precedent=list(bands),
+        min_neff=load_engine_params().min_neff,
         seed=seed,
         n_paths=n_paths,
         asof_utc=ASOF,
         code_commit=None,
     )
+
+
+NO_DATA_ASSET = "XLE"
+REFUSED_ASSET = "GLD"
+
+
+def no_data_fixture() -> tuple[MechanismResult, FittedSEM, CausalGraph]:
+    """A result with one no-data asset (XLE: zero observations, a zero equation) and one
+    refused-band asset (GLD: observations, n_eff below min_neff): unsuppressed, XLE's fan
+    prints exactly "+0.0% / +0.0% / +0.0%"."""
+    graph = make_graph(edges=EDGES + [(RISK, NO_DATA_ASSET, 1), (RISK, REFUSED_ASSET, 1)])
+    fitted = make_fitted(
+        graph,
+        coefficients={**COEFFICIENTS, NO_DATA_ASSET: {RISK: 0.0}, REFUSED_ASSET: {RISK: 0.4}},
+        cov=np.diag([0.04, 0.09, 0.0625, 0.0, 0.01]),
+    )
+    result = build_result(
+        graph=graph,
+        fitted=fitted,
+        event_values={SIGN: -1.0},
+        interventions=(),
+        precedent=[
+            BandRow(asset=REFUSED_ASSET, horizon=5, p10=None, median=None, p90=None,
+                    n=4, n_eff=3.24, refused=True),
+        ],
+        no_data_assets=(NO_DATA_ASSET,),
+        refused_assets=(REFUSED_ASSET,),
+        min_neff=load_engine_params().min_neff,
+        seed=0,
+        n_paths=500,
+        asof_utc=ASOF,
+        code_commit=None,
+    )
+    return result, fitted, graph
 
 
 # --- render_text ----------------------------------------------------------------------------
@@ -172,7 +216,7 @@ def test_text_header_and_rows_show_both_bands_and_both_sample_sizes():
     lines = render_text(hand_result()).splitlines()
     assert lines[0] == (
         "mechanism      template-v1 for central_bank, fitted on 42 precedents as of 2026-11-07; "
-        "1 equations underdetermined"
+        "1 nodes uninformative (own fit failed, or an unidentified latent upstream)"
     )
     assert lines[1].split() == [
         "asset", "window", "mechanism", "p10/median/p90",
@@ -187,8 +231,10 @@ def test_text_agree_rule_yes_no_and_refused():
     lines = {line.split()[0]: line for line in render_text(hand_result()).splitlines()[2:6]}
     assert "yes" in lines["TLT"]
     assert "no (median outside the other's band)" in lines["SPY"]
-    assert "refused: n_eff=3.2" in lines["HYG"] and "n/a" in lines["HYG"]
-    assert lines["HYG"].endswith(" n=42/4")
+    # HYG's band is refused: a reason row — no fan, no band, no sample sizes
+    hyg = lines["HYG"]
+    assert hyg == "HYG     5        band refused: n_eff=3.2 < min_neff=8.0"
+    assert "n=42/4" not in hyg and "n/a" not in hyg
 
 
 def test_text_agree_is_symmetric_one_median_outside_is_a_no():
@@ -201,6 +247,25 @@ def test_text_agree_is_symmetric_one_median_outside_is_a_no():
     result = hand_result(precedent=rows, rollout_fan=base.rollout_fan)
     tlt = next(line for line in render_text(result).splitlines() if line.startswith("TLT"))
     assert "no (median outside the other's band)" in tlt
+
+
+def test_text_marks_the_market_row_raw():
+    """The market's band and fan are its own cumulative return, not an abnormal return: the
+    row carries `(raw)` and one note line explains it (verifier finding V-9)."""
+    rows = [
+        BandRow(asset="SPY", horizon=5, p10=-0.020, median=-0.010, p90=0.005,
+                n=30, n_eff=20.0, refused=False, basis="raw_return"),
+    ]  # fmt: skip
+    base = hand_result()
+    result = hand_result(precedent=rows, rollout_fan=base.rollout_fan)
+    lines = render_text(result).splitlines()
+    spy = next(line for line in lines if line.startswith("SPY"))
+    assert "-2.0% / -1.0% / +0.5% (raw)" in spy
+    assert any(
+        line.startswith("SPY: the market's own cumulative return (raw)") for line in lines
+    )
+    normal = render_text(hand_result()).splitlines()
+    assert not any("(raw)" in line for line in normal)
 
 
 def test_text_lists_edges_the_data_disagrees_with():
@@ -240,6 +305,36 @@ def test_json_round_trips_and_carries_interventions_and_manifest():
     assert payload["fitted"]["fitted_asof_utc"].startswith("2026-11-07")
 
 
+def test_suppressed_rows_print_the_reason_and_never_a_zero_fan():
+    """XLE has no observations and GLD's band is refused: both print the reason with no fan
+    — XLE's zero equation would otherwise print "+0.0% / +0.0% / +0.0%" (ruling I-2). Text,
+    JSON and the page all suppress the fan and name the asset in the listing fields."""
+    result, fitted, graph = no_data_fixture()
+    unsuppressed = fan(simulate(fitted, graph, {SIGN: -1.0}, n_paths=500, seed=0))
+    assert unsuppressed.loc[NO_DATA_ASSET].abs().max() == pytest.approx(0.0)
+
+    text = render_text(result)
+    assert "+0.0%" not in text
+    lines = {line.split()[0]: line for line in text.splitlines()}
+    assert lines[NO_DATA_ASSET] == "XLE     5        no data"
+    assert lines[REFUSED_ASSET] == "GLD     5        band refused: n_eff=3.2 < min_neff=8.0"
+
+    payload = json.loads(render_json(result))
+    assert payload["no_data_assets"] == [NO_DATA_ASSET]
+    assert payload["refused_assets"] == [REFUSED_ASSET]
+    assert payload["min_neff"] == 8.0
+    assert NO_DATA_ASSET not in payload["rollout_fan"]
+    assert REFUSED_ASSET not in payload["rollout_fan"]
+
+    html = render_html(result)
+    assert "+0.0%" not in html
+    embedded = json.loads(re.search(r'id="payload">(.*?)</script>', html, re.S).group(1))
+    assert embedded["no_data_assets"] == [NO_DATA_ASSET]
+    assert embedded["refused_assets"] == [REFUSED_ASSET]
+    assert NO_DATA_ASSET not in embedded["rollout_fan"]
+    assert REFUSED_ASSET not in embedded["rollout_fan"]
+
+
 def test_result_rejects_unknown_fields_and_naive_timestamps():
     with pytest.raises(ValueError):
         hand_result(asof_utc=datetime(2026, 11, 7))
@@ -273,6 +368,33 @@ def test_html_is_self_contained_and_carries_the_disclaimer():
     title = re.search(r"<title>(.*?)</title>", html, re.S).group(1)
     assert DISCLAIMER in title and "central_bank" in title
     assert html.count(DISCLAIMER) >= 2  # title and footer
+
+
+def test_the_market_row_is_labelled_raw_on_the_page():
+    """V-9 pin: the page tells the market row's basis apart like the text does — the payload
+    marks the market band `raw_return`, the shipped template labels the row "(raw)" as it
+    draws it, and the rendered page carries the one-line note under the fan table."""
+    graph = make_graph()
+    result = build_result(
+        graph=graph,
+        fitted=make_fitted(graph),
+        event_values={SIGN: -1.0},
+        interventions=(),
+        precedent=[
+            BandRow(asset="SPY", horizon=5, p10=-0.02, median=0.0, p90=0.02,
+                    n=30, n_eff=20.0, refused=False, basis="raw_return"),
+        ],
+        min_neff=load_engine_params().min_neff,
+        seed=1,
+        n_paths=1000,
+        asof_utc=ASOF,
+        code_commit=None,
+    )
+    html = render_html(result)
+    assert '"basis":"raw_return"' in html  # the market row's data behind the label (compact JSON)
+    assert "cumulative return (raw), not an abnormal return" in html  # the page note
+    assert " (raw)" in TEMPLATE_PATH.read_text(encoding="utf-8")  # the label the page draws
+    assert "cumulative return (raw)" not in render_html(simulated_result())
 
 
 def test_html_embeds_the_payload_as_json_and_survives_a_closing_script_tag():
@@ -426,7 +548,8 @@ def test_js_falls_back_to_the_diagonal_like_python():
     fitted = make_fitted(graph, cov=bad_cov)
     result = build_result(
         graph=graph, fitted=fitted, event_values={SIGN: -1.0}, interventions=(),
-        precedent=[], seed=1, n_paths=3000, asof_utc=ASOF, code_commit=None,
+        precedent=[], min_neff=load_engine_params().min_neff,
+        seed=1, n_paths=3000, asof_utc=ASOF, code_commit=None,
     )  # fmt: skip
     assert result.diagonal_fallback is True
     program = """
@@ -437,6 +560,26 @@ def test_js_falls_back_to_the_diagonal_like_python():
     out = run_node(render_html(result), program, render_json(result))
     table = fan(simulate(fitted, graph, {SIGN: -1.0}, n_paths=3000, seed=1))
     assert out["SPY"]["0.9"] == pytest.approx(table.loc["SPY", 0.9], abs=5e-4)
+
+
+@needs_node
+def test_js_twin_suppresses_the_same_rows_and_keeps_the_surviving_fan():
+    """Simulate-then-drop: XLE and GLD sit in the residual draw, so dropping them after the
+    simulation keeps the surviving fans bit-identical between the page and Python."""
+    result, fitted, graph = no_data_fixture()
+    html = render_html(result)
+    program = """
+    const payload = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    const out = window.mechanismSimulate(payload, payload.event_values, [], payload.n_paths, payload.seed);
+    console.log(JSON.stringify({keys: Object.keys(out), out}));
+    """
+    got = run_node(html, program, render_json(result))
+    assert got["keys"] == list(result.rollout_fan)
+    assert NO_DATA_ASSET not in got["out"] and REFUSED_ASSET not in got["out"]
+    table = fan(simulate(fitted, graph, {SIGN: -1.0}, n_paths=500, seed=0))
+    for asset in result.rollout_fan:
+        for q in ("0.1", "0.5", "0.9"):
+            assert got["out"][asset][q] == pytest.approx(table.loc[asset, float(q)], abs=5e-4)
 
 
 # --- the command ----------------------------------------------------------------------------
@@ -478,7 +621,7 @@ def stubbed_data_step(monkeypatch):
             BandRow(asset="TLT", horizon=horizon, p10=-0.01, median=-0.002, p90=0.006,
                     n=12, n_eff=8.0, refused=False),
         ]  # fmt: skip
-        return template_fitted(graph), bands
+        return template_fitted(graph), bands, [], []
 
     monkeypatch.setattr(cli, "_load_inputs", fake_inputs)
     monkeypatch.setattr(cli, "_fit_and_band", fake)
@@ -649,3 +792,41 @@ def test_data_dir_defaults_to_the_config_default(monkeypatch, tmp_path, stubbed_
 def test_template_graphs_have_event_nodes_the_cli_can_value():
     templates = load_templates(references_dir() / "mechanism" / "templates", cli._vocabulary())
     assert all(g.event_node_ids for g in templates.values())
+
+
+def test_cli_event_values_match_the_panel_encoding_on_every_template():
+    from precedent.mechanism.panel import event_values_of
+
+    templates = load_templates(references_dir() / "mechanism" / "templates", cli._vocabulary())
+    assert templates
+    for graph in templates.values():
+        key = graph.event_key
+        assert cli._event_values(key, graph) == {
+            node: float(value)
+            for node, value in event_values_of(key, graph.event_node_ids).items()
+        }
+
+
+def test_parse_do_flags_rejects_a_duplicate_node():
+    graph = make_graph()
+    with pytest.raises(ValueError, match="duplicate"):
+        parse_do_flags([f"{RATES}=0", f"{RATES}=1.5"], graph)
+    with pytest.raises(ValueError, match="duplicate"):
+        parse_do_flags([f"{RATES}=0", f"{RISK}=1", f"{RATES}=2"], graph)
+    assert len(parse_do_flags([f"{RATES}=0", f"{RISK}=1"], graph)) == 2
+    assert run([*KEY_FLAGS, "--do", f"{RATES}=0", "--do", f"{RATES}=1"]) == 2
+
+
+def test_code_commit_marks_a_dirty_tree(monkeypatch):
+    calls = []
+
+    class Done:
+        stdout = "abc1234-dirty\n"
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        return Done()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    assert cli._code_commit() == "abc1234-dirty"
+    assert calls == [["git", "describe", "--always", "--dirty"]]

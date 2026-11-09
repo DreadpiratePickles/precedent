@@ -73,7 +73,9 @@ class Rollout:
     """Simulated asset outcomes, with the seed and interventions that produced them.
 
     `unreachable_interventions` lists intervened nodes that are not assets and have no asset
-    descendant: the fan is unchanged by them.
+    descendant: the fan is unchanged by them. `factor` is the lower Cholesky factor of the
+    residual covariance (its clamped diagonal when `diagonal_fallback`) that scaled the draws;
+    the cockpit embeds it so its JavaScript twin never factorises on its own.
     """
 
     paths: np.ndarray
@@ -83,6 +85,7 @@ class Rollout:
     unreachable_interventions: list[str]
     diagonal_fallback: bool
     n_paths: int
+    factor: np.ndarray
 
 
 def _cholesky_factor(cov: np.ndarray) -> tuple[np.ndarray, bool]:
@@ -154,6 +157,7 @@ def _rollout(
     interventions: tuple[Intervention, ...],
     residuals: np.ndarray,
     seed: int,
+    factor: np.ndarray,
     diagonal_fallback: bool,
 ) -> Rollout:
     forced = {i.node: i.value for i in interventions}
@@ -165,13 +169,16 @@ def _rollout(
         unreachable_interventions=_unreachable(graph, interventions),
         diagonal_fallback=diagonal_fallback,
         n_paths=residuals.shape[0],
+        factor=factor,
     )
 
 
-def _draw_residuals(fitted: FittedSEM, n_paths: int, seed: int) -> tuple[np.ndarray, bool]:
+def _draw_residuals(
+    fitted: FittedSEM, n_paths: int, seed: int
+) -> tuple[np.ndarray, np.ndarray, bool]:
     factor, fallback = _cholesky_factor(fitted.residual_cov)
     z = hash_normals(seed, n_paths, len(fitted.assets))
-    return z @ factor.T, fallback
+    return z @ factor.T, factor, fallback
 
 
 def simulate(
@@ -184,8 +191,8 @@ def simulate(
 ) -> Rollout:
     """Roll the fitted graph forward over `n_paths` paths; deterministic given `seed`."""
     _check_inputs(fitted, graph, event_values, interventions, n_paths)
-    residuals, fallback = _draw_residuals(fitted, n_paths, seed)
-    return _rollout(fitted, graph, event_values, interventions, residuals, seed, fallback)
+    residuals, factor, fallback = _draw_residuals(fitted, n_paths, seed)
+    return _rollout(fitted, graph, event_values, interventions, residuals, seed, factor, fallback)
 
 
 def fan(rollout: Rollout, quantiles: tuple[float, ...] = DEFAULT_QUANTILES) -> pd.DataFrame:
@@ -204,7 +211,9 @@ def counterfactual_pair(
 ) -> tuple[Rollout, Rollout]:
     """Factual and intervened rollouts on the same residuals; their difference is the effect."""
     _check_inputs(fitted, graph, event_values, (intervention,), n_paths)
-    residuals, fallback = _draw_residuals(fitted, n_paths, seed)
-    factual = _rollout(fitted, graph, event_values, (), residuals, seed, fallback)
-    intervened = _rollout(fitted, graph, event_values, (intervention,), residuals, seed, fallback)
+    residuals, factor, fallback = _draw_residuals(fitted, n_paths, seed)
+    factual = _rollout(fitted, graph, event_values, (), residuals, seed, factor, fallback)
+    intervened = _rollout(
+        fitted, graph, event_values, (intervention,), residuals, seed, factor, fallback
+    )
     return factual, intervened

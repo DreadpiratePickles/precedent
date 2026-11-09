@@ -8,7 +8,7 @@ from functools import cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from precedent.config import references_dir
 from precedent.spine.event_key import EventKey
@@ -91,7 +91,11 @@ class Node(BaseModel):
 
 
 class Edge(BaseModel):
-    """One signed, lagged cause-to-effect link, with where in a document it was read."""
+    """One signed, lagged cause-to-effect link, with where in a document it was read.
+
+    `sign` is a strict integer (-1 or +1): `True` and `1.0` are rejected, not coerced.
+    `support` is an agreement count, so it is at least 1.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -101,7 +105,14 @@ class Edge(BaseModel):
     lag_band: Literal["same_session", "days", "weeks"]
     source_doc_id: str | None
     evidence_span: str | None
-    support: int = 1
+    support: int = Field(default=1, ge=1)
+
+    @field_validator("sign", mode="before")
+    @classmethod
+    def _sign_is_the_integer_minus_or_plus_one(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError(f"sign must be the integer -1 or 1, not {value!r}")
+        return value
 
 
 def _kahn_order(node_ids: list[str], edges: list[Edge]) -> list[str]:
