@@ -24,15 +24,13 @@ from precedent.engine.card import (
     NearestPrecedent,
     SourceCoverage,
 )
+from precedent.engine.card_placebo import ordinary_range as _placebo
 from precedent.engine.keys import typed_as_line
 from precedent.engine.params import EngineParams, load_engine_params
 from precedent.engine.retrieval import PrecedentQuery, find_precedents
 from precedent.libraries.build import LIBRARY_DIR_NAME
 from precedent.libraries.bundle import LibraryBundle, load_bundle
 from precedent.libraries.common import OUTCOME_TYPES
-from precedent.libraries.event_sequence import unconditional_sequence_rate
-from precedent.libraries.market_resolution import unconditional_market_rate
-from precedent.spine.event_key import load_country_groups
 from precedent.spine.typers.base import Typer
 
 __all__ = ["UNTYPED", "refused_card_without_library", "run_card"]
@@ -386,39 +384,3 @@ def _summary_row(common: dict, summary: PrecedentSummary) -> CardRow:
         centre_shrunk=summary.centre_shrunk, band=(summary.quantiles[0.1], summary.quantiles[0.9]),
         vs_ordinary=vs_ordinary,
     )
-
-
-def _placebo(
-    kind: str, outcome_key: str, horizon: int, query: PrecedentQuery, bundle: LibraryBundle
-) -> np.ndarray | float | None:
-    """The ordinary range for a row: what happens regardless of the event, known by `asof`."""
-    if kind == "asset":
-        return _asset_placebo(outcome_key, horizon, query.available_utc, bundle)
-    if kind == "market_resolution":
-        return unconditional_market_rate(
-            bundle.markets, outcome_key, query.available_utc, bundle.session_cutoffs_utc
-        )
-    closed = int((bundle.session_cutoffs_utc <= query.available_utc).sum())
-    if closed == 0:
-        return None
-    return unconditional_sequence_rate(
-        bundle.events,
-        outcome_key.split("/")[0],
-        query.key.country_group,
-        horizon,
-        closed - 1,
-        load_country_groups(),
-    )
-
-
-def _asset_placebo(
-    outcome_key: str, horizon: int, available_utc: pd.Timestamp, bundle: LibraryBundle
-) -> np.ndarray | None:
-    placebo = bundle.placebo_asset
-    chosen = placebo.loc[(placebo["outcome_key"] == outcome_key) & (placebo["horizon"] == horizon)]
-    if chosen.empty:
-        return None
-    sessions = pd.DatetimeIndex(chosen["response_complete_session"])
-    closed = (bundle.session_cutoffs_utc.loc[sessions] <= available_utc).to_numpy()
-    values = chosen["value"].to_numpy()[closed]
-    return values if values.size else None

@@ -15,7 +15,7 @@ Score the baseline ladder (B0 pooled, B1 rules-typed exact key, B2 model-typed e
 ## Process
 1. Deterministic: verify the manifest hashes, then load the library.
 2. Deterministic: walk events in time order; for each, take only rows whose outcome was known before the event (an expanding window).
-3. Deterministic: B0 is the unconditional placebo distribution; B1 is an exact match on a rules-based event type (design 8.4), B2 the same match on model-typed events; B3 blends the key with embedder similarity of `canonical_text` at `embedding_weight` and raises `ValueError` if the column or a query text is missing; the precedent estimate uses the `top_k` nearest completed, non-overlapping key matches (guard first, then cut; ruling P-42).
+3. Deterministic: B0 pools the `top_k` most recent first reports of any type that pass the time guard (a recent-history unconditional distribution, not every earlier first report, and not the placebo library); B1 is an exact match on a rules-based event type (design 8.4), B2 the same match on model-typed events; B3 blends the key with embedder similarity of `canonical_text` at `embedding_weight` and raises `ValueError` if the column or a query text is missing; the precedent estimate uses the `top_k` nearest completed, non-overlapping key matches (guard first, then cut; ruling P-42).
 4. Deterministic: score each rung per outcome type with pinball loss per quantile and band coverage, with Wilson intervals at `wilson_z`.
 5. Deterministic: write one table of scores per outcome type and a short report.
 

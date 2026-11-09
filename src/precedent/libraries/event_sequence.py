@@ -44,7 +44,8 @@ def build_event_sequence_library(
     sessions: pd.DatetimeIndex,
     event_types: tuple[str, ...],
     horizons: tuple[int, ...] = (5, 20, 60),
-    feed_end_position: int | None = None,
+    *,
+    feed_end_position: int,
 ) -> tuple[pd.DataFrame, SequenceLibraryReport]:
     """One binary row per first report, event type and horizon.
 
@@ -52,14 +53,14 @@ def build_event_sequence_library(
     `value` is 1.0 when a first report of the type, from another story, linked to `c`, has
     `effective_position` in `p + 1 .. p + h`, else 0.0. `h` is counted from `p` itself (no
     trade-open shift). A triple with `p + h` past `feed_end_position` (the last session the
-    feed covers; default the last session of `sessions`, which a padded calendar overstates,
-    P-45) is skipped and counted in
+    feed covers; required, because the last session of `sessions` is a padded calendar that
+    overstates coverage, P-45, N-6) is skipped and counted in
     `skipped_incomplete_window`; a first report without a linked country is counted once in
     `skipped_no_country`. No rows gives `empty_library_rows()`.
     """
     if any(horizon < 1 for horizon in horizons):
         raise ValueError(f"horizons must be positive session counts, got {horizons}")
-    last_covered = len(sessions) - 1 if feed_end_position is None else feed_end_position
+    last_covered = feed_end_position
     index = _first_reports_by_type_and_country(events, set(event_types))
     records: list[dict[str, object]] = []
     skipped_incomplete = 0

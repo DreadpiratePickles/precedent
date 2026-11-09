@@ -241,3 +241,20 @@ def test_refusals_are_reported_per_rung_even_for_units_dropped_from_the_pairing(
     table = score_precedent_ladder(**_rare_key_inputs(), outcome_type="event_sequence")
     refused = table.pivot(index="event_type", columns="rung", values="n_refused")
     assert refused.loc["armed_conflict", "B1"] == 3 and refused.loc["armed_conflict", "B0"] == 0
+
+
+def test_b0_scores_units_on_a_dense_library_and_pairs_with_b1():
+    """P-42 / N-4: several events per session, horizon 20; B0 must score and match B1's units."""
+    rng = np.random.default_rng(0)
+    placements, outcomes = [], []
+    for position in range(10, 300):
+        for slot in range(3):
+            event_id = f"d{position:03d}_{slot}"
+            placements.append((event_id, KEY_A, position))
+            outcomes.append((event_id, position, "asset", "SPY", float(rng.normal()), 20))
+    table = score_precedent_ladder(
+        **_ladder_inputs(placements, outcomes), outcome_type="asset", horizon=20
+    )
+    n_scored = table.query("quantile == 0.5").set_index("rung")["n_scored"]
+    assert n_scored["B0"] > 0
+    assert n_scored["B0"] == n_scored["B1"]

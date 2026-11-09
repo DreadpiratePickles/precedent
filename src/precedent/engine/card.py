@@ -213,7 +213,7 @@ def render_text(card: CardModel) -> str:
     else:
         lines.extend(_outcome_lines(card))
         lines.append("")
-    lines.append("nearest precedents")
+    lines.append("nearest independent precedents (non-overlapping outcome windows)")
     if card.nearest:
         lines.extend(
             f"{n.date}  {n.one_line}  similarity {n.similarity:.2f}  {n.source_ref}"
