@@ -289,8 +289,10 @@ def markdown_lines(header: dict[str, Any], sections: dict[str, list[Item]]) -> l
     lines = [
         f"# Dream for {header['session']}   "
         f"(documents in session: {header['documents_in_session']}; feed gap: {gap}{skipped})",
-        "",
     ]
+    if header.get("calendar_warning"):
+        lines.append(f"calendar warning: {header['calendar_warning']}")
+    lines.append("")
     for kind, _, heading in SECTIONS:
         lines.append(f"## {heading} ({len(sections[kind])})")
         lines.extend(item["text"] for item in sections[kind])
