@@ -131,6 +131,9 @@ def _tension_item(kind: str, tension: Tension, names: Names) -> Item:
         (names.claims[c] for c in tension.claim_ids if c in names.claims),
         key=lambda c: (c.value.value, c.source_doc_id),
     )
+    # M3 (D76): the branches must not index `cited[0]` when every cited claim is missing; the
+    # note names the miss instead of dying after the stores have appended.
+    lead = _cite(cited[0]) if cited else "(claims missing from the claim store)"
     details = tension.details
     if tension.kind is TensionKind.value_conflict:
         by_value: dict[str, list[str]] = {}
@@ -141,16 +144,16 @@ def _tension_item(kind: str, tension: Tension, names: Names) -> Item:
     elif tension.kind is TensionKind.text_vs_price:
         move, z = float(details["abnormal_return"]), float(details["z"])
         body = (
-            f"{tension.subject}: event_direction {details['claim_value']} {_cite(cited[0])}, "
+            f"{tension.subject}: event_direction {details['claim_value']} {lead}, "
             f"abnormal return {move:+.1%} (z {z:+.1f})"
         )
     elif tension.kind is TensionKind.asymmetric_link:
         pair = f"{details['source_node']} -> {details['receiver_node']}"
-        body = f"{pair}: customer_of link with no supplier_of link back {_cite(cited[0])}"
+        body = f"{pair}: customer_of link with no supplier_of link back {lead}"
     else:
         body = (
             f"{names.subject(tension.subject)}: link {details['age_sessions']} sessions old, "
-            f"newer filing {details['newer_doc_id']} from the same source {_cite(cited[0])}"
+            f"newer filing {details['newer_doc_id']} from the same source {lead}"
         )
     if len(cited) < len(tension.claim_ids):
         body += f" (claims missing from the claim store: {len(tension.claim_ids) - len(cited)})"

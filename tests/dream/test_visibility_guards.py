@@ -100,3 +100,34 @@ def test_a_shift_recorded_after_the_cutoff_is_not_listed():
     )
     shown = build_sections([], [], [shift], [], [], date(2024, 6, 5), CUTOFF, None)
     assert shown["shift"] == []
+
+
+def test_a_tension_whose_cited_claims_are_all_missing_still_renders():
+    """M3: `_tension_item` indexed `cited[0]` — an IndexError after the stores appended when
+    every cited claim is missing. Every branch names the missing claims instead."""
+    ghosts = [
+        tension(
+            kind="text_vs_price",
+            claim_ids=["missing"],
+            opened_session=date(2024, 6, 5),
+            details={"claim_value": "positive", "abnormal_return": "0.02", "z": "2.1"},
+        ),
+        tension(
+            kind="asymmetric_link",
+            claim_ids=["missing"],
+            opened_session=date(2024, 6, 5),
+            details={"source_node": "ACME", "receiver_node": "BETA"},
+        ),
+        tension(
+            kind="stale_reliance",
+            claim_ids=["missing"],
+            opened_session=date(2024, 6, 5),
+            details={"age_sessions": 400, "newer_doc_id": "10-K-2"},
+        ),
+    ]
+    sections = sections_at(ghosts)
+    for kind in ("opened_tension",):
+        texts = [item["text"] for item in sections[kind]]
+        assert len(texts) == 3
+        for text in texts:
+            assert "claims missing from the claim store: 1" in text

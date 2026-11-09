@@ -31,7 +31,13 @@ CLAIM_IDENTITY_FIELDS = (
 )
 TENSION_IDENTITY_FIELDS = ("kind", "group_key", "subject")  # members are lifecycle (D72)
 SHIFT_IDENTITY_FIELDS = ("kind", "subject")
-RESOLUTION_IDENTITY_FIELDS = ("tension_id", "hypothesis", "evidence_span", "proposer_version")
+RESOLUTION_IDENTITY_FIELDS = (
+    "tension_id",
+    "hypothesis",
+    "evidence_span",
+    "proposer_version",
+    "claim_id",  # M6 (D76): a proposal under the same id naming a different claim conflicts
+)
 
 
 class ConflictError(Exception):
