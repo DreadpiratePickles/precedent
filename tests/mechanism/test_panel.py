@@ -435,3 +435,34 @@ def test_every_window_unfinished_is_a_panel_error(world, graph):
     """The first event is selected, but its horizon-20 window ends after the query."""
     with pytest.raises(PanelError, match="no precedent passed the time guard"):
         build(world, graph, world.event_positions[1], 20)
+
+
+def test_query_story_excludes_that_story_from_the_fit_panel(world, graph):
+    """V-5: with story_cluster_id set, a finished earlier event of that story leaves the panel."""
+    horizon = 20
+    position = world.event_positions[30]
+    earlier_id = world.event_id_at(world.event_positions[10])
+    story = world.events.set_index("event_id").loc[earlier_id, "story_cluster_id"]
+    assert (
+        story not in world.events[world.events["event_id"] != earlier_id]["story_cluster_id"].values
+    )
+
+    def panel_for(story_cluster_id: str | None) -> GuardedPanel:
+        query = mechanism_query(
+            world.key(1), world.available_utc_at(position), story_cluster_id=story_cluster_id
+        )
+        return build_guarded_panel(
+            query,
+            world.events,
+            world.rows,
+            world.session_cutoffs_utc,
+            world.returns,
+            world.market,
+            asset_ids(graph),
+            graph.event_node_ids,
+            horizon,
+            ALL,
+        )
+
+    assert earlier_id in panel_for(None).event_values.index  # present without the story id
+    assert earlier_id not in panel_for(story).event_values.index
