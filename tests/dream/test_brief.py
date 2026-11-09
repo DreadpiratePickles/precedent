@@ -16,6 +16,7 @@ from precedent.dream.report_render import DISCLAIMER as DREAM_DISCLAIMER
 from precedent.engine.card import DISCLAIMER as CARD_DISCLAIMER
 from precedent.engine.card import CardModel, render_text
 from precedent.libraries.bundle import LibraryMissingError
+from precedent.libraries.manifest import LibraryIntegrityError
 
 DATE = "2024-06-03"
 ROOT = Path(__file__).resolve().parents[2]
@@ -160,7 +161,7 @@ def test_defaults_are_horizon_5_and_event_sequence(tmp_path, data_dir, monkeypat
     assert set(seen) == {(5, "event_sequence")}
 
 
-@pytest.mark.parametrize("error", [ValueError("bad horizon"), LibraryMissingError("no library")])
+@pytest.mark.parametrize("error", [ValueError("bad horizon")])
 def test_a_run_card_error_is_exit_2_and_writes_nothing(
     tmp_path, data_dir, monkeypatch, capsys, error
 ):
@@ -175,9 +176,57 @@ def test_a_run_card_error_is_exit_2_and_writes_nothing(
     )
 
 
-def test_a_missing_library_is_exit_2_through_the_real_run_card(tmp_path, capsys):
-    assert run_brief(tmp_path, tmp_path / "empty") == 2
+@pytest.mark.parametrize(
+    "error",
+    [LibraryMissingError("no library"), LibraryIntegrityError("MANIFEST.json", "sha256 mismatch")],
+)
+def test_a_library_fault_is_exit_1_and_writes_nothing(
+    tmp_path, data_dir, monkeypatch, capsys, error
+):
+    """M4 (Opus final review / D76): a library fault is a data fault, so it exits 1 like the
+    dream command's store failures; only usage errors exit 2."""
+
+    def failing(q, h, o, d, t, *, asof_utc=None):
+        raise error
+
+    monkeypatch.setattr(brief, "run_card", failing)
+    assert run_brief(tmp_path, data_dir) == 1
     assert capsys.readouterr().err.startswith("error:")
+    assert (
+        list((tmp_path / "out").glob("brief_*.md")) == [] if (tmp_path / "out").exists() else True
+    )
+
+
+def test_a_write_fault_is_exit_1_and_leaves_no_partial_brief(tmp_path, data_dir, monkeypatch):
+    """M4 (Opus final review / D76): the brief is written atomically, so a write fault exits 1
+    and no half-written brief exists."""
+
+    def full_disk(path, lines):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(brief, "atomic_write_lines", full_disk)
+    assert run_brief(tmp_path, data_dir) == 1
+    assert not (tmp_path / "out").exists()
+
+
+def test_a_missing_library_is_exit_1_through_the_real_run_card(tmp_path, capsys):
+    assert run_brief(tmp_path, tmp_path / "empty") == 1
+    assert capsys.readouterr().err.startswith("error:")
+
+
+def test_the_default_out_is_the_stage_briefs_dir(tmp_path, data_dir, monkeypatch):
+    """M8 (Opus final review / D76): the default --out is the stage output, never the committed
+    docs/examples; the committed example is written only by an explicit --out."""
+    monkeypatch.chdir(tmp_path)
+    code = brief.run(
+        [
+            "--date", DATE, "--headlines", str(HEADLINES_FILE), "--dream-dir", str(FIX),
+            "--data-dir", str(data_dir),
+        ]
+    )
+    assert code == 0
+    assert (tmp_path / "stages" / "52_dream_report" / "output" / "briefs" / f"brief_{DATE}.md").exists()
+    assert not (tmp_path / "docs").exists()
 
 
 # --- banner from the data dir's README (D57) ----------------------------------------------------

@@ -237,7 +237,9 @@ def _review_parser() -> argparse.ArgumentParser:
 
 
 def run_review(argv: list[str]) -> int:
-    """Print what is waiting for a decision: 0 always, 2 for a bad flag. Writes nothing."""
+    """Print what is waiting for a decision: 0 always, 2 for a bad flag. Writes nothing.
+
+    A malformed store line is a store fault, not a traceback: exit 1 naming the file (D76/M4)."""
     args = _parse(_review_parser(), argv)
     if isinstance(args, int):
         return args
@@ -246,6 +248,9 @@ def run_review(argv: list[str]) -> int:
             return _review(args)
     except DreamLockedError as error:
         print(f"error: {error}", file=sys.stderr)
+        return STORE_FAILURE
+    except (ValueError, OSError) as error:
+        print(f"error: cannot read stores under {args.out}: {error}", file=sys.stderr)
         return STORE_FAILURE
 
 

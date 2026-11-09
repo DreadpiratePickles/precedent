@@ -23,14 +23,16 @@ from precedent.engine.ask import run_card
 from precedent.engine.card import CardModel, render_text
 from precedent.libraries.bundle import LibraryMissingError
 from precedent.libraries.manifest import LibraryIntegrityError
+from precedent.spine.jsonl_io import atomic_write_lines
 from precedent.spine.session_calendar import default_cutoffs_for, load_nyse_calendar
 from precedent.spine.typers.select import typer_from_env
 
 OK = 0
+DATA_FAILURE = 1
 USAGE_ERROR = 2
 HEADLINE_COUNT = 3
 DEFAULT_DREAM_DIR = Path("stages") / "52_dream_report" / "output" / "dreams"
-DEFAULT_OUT = Path("docs") / "examples"
+DEFAULT_OUT = Path("stages") / "52_dream_report" / "output" / "briefs"
 DEFAULT_HORIZON = 5
 DEFAULT_OUTCOME_TYPE = "event_sequence"
 OUTCOME_TYPES = ("asset", "event_sequence", "market_resolution")
@@ -77,23 +79,26 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def run(argv: list[str]) -> int:
-    """Write `<out>/brief_<date>.md`: 0 written, 2 could not run (nothing is written)."""
+    """Write `<out>/brief_<date>.md`: 0 written; 2 bad usage (nothing written); 1 a data or
+    store fault, like the dream command (D76/M4)."""
     try:
         args = _parser().parse_args(argv)
     except SystemExit as request:
         return request.code if isinstance(request.code, int) else USAGE_ERROR
     try:
         text = _build(args)
-    except (BriefError, ConfigError, ValueError, LibraryMissingError, LibraryIntegrityError) as e:
+    except (BriefError, ConfigError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return USAGE_ERROR
+    except (LibraryMissingError, LibraryIntegrityError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return DATA_FAILURE
     target = args.out / f"brief_{args.date.isoformat()}.md"
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(text.encode("utf-8"))
+        atomic_write_lines(target, text.splitlines())
     except OSError as error:
         print(f"error: cannot write {target}: {error}", file=sys.stderr)
-        return USAGE_ERROR
+        return DATA_FAILURE
     print(f"wrote {target}")
     return OK
 
