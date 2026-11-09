@@ -215,3 +215,29 @@ def test_unknown_rung_and_unsupported_quantile_are_rejected(separable_asset_even
         score_precedent_ladder(**separable_asset_events, outcome_type="asset", rungs=("B9",))
     with pytest.raises(ValueError, match="quantile"):
         score_precedent_ladder(**separable_asset_events, outcome_type="asset", quantiles=(0.3,))
+
+
+def _rare_key_inputs():
+    """40 early key-A events, then 3 key-B events: B1 refuses the B events, B0 would not."""
+    placements = [(f"a{i:03d}", KEY_A, 10 + 4 * i) for i in range(40)]
+    placements += [(f"b{i:03d}", KEY_B, 180 + 4 * i) for i in range(3)]
+    outcomes = [
+        (event_id, position, "event_sequence", "trade_or_sanctions/linked_country", 1.0, _HORIZON)
+        for event_id, _, position in placements
+    ]
+    return _ladder_inputs(placements, outcomes)
+
+
+def test_rungs_are_scored_on_paired_units_only():
+    """P-46 (I1): a unit refused by any compared rung is scored by none, so B1 - B0 is paired."""
+    table = score_precedent_ladder(**_rare_key_inputs(), outcome_type="event_sequence")
+    scored = table.pivot(index="event_type", columns="rung", values="n_scored")
+    assert (scored["B0"] == scored["B1"]).all()
+    assert scored.loc["armed_conflict"].tolist() == [0, 0]
+
+
+def test_refusals_are_reported_per_rung_even_for_units_dropped_from_the_pairing():
+    """P-46 (I1): n_refused stays each rung's own count; B0 refuses none of the B events."""
+    table = score_precedent_ladder(**_rare_key_inputs(), outcome_type="event_sequence")
+    refused = table.pivot(index="event_type", columns="rung", values="n_refused")
+    assert refused.loc["armed_conflict", "B1"] == 3 and refused.loc["armed_conflict", "B0"] == 0
