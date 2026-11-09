@@ -111,7 +111,8 @@ def unconditional_sequence_rate(
     """The base rate of a follow-on of `event_type` for a country of `country_group`.
 
     The countries are those in `country_groups` with this group that appear in any row's
-    `linked_countries`. Over each such country and each start `s` in `0 .. end_position -
+    `linked_countries` of an event at `effective_position <= end_position` (later events are
+    not yet known, P-44). Over each such country and each start `s` in `0 .. end_position -
     horizon`, a hit is a first report of `event_type` linked to the country at a position in
     `s + 1 .. s + horizon`. Returns hits / (countries x starts); `None` when the group has no
     such country or `end_position < horizon`.
@@ -120,6 +121,7 @@ def unconditional_sequence_rate(
         raise ValueError(f"horizon must be a positive session count, got {horizon}")
     if end_position - horizon < 0:
         return None
+    events = events.loc[events["effective_position"] <= end_position]  # P-44: known by then
     countries = sorted(
         {
             country

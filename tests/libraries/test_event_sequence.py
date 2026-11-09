@@ -118,3 +118,22 @@ def test_the_feed_end_defaults_to_the_last_session():
     events = table([("p", "armed_conflict", ["MLI"], len(SESSIONS) - 30)])
     rows, report = build_event_sequence_library(events, SESSIONS, TYPES, (5, 20))
     assert len(rows) == 4 and report.skipped_incomplete_window == 0
+
+
+def test_the_ordinary_range_is_truncation_invariant():
+    """P-44 (I2): an event after the query time must not change the base rate."""
+    groups = {"FRA": "DM", "DEU": "DM"}
+    past = table([
+        ("a", "trade_or_sanctions", ["FRA"], 2),
+        ("b", "trade_or_sanctions", ["FRA"], 4),
+        ("c", "trade_or_sanctions", ["FRA"], 9),
+    ])
+    with_future = table([
+        ("a", "trade_or_sanctions", ["FRA"], 2),
+        ("b", "trade_or_sanctions", ["FRA"], 4),
+        ("c", "trade_or_sanctions", ["FRA"], 9),
+        ("z", "trade_or_sanctions", ["DEU"], 200),
+    ])
+    before = unconditional_sequence_rate(past, "trade_or_sanctions", "DM", 5, 20, groups)
+    after = unconditional_sequence_rate(with_future, "trade_or_sanctions", "DM", 5, 20, groups)
+    assert before is not None and after == before
