@@ -22,6 +22,10 @@ from precedent.mechanism.simulate import DEFAULT_QUANTILES, Intervention, fan, s
 DISCLAIMER = "A fitted model of past co-movement under an assumed structure, not a forecast."
 TEMPLATE_PATH = Path(__file__).with_name("cockpit_template.html")
 _LOW, _MEDIAN, _HIGH = "0.1", "0.5", "0.9"
+DIAGONAL_LINE = (
+    "residual covariance is not positive definite: the fan uses its diagonal, so cross-asset "
+    "correlation is dropped (each row's own fan is unaffected)"
+)
 _NO_AGREEMENT = "n/a"
 _DISAGREE = "no (median outside the other's band)"
 _ASSET_WIDTH, _WINDOW_WIDTH, _MECHANISM_WIDTH, _PRECEDENT_WIDTH = 8, 9, 30, 34
@@ -223,6 +227,18 @@ def _disagreement_line(result: MechanismResult) -> str:
     return "edges the data disagrees with: " + ("; ".join(parts) if parts else "none")
 
 
+def disclosure_lines(result: MechanismResult) -> list[str]:
+    """Lines naming what the fit could not determine: the underdetermined equations (node ids)
+    and, when it happened, the fall-back of the residual covariance to its diagonal. The page
+    prints the same lines (`mechanismDisclosures` in the template; a test pins the parity)."""
+    lines = []
+    if result.fitted["underdetermined"]:
+        lines.append("underdetermined equations: " + ", ".join(result.fitted["underdetermined"]))
+    if result.diagonal_fallback:
+        lines.append(DIAGONAL_LINE)
+    return lines
+
+
 def render_text(result: MechanismResult) -> str:
     """The plain-text block: header, one row per graph asset, disagreeing edges, disclaimer.
 
@@ -258,6 +274,7 @@ def render_text(result: MechanismResult) -> str:
             "return; every other row is abnormal against the market model."
         )
     lines.append(_disagreement_line(result))
+    lines += disclosure_lines(result)
     lines += [
         f"intervention on {node} reaches no asset; the fan equals the no-intervention fan."
         for node in result.unreachable_interventions

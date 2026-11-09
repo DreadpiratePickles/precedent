@@ -13,7 +13,8 @@ Show a graph, its fitted effects and the evidence behind each edge to a person w
 ## Process
 1. Deterministic: load graphs and fits with the core install only (no research extra).
 2. Deterministic: render nodes, signed lagged edges, evidence spans and sample sizes; show the evidence label from `docs/STATUS.md`.
-3. Deterministic: apply the user's what-if inputs through the stored fits; nothing is refitted in the view.
+3. Deterministic: show, per asset row, the mechanism fan beside Precedent's p10 / median / p90 and both sample sizes (fit n, band n, and Precedent's `n_eff`); a suppressed row (no data, or a refused band) shows its reason and no fan. Name the underdetermined equations (node ids) and, when it happened, the fall-back of the residual covariance to its diagonal, in the text and on the page.
+4. Deterministic: apply the user's what-if inputs through the stored fits; nothing is refitted in the view.
 
 ## Outputs
 | Path | Schema or format | Consumer |
