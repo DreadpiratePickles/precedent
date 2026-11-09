@@ -9,7 +9,8 @@ Fit each edge's effect size on past events with a guarded estimator, so the grap
 | `stages/40_mechanism_graphs/output/graphs_<graph_version>.jsonl` | 4 | Authoritative for graph structure | Yes | All graphs |
 | `stages/04_align/output/aligned_events.parquet` | 4 | Authoritative for events and `effective_session` | Yes | All records |
 | Price history through the spine price store | 4 | Authoritative for returns | Yes | Asset panel |
-| `references/mechanism/params.json` | 3 | Authoritative for the asset panel and `n_paths` | Yes | All |
+| `references/precedent_params.json` (`engine.asset_panel`, read through `load_engine_params`) | 3 | Authoritative for the asset panel | Yes | `engine.asset_panel` |
+| `references/mechanism/params.json` | 3 | Authoritative for `n_paths` only; its `asset_panel` is a placeholder that only seeds the graph-node vocabulary until replaced by the engine's | Yes | `n_paths` |
 
 ## Process
 1. Deterministic: align each past event of a graph's event key to its sessions and asset returns, using only data available at the event time.

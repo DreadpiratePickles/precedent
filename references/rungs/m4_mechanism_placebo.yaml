@@ -1,4 +1,6 @@
 name: m4_mechanism_placebo
 panel_prefixes: [mech_]
-# Rung M-P: degree-preserving placebo of the template graph; must lose to M-T or the structure
-# earned nothing. A comment, not a `notes` key: spine/ablation.py's Rung model forbids extra keys.
+# Rung M-P: degree-preserving placebo of the template graph. Intended to lose to M-T, but on the
+# central_bank template M-P equals M-T by construction (every template latent has one parent, and
+# degree-preserving swaps keep the reached set), so any M-T gain over P-B1 measures pooling plus a
+# slope, not structure. What M-P should be is an open OWNER decision (M6). A comment, not a `notes` key: spine/ablation.py's Rung model forbids extra keys.

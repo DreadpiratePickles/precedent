@@ -43,7 +43,7 @@ Proposed; runs only after the owner gate in Task 8 (gold set labelled with the o
 
 Kind: ratchet
 Oracle: edge precision and recall of `parse_graph` on the 40-passage development gold set; green means both are at or above the thresholds the owner sets at the Task 8 gate. Green is not acceptance.
-Oracle protection: the gold set and the scorer are read-only to the worker; a change stops the loop and goes to a human.
+Oracle protection: proposed: not yet built. Intended mechanism: the gold set files and the scorer are hash-pinned (SHA-256 recorded in a file the worker may not edit) by a test, and the runner refuses to start or continue an iteration when any pinned hash changes; a change stops the loop and goes to a human. Neither the gold set, the pin file nor the test exists yet, so today nothing mechanically protects the oracle; Task 8 must build it before the loop runs.
 Held-out check: the 20 held-out passages, run once at acceptance.
 Unit per iteration: one prompt change.
 Revises against: the per-edge precision and recall table and the dropped-edge counts of the previous run.
