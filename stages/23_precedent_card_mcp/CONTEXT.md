@@ -12,7 +12,7 @@ Render the precedent card for a typed event as text, JSON and PNG, and serve the
 | A font file for the PNG | 3 | Layout only | No | Text and JSON work without it |
 
 ## Process
-1. Deterministic: match the key, take the top `top_k` precedents known before the query time, and group outcomes by type.
+1. Deterministic: match the key, take the `top_k` nearest completed, non-overlapping precedents known before the query time (guard first, then cut per instrument; ruling P-42), and group outcomes by type.
 2. Deterministic: show up to `card_rows_per_type` rows per type and the `nearest_shown` closest past events.
 3. Deterministic: write the mandatory lines in this order: the typed-as line, then `library covers` (date range and counts), then the rows, then the disclaimer `These are past outcomes of similar events, not a forecast.`
 4. Deterministic: render text and JSON; render the PNG from the same data.

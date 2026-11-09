@@ -273,7 +273,7 @@ def test_the_ladder_guard_refuses_on_the_effective_size_not_the_raw_count(monkey
     params = load_engine_params()
     graph = template_of(clustered.key(1))
     last = clustered.events.iloc[-1]
-    panel = build_guarded_panel(
+    built = build_guarded_panel(
         mechanism_query(clustered.key(1), last["available_utc"], last["story_cluster_id"]),
         clustered.events,
         clustered.rows,
@@ -284,6 +284,18 @@ def test_the_ladder_guard_refuses_on_the_effective_size_not_the_raw_count(monkey
         graph.event_node_ids,
         HORIZON,
         params.top_k,
+    )
+    # P-42/P-48: retrieval is window-aware now, so build_guarded_panel can no longer produce an
+    # overlapping panel. Hand-build one: the same values, indexed by the latest adjacent events.
+    adjacent = pd.Index(
+        clustered.events["event_id"].iloc[-1 - len(built.event_values) : -1],
+        name="event_id",
+        dtype=object,
+    )
+    panel = dataclasses.replace(
+        built,
+        event_values=built.event_values.set_axis(adjacent),
+        asset_returns=built.asset_returns.set_axis(adjacent),
     )
     positions = clustered.events.set_index("event_id")["effective_position"]
     n_eff = effective_sample_size(

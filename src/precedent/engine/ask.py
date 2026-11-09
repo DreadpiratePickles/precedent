@@ -289,7 +289,8 @@ def _outcome_rows(
     params: EngineParams,
 ) -> tuple[list[CardRow], dict[str, str]]:
     asked = OUTCOME_TYPES if outcome_type == ALL_OUTCOME_TYPES else (outcome_type,)
-    position_of = selected.set_index("event_id")["effective_position"]
+    # P-42: find_precedents picks its own events (guard first), so positions come from the library
+    position_of = bundle.events.set_index("event_id")["effective_position"]
     rows: list[CardRow] = []
     not_built: dict[str, str] = {}
     for kind in asked:
