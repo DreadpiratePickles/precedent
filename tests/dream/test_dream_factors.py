@@ -323,3 +323,46 @@ def test_invalid_arguments_are_rejected(tmp_path: Path) -> None:
         build_dream_factor_panel(*stores, SESSIONS, CUTOFFS.iloc[:-1])
     with pytest.raises(ValueError, match="session_cutoffs_utc"):
         build_dream_factor_panel(*stores, SESSIONS, CUTOFFS.dt.tz_localize(None))
+
+
+def test_the_rung_file_documents_the_open_tensions_column() -> None:
+    """M10: `dream_open_tensions` drops a tension older than max_age_sessions even though the
+    name says "open" — the rung file must say so, next to the column an ablation reads."""
+    from precedent.config import references_dir
+
+    text = (references_dir() / "rungs" / "m5_dream.yaml").read_text(encoding="utf-8")
+    assert "dream_open_tensions" in text
+    assert "max_age" in text
+
+
+def test_visible_spans_follow_file_order_not_recorded_utc() -> None:
+    """T7 minor 1 (D76, dispatching the Opus final review's Task 7 m1 triage: "Visible-span
+    ordering by file order ... the assumption C2's ordering guard makes true; pin it in the C2
+    test"): which record owns a visible span is decided by store line order, per D13 and D17 —
+    "the latest record per id among records with `recorded_utc <= cutoff`". A later line that is
+    already seen replaces the earlier one, so the spans are derived in file order, not re-sorted
+    by `recorded_utc`.
+
+    A store never produces the tie case — a same-identity append is `identical_skipped` and D70
+    makes appended `recorded_utc` non-decreasing — so the tie-break is pinned at the unit that
+    the stores feed, `_visible_spans`."""
+    from precedent.dream.dream_factors import _visible_spans
+
+    cutoff_list = list(CUTOFFS.dt.tz_convert("UTC"))  # what build_dream_factor_panel passes
+    original = make_tension(10, "ACME", "text_vs_price", "positive", claim_id="a")
+    restated = original.model_copy(
+        update={"recorded_utc": cutoff(5) - HOUR, "details": {"claim_value": "negative"}}
+    )
+    # file order: the positive version first, the restatement (earlier recorded_utc) second
+    spans = list(_visible_spans([original, restated], cutoff_list))
+    assert [(s[0].details["claim_value"], s[1], s[2]) for s in spans] == [("negative", 5, 40)]
+    # the ordinary as-of replacement: the earlier line owns up to the later line's first seen
+    # session, the later line owns from there on
+    later = original.model_copy(
+        update={"recorded_utc": cutoff(15) - HOUR, "details": {"claim_value": "negative"}}
+    )
+    spans = list(_visible_spans([original, later], cutoff_list))
+    assert [(s[0].details["claim_value"], s[1], s[2]) for s in spans] == [
+        ("negative", 15, 40),
+        ("positive", 10, 15),
+    ]
