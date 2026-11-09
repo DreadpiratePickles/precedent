@@ -11,7 +11,9 @@ from mechanism_world import World, make_world
 
 import precedent.mechanism.evaluate as evaluate_module
 from precedent.config import references_dir
+from precedent.engine.aggregate import effective_sample_size
 from precedent.engine.evaluate import score_precedent_ladder
+from precedent.engine.params import load_engine_params
 from precedent.mechanism.evaluate import (
     precedent_scored_units,
     score_mechanism_ladder,
@@ -258,6 +260,59 @@ def test_no_precedent_or_a_thin_panel_refuses_the_event(world, monkeypatch):
     pb1 = result[(result["rung"] == "P-B1") & (result["quantile"] == 0.5)].iloc[0]
     assert m["n_refused"] > 0 and m["n_scored"] > 0
     assert m["n_scored"] + m["n_refused"] == pb1["n_scored"]
+
+
+def test_the_ladder_guard_refuses_on_the_effective_size_not_the_raw_count(monkeypatch):
+    """V-10 pin: the ladder refuses a fit on the EFFECTIVE sample size. A panel can hold
+    n_obs above min_neff while every outcome window overlaps (many events inside one
+    horizon); the raw count would fit it, the effective count refuses it. (P-B1 applies the
+    same effective-size rule when deciding which units exist, so a scored natural unit never
+    reaches this state; the pin drives the ladder's guard through the same patched-panel
+    seam as the other guard tests.)"""
+    clustered = make_world(seed=1, spacing=1)
+    params = load_engine_params()
+    graph = template_of(clustered.key(1))
+    last = clustered.events.iloc[-1]
+    panel = build_guarded_panel(
+        mechanism_query(clustered.key(1), last["available_utc"], last["story_cluster_id"]),
+        clustered.events,
+        clustered.rows,
+        clustered.session_cutoffs_utc,
+        clustered.returns,
+        clustered.market,
+        [node.id for node in graph.nodes if node.kind is NodeKind.ASSET],
+        graph.event_node_ids,
+        HORIZON,
+        params.top_k,
+    )
+    positions = clustered.events.set_index("event_id")["effective_position"]
+    n_eff = effective_sample_size(
+        np.ones(panel.n_obs),
+        positions.loc[panel.event_values.index].to_numpy("int64"),
+        HORIZON,
+    )
+    assert panel.n_obs >= params.min_neff  # the raw count would pass
+    assert n_eff < params.min_neff  # the windows overlap down below it
+    monkeypatch.setattr(evaluate_module, "build_guarded_panel", lambda *args, **kwargs: panel)
+    assert (
+        evaluate_module._forecast(
+            graph,
+            clustered.key(1),
+            last,
+            clustered.events,
+            clustered.rows,
+            clustered.session_cutoffs_utc,
+            clustered.returns,
+            clustered.market,
+            HORIZON,
+            (0.1, 0.5, 0.9),
+            N_PATHS,
+            0,
+            params.top_k,
+            params.min_neff,
+        )
+        is None
+    )  # refused: the unit is not scored
 
 
 def test_another_panel_error_is_not_swallowed(world):

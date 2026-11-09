@@ -10,6 +10,7 @@ loader body is exercised separately against a fake bundle module and real price 
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import shutil
@@ -28,7 +29,14 @@ from precedent.engine.params import load_engine_params
 from precedent.mechanism import cli
 from precedent.mechanism.cli import MechanismInputs, MechanismRefused, run
 from precedent.mechanism.cockpit import DISCLAIMER
-from precedent.mechanism.graph_schema import NodeKind, load_params
+from precedent.mechanism.graph_schema import (
+    CausalGraph,
+    Edge,
+    Node,
+    NodeKind,
+    derive_kind,
+    load_params,
+)
 from precedent.mechanism.templates import load_templates, template_for
 from precedent.spine.event_key import EventKey
 
@@ -265,8 +273,9 @@ def test_a_horizon_the_library_does_not_hold_is_a_usage_error(capsys, world, loa
 
 
 def test_an_exact_key_with_no_precedent_refuses_the_command(capsys, world, monkeypatch):
-    """Requirement change, ruling I-2 (recorded in docs/verification/2026-11-08-owner-rulings.md
-    and docs/STATUS.md): with no exact-key precedent the command refuses — the fan is never
+    """Requirement change, ruling I-2 (recorded in the addendum of
+    docs/verification/mechanism-2026-11-08.md and docs/STATUS.md): with no exact-key
+    precedent the command refuses — the fan is never
     printed beside a refused band. The fit itself still sees the -1 precedents, which is why
     the refusal names the band (n_eff=0.0), not the fit."""
     # drop every +1 event: the fit (direction 0) keeps the -1 events, the exact +1 key has none
@@ -481,3 +490,51 @@ def test_mechanism_asset_panel_cannot_drift_from_the_engine_panel():
 def test_the_template_vocabulary_comes_from_the_engine_asset_panel():
     assets = {n for n in cli._vocabulary() if n in set(load_engine_params().asset_panel)}
     assert assets == set(load_engine_params().asset_panel)
+
+
+def test_event_values_follow_the_panel_encoding_for_every_key_field():
+    """M-5 pin: the CLI's event values are the panel's one encoding — no private severity or
+    scheduled map can drift from it — asserted for every severity level and the scheduled
+    flag against a graph whose event nodes name those fields (no shipped template names
+    them, so an unpaired map would otherwise never be caught)."""
+    from precedent.mechanism.panel import event_values_of
+
+    base = make_world(seed=3).key(1)
+    severity_node = "event:central_bank:severity_band"
+    scheduled_node = "event:central_bank:is_scheduled"
+    ids = [severity_node, scheduled_node, "rates_expectation", "SPY"]
+    graph = CausalGraph(
+        graph_id="test:encoding",
+        graph_version="template-v1",
+        event_key=base,
+        nodes=[Node(id=node_id, kind=derive_kind(node_id)) for node_id in ids],
+        edges=[
+            Edge(
+                source=source,
+                target="rates_expectation",
+                sign=1,
+                lag_band="same_session",
+                source_doc_id=None,
+                evidence_span=None,
+            )
+            for source in (severity_node, scheduled_node)
+        ]
+        + [
+            Edge(
+                source="rates_expectation",
+                target="SPY",
+                sign=1,
+                lag_band="same_session",
+                source_doc_id=None,
+                evidence_span=None,
+            )
+        ],
+    )
+    for severity in ("low", "mid", "high"):
+        for scheduled in (False, True):
+            key = dataclasses.replace(base, severity_band=severity, is_scheduled=scheduled)
+            expected = {
+                node: float(value)
+                for node, value in event_values_of(key, graph.event_node_ids).items()
+            }
+            assert cli._event_values(key, graph) == expected

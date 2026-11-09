@@ -13,10 +13,12 @@ import pandas as pd
 import pytest
 
 from precedent.config import references_dir
+from precedent.engine.params import load_engine_params
 from precedent.mechanism import cli
 from precedent.mechanism.cli import parse_do_flags, run
 from precedent.mechanism.cockpit import (
     DISCLAIMER,
+    TEMPLATE_PATH,
     BandRow,
     InterventionRow,
     MechanismResult,
@@ -138,6 +140,7 @@ def hand_result(**overrides) -> MechanismResult:
             BandRow(asset="HYG", horizon=5, p10=None, median=None, p90=None,
                     n=4, n_eff=3.24, refused=True),
         ],
+        "min_neff": load_engine_params().min_neff,
         "seed": 0,
         "n_paths": 2000,
         "asof_utc": ASOF,
@@ -158,6 +161,7 @@ def simulated_result(interventions=(), bands=(), n_paths=4000, seed=0) -> Mechan
         event_values={SIGN: -1.0},
         interventions=tuple(interventions),
         precedent=list(bands),
+        min_neff=load_engine_params().min_neff,
         seed=seed,
         n_paths=n_paths,
         asof_utc=ASOF,
@@ -190,7 +194,7 @@ def no_data_fixture() -> tuple[MechanismResult, FittedSEM, CausalGraph]:
         ],
         no_data_assets=(NO_DATA_ASSET,),
         refused_assets=(REFUSED_ASSET,),
-        min_neff=8.0,
+        min_neff=load_engine_params().min_neff,
         seed=0,
         n_paths=500,
         asof_utc=ASOF,
@@ -360,6 +364,33 @@ def test_html_is_self_contained_and_carries_the_disclaimer():
     assert html.count(DISCLAIMER) >= 2  # title and footer
 
 
+def test_the_market_row_is_labelled_raw_on_the_page():
+    """V-9 pin: the page tells the market row's basis apart like the text does — the payload
+    marks the market band `raw_return`, the shipped template labels the row "(raw)" as it
+    draws it, and the rendered page carries the one-line note under the fan table."""
+    graph = make_graph()
+    result = build_result(
+        graph=graph,
+        fitted=make_fitted(graph),
+        event_values={SIGN: -1.0},
+        interventions=(),
+        precedent=[
+            BandRow(asset="SPY", horizon=5, p10=-0.02, median=0.0, p90=0.02,
+                    n=30, n_eff=20.0, refused=False, basis="raw_return"),
+        ],
+        min_neff=load_engine_params().min_neff,
+        seed=1,
+        n_paths=1000,
+        asof_utc=ASOF,
+        code_commit=None,
+    )
+    html = render_html(result)
+    assert '"basis":"raw_return"' in html  # the market row's data behind the label (compact JSON)
+    assert "cumulative return (raw), not an abnormal return" in html  # the page note
+    assert " (raw)" in TEMPLATE_PATH.read_text(encoding="utf-8")  # the label the page draws
+    assert "cumulative return (raw)" not in render_html(simulated_result())
+
+
 def test_html_embeds_the_payload_as_json_and_survives_a_closing_script_tag():
     result = simulated_result()
     html = render_html(result)
@@ -511,7 +542,8 @@ def test_js_falls_back_to_the_diagonal_like_python():
     fitted = make_fitted(graph, cov=bad_cov)
     result = build_result(
         graph=graph, fitted=fitted, event_values={SIGN: -1.0}, interventions=(),
-        precedent=[], seed=1, n_paths=3000, asof_utc=ASOF, code_commit=None,
+        precedent=[], min_neff=load_engine_params().min_neff,
+        seed=1, n_paths=3000, asof_utc=ASOF, code_commit=None,
     )  # fmt: skip
     assert result.diagonal_fallback is True
     program = """

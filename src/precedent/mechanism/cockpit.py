@@ -81,8 +81,9 @@ class MechanismResult(BaseModel):
     precedent: list[BandRow]
     no_data_assets: list[str] = []
     refused_assets: list[str] = []
-    # the engine's current value; the CLI passes load_engine_params().min_neff
-    min_neff: float = 8.0
+    # the engine's value, required: the CLI passes load_engine_params().min_neff and there is
+    # no default, so a result can only carry the parameter the engine was configured with
+    min_neff: float
     seed: int
     n_paths: int
     asof_utc: AwareDatetime
@@ -110,7 +111,7 @@ def build_result(
     precedent: list[BandRow],
     no_data_assets: tuple[str, ...] = (),
     refused_assets: tuple[str, ...] = (),
-    min_neff: float = 8.0,
+    min_neff: float,
     seed: int,
     n_paths: int,
     asof_utc: Any,
@@ -280,5 +281,18 @@ def render_html(result: MechanismResult) -> str:
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
     title = f"Mechanism cockpit — {result.graph.event_key.event_type} — {DISCLAIMER}"
     payload = _json_for_script_tag(result.model_dump_json())
-    values = {"TITLE": html.escape(title), "PAYLOAD_JSON": payload}
-    return re.sub(r"\{\{(TITLE|PAYLOAD_JSON)\}\}", lambda match: values[match[1]], template)
+    raw = sorted({band.asset for band in result.precedent if band.basis == "raw_return"})
+    raw_note = (
+        f"{', '.join(raw)}: the market's own cumulative return (raw), not an abnormal "
+        "return; every other row is abnormal against the market model."
+        if raw
+        else ""
+    )
+    values = {
+        "TITLE": html.escape(title),
+        "PAYLOAD_JSON": payload,
+        "RAW_NOTE": html.escape(raw_note),
+    }
+    return re.sub(
+        r"\{\{(TITLE|PAYLOAD_JSON|RAW_NOTE)\}\}", lambda match: values[match[1]], template
+    )
