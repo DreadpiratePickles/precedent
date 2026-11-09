@@ -37,13 +37,10 @@ from precedent.libraries.market_resolution import (
     MarketLibraryReport,
     build_market_resolution_library,
 )
-from precedent.spine.edgar_8k_events import SOURCE as EDGAR_SOURCE
+from precedent.libraries.sources import CITATIONS, EVENT_SOURCES
 from precedent.spine.edgar_8k_events import edgar_parser_version
 from precedent.spine.event_record import EventRecord
 from precedent.spine.event_store import EventStore
-from precedent.spine.gdelt_events import (
-    SOURCE_NAME as GDELT_SOURCE,
-)
 from precedent.spine.gdelt_events import dedupe_gdelt_records, gdelt_parser_version
 from precedent.spine.market_record import MarketRecord
 from precedent.spine.market_store import VENUES, MarketStore
@@ -63,16 +60,6 @@ _NO_MARKET_EVENT = "no_market_event"
 _NO_PRICES = "no prices"
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
-_EVENT_SOURCES = (("gdelt2", GDELT_SOURCE), ("edgar_8k", EDGAR_SOURCE))
-_CITATIONS = {
-    "gdelt2": (
-        "The GDELT Project (gdeltproject.org), GDELT 2.0 Event Database; "
-        "citation and link required on redistribution"
-    ),
-    "edgar_8k": "U.S. Securities and Exchange Commission, EDGAR submissions API",
-    "polymarket": "Polymarket Gamma API, resolved markets (ids, typed keys and dates only)",
-    "kalshi": "Kalshi trade API, settled markets (ids, typed keys and dates only)",
-}
 
 
 class NoEventsError(RuntimeError):
@@ -234,7 +221,7 @@ def _placebo(
 
 def _sources(events: pd.DataFrame, markets: pd.DataFrame) -> list[ManifestSource]:
     sources: list[ManifestSource] = []
-    for name, event_source in _EVENT_SOURCES:
+    for name, event_source in EVENT_SOURCES:
         sessions = events.loc[events["source"] == event_source, "effective_session"]
         if len(sessions):
             sources.append(_source(name, min(sessions), max(sessions), len(sessions)))
@@ -248,7 +235,7 @@ def _sources(events: pd.DataFrame, markets: pd.DataFrame) -> list[ManifestSource
 
 def _source(name: str, first: date, last: date, rows: int) -> ManifestSource:
     return ManifestSource(
-        name=name, first_date=first, last_date=last, rows=rows, citation=_CITATIONS[name]
+        name=name, first_date=first, last_date=last, rows=rows, citation=CITATIONS[name]
     )
 
 
