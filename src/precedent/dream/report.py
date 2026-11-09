@@ -75,6 +75,7 @@ RETURN_KIND = "close_to_close"  # a return is indexed by the session it became k
 MANIFEST_FILE = "manifest.json"
 STORE_DIRS = ("claims", "tensions", "shifts", "resolutions")
 _VOCABULARY_FILE = Path("dream") / "claim_vocabulary.json"
+CALENDAR_WARNING_DAYS = 60  # M7 (D76): warn in the header this far ahead of the calendar's end
 
 
 class UsageError(Exception):
@@ -323,6 +324,16 @@ def _sessions_between(first: date, last: date, calendar: NyseCalendar) -> int:
     return len(weekday_sessions(start, end, calendar)) if start <= end else 0
 
 
+def _calendar_end(calendar: NyseCalendar) -> date:
+    """The last session the committed calendar supports: its final session of `last_year`.
+
+    Derived from the calendar itself (loaded from references/nyse_holidays.json), never
+    hardcoded (M7/D76)."""
+    return weekday_sessions(
+        date(calendar.last_year, 12, 1), date(calendar.last_year, 12, 31), calendar
+    )[-1].date()
+
+
 def _dream_dates(out: Path) -> list[date]:
     return sorted(
         date.fromisoformat(path.stem.removeprefix("dream_"))
@@ -536,6 +547,13 @@ def _compute(
         header["prices_none_for"] = session.isoformat()
     if skipped_sessions:
         header["gap_sessions_skipped"] = skipped_sessions
+    days_left = (_calendar_end(calendar) - session).days
+    if 0 <= days_left <= CALENDAR_WARNING_DAYS:
+        header["calendar_warning"] = (
+            f"the committed NYSE calendar ends {_calendar_end(calendar).isoformat()}; extend "
+            "references/nyse_holidays.json or nightly dreams start failing once the story "
+            "window runs past the last cutoff"
+        )
     dreams = args.out / "dreams"
     summary = {
         "session": header["session"],
@@ -583,7 +601,15 @@ def _record_tensions(
         if known is None:
             unseen.append(tension)
         elif known.status == "closed":
-            store.reopen(tension.tension_id, session, tension.claim_ids, cutoff)
+            # D77: a "lapsed" close reopens on a plain recurrence; a "resolution" close
+            # (the owner's decision) reopens only when the group's membership changes — a
+            # claim id the closing record does not hold. Otherwise nothing is appended, so
+            # a replay stays a no-op.
+            membership_changed = bool(set(tension.claim_ids) - set(known.claim_ids))
+            if known.closed_by == "lapsed" or (
+                known.closed_by == "resolution" and membership_changed
+            ):
+                store.reopen(tension.tension_id, session, tension.claim_ids, cutoff)
         elif sorted(known.claim_ids) != sorted(tension.claim_ids):
             store.restate_members(tension.tension_id, tension.claim_ids, cutoff)
     store.append(unseen)
@@ -621,4 +647,4 @@ def _close_lapsed_tensions(
         else:
             holds = set(tension.claim_ids) <= visible
         if not holds:
-            tensions.close(tension.tension_id, session, cutoff)
+            tensions.close(tension.tension_id, session, cutoff, "lapsed")

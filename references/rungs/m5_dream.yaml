@@ -1,2 +1,6 @@
 name: m5_dream
 panel_prefixes: ["dream_"]
+# Dream panel columns (D17): dream_open_tensions counts tensions that are open AND within
+# max_age_sessions of the session — an older tension that is still open has aged out of the
+# column, so "open_tensions" is "recently open or reopened", not "all open". Tested by
+# tests/dream/test_dream_factors.py::test_the_rung_file_documents_the_open_tensions_column.

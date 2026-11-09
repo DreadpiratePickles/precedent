@@ -767,3 +767,18 @@ def test_run_detectors_refuses_cutoffs_that_do_not_match_the_sessions_axis(tmp_p
     stores = make_stores(tmp_path, records=[record_on(SESSION)], with_link_store=False)
     with pytest.raises(ValueError, match="cutoffs"):
         run_detectors(stores, SESSION, CUTOFFS.iloc[:-1], PARAMS)
+
+
+def test_the_params_file_is_authoritative_for_abnormal_returns():
+    """M5: the JSON owns the market-model window (stage 52 calls it authoritative) and no
+    knob exists that nothing reads."""
+    from precedent.config import references_dir
+
+    raw = json.loads(
+        (references_dir() / "dream" / "detector_params.json").read_text(encoding="utf-8")
+    )
+    assert raw["abnormal_returns"] == {"est_window": [-250, -21], "min_obs": 120}
+    assert "lookback_months" not in raw["asymmetric_link"]
+    params = load_detector_params()
+    assert params["abnormal_returns"] == {"est_window": (-250, -21), "min_obs": 120}
+    assert "lookback_months" not in params["asymmetric_link"]

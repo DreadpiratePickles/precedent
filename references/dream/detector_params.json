@@ -5,9 +5,11 @@
   "text_vs_price": {
     "z_threshold": 2.0
   },
-  "asymmetric_link": {
-    "lookback_months": 15
+  "abnormal_returns": {
+    "est_window": [-250, -21],
+    "min_obs": 120
   },
+  "asymmetric_link": {},
   "stale_reliance": {
     "max_age_sessions": 300
   },

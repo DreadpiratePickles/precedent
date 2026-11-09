@@ -185,6 +185,7 @@ class Tension(BaseModel):
     recorded_utc: UtcDatetime
     status: Literal["open", "closed", "acknowledged"] = "open"
     closed_session: date | None = None
+    closed_by: Literal["resolution", "lapsed"] | None = None  # D77: a close names its cause
 
     @model_validator(mode="after")
     def _check_tension(self) -> "Tension":
@@ -192,6 +193,10 @@ class Tension(BaseModel):
             raise ValueError("a value_conflict tension needs at least two claim ids")
         if (self.status == "closed") != (self.closed_session is not None):
             raise ValueError("closed_session is set exactly when status is 'closed'")
+        if self.status == "closed" and self.closed_by is None:
+            raise ValueError("a closed tension names its cause (closed_by)")
+        if self.status != "closed" and self.closed_by is not None:
+            raise ValueError("closed_by is set exactly when status is 'closed'")
         _check_or_fill_id(
             self, "tension_id", tension_id_for(self.kind, self.group_key)
         )

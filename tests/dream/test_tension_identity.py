@@ -14,9 +14,23 @@ from dream_synthetic import (
     write_links,
 )
 
-from precedent.dream.claim_schema import Claim, TensionKind, claim_id_for, link_id_for
-from precedent.dream.claim_store import ClaimStore, ConflictError, TensionStore, tensions_asof
+from precedent.dream.claim_schema import (
+    Claim,
+    Hypothesis,
+    Resolution,
+    TensionKind,
+    claim_id_for,
+    link_id_for,
+)
+from precedent.dream.claim_store import (
+    ClaimStore,
+    ConflictError,
+    ResolutionStore,
+    TensionStore,
+    tensions_asof,
+)
 from precedent.dream.detectors import detect_value_conflicts
+from precedent.dream.promote import run_promote
 from precedent.dream.report import run
 
 SESSIONS = [
@@ -223,7 +237,7 @@ def test_store_restate_members_keeps_status_and_refuses_a_closed_tension(
     )
     assert updated.claim_ids == ["x", "y", "z"] and updated.status == "open"
     assert updated.opened_session == conflict.opened_session
-    store.close(conflict.tension_id, date(2024, 6, 5), at("2024-06-05T20:00:00Z"))
+    store.close(conflict.tension_id, date(2024, 6, 5), at("2024-06-05T20:00:00Z"), "lapsed")
     with pytest.raises(ConflictError):
         store.restate_members(conflict.tension_id, ["x"], at("2024-06-06T20:00:00Z"))
     with pytest.raises(ConflictError):  # only a closed tension reopens
@@ -242,3 +256,81 @@ def test_value_conflict_detection_ignores_event_direction_in_the_pipeline(
     run(["--date", "2024-06-03", "--out", str(tmp_path)])
     assert tensions(tmp_path, "value_conflict") == []
     assert detect_value_conflicts.__doc__ and "event_direction" in detect_value_conflicts.__doc__
+
+
+# --- N1 / D77: an owner-closed tension stays closed until the conflict changes -------------
+
+
+def propose_resolution(out, tension):
+    ResolutionStore(out / "resolutions").append(
+        [
+            Resolution(
+                resolution_id="r1",
+                tension_id=tension.tension_id,
+                hypothesis=Hypothesis.different_scope,
+                evidence_span="the two documents speak of different scopes",
+                proposer_version="rules-test-v1",
+                status="proposed",
+                proposed_utc=at("2024-06-03T21:00:00Z"),
+                recorded_utc=at("2024-06-03T21:00:00Z"),
+            )
+        ]
+    )
+
+
+def accept_resolution(out):
+    return run_promote(
+        [
+            "--resolution", "r1", "--accept", "--at", "2024-06-04T14:00:00Z",
+            "--out", str(out),
+        ]
+    )
+
+
+def test_an_owner_closed_tension_stays_closed_when_its_group_recurs(
+    tmp_path, conflicted_stores
+):
+    """N1/D77: an accepted resolution closes the tension; the same group recurring the next
+    night does not reopen it — nothing is appended and the note shows the close, not a new
+    opening. The owner's decision stands until the conflict itself changes."""
+    assert run(["--date", "2024-06-03", "--out", str(tmp_path)]) == 0
+    [tension] = tensions(tmp_path, "value_conflict")
+    propose_resolution(tmp_path, tension)
+    assert accept_resolution(tmp_path) == 0
+    lines = len(TensionStore(tmp_path / "tensions").read_all())
+    assert run(["--date", "2024-06-04", "--out", str(tmp_path)]) == 0
+    [still] = tensions(tmp_path, "value_conflict")
+    assert still.status == "closed" and still.closed_session == date(2024, 6, 4)
+    text = markdown(tmp_path, "2024-06-04")
+    assert "## Opened tensions (0)" in text and "## Closed tensions (1)" in text
+    assert len(TensionStore(tmp_path / "tensions").read_all()) == lines  # nothing appended
+
+
+def test_an_owner_closed_tension_reopens_when_a_new_claim_joins_the_group(
+    tmp_path, conflicted_stores
+):
+    """N1/D77: the close stands while the group is unchanged; a new conflicting claim
+    joining the group is a real change and reopens the tension, listed under Opened."""
+    assert run(["--date", "2024-06-03", "--out", str(tmp_path)]) == 0
+    [tension] = tensions(tmp_path, "value_conflict")
+    propose_resolution(tmp_path, tension)
+    assert accept_resolution(tmp_path) == 0
+    assert run(["--date", "2024-06-04", "--out", str(tmp_path)]) == 0
+    third = Claim(
+        subject="ACME",
+        attribute="capex_direction",
+        period="current_quarter",
+        value="down",
+        valid_from_utc=at("2024-06-05T14:00:00Z"),
+        valid_to_utc=at("2024-06-06T20:00:00Z"),
+        recorded_utc=at("2024-06-05T14:00:00Z"),
+        source_doc_id="8K-ACME-C",
+        evidence_span="Acme confirms the capex cut",
+        extractor_version="rules-test-v1",
+    )
+    ClaimStore(tmp_path / "claims").append([third])
+    assert run(["--date", "2024-06-05", "--out", str(tmp_path)]) == 0
+    [again] = tensions(tmp_path, "value_conflict")
+    assert again.tension_id == tension.tension_id
+    assert again.status == "open" and again.opened_session == date(2024, 6, 5)
+    assert "## Opened tensions (1)" in markdown(tmp_path, "2024-06-05")

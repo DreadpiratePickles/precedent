@@ -135,6 +135,29 @@ def test_exit_costs_item_becomes_a_headcount_claim():
     assert [c.attribute for c in claims].count("event_direction") == 1
 
 
+def test_typed_8k_claim_is_emitted_only_for_the_filer():
+    """M9: a typed 8-K item describes the filer; a resolved counterparty must not inherit it."""
+    base = make_event_record()
+    event = base.event.model_copy(update={"evidence_span": "8-K item 2.05"})
+    record = make_event_record(
+        article_id="0000320193-24-000001:2.05",
+        source="edgar",
+        event=event,
+        available_utc=utc("2024-02-01T21:35:00Z"),
+        resolved_impacts=[
+            {"instrument": "AAPL", "kind": "company", "direction": 0.0, "match_method": "cik_map"},
+            {
+                "instrument": "SUP",
+                "kind": "company",
+                "direction": 0.0,
+                "match_method": "ticker_hint",
+            },
+        ],
+    )
+    typed = [c for c in claims_from_events([record]) if c.attribute == "headcount_direction"]
+    assert [c.subject for c in typed] == ["AAPL"]
+
+
 def test_other_events_item_produces_no_typed_claim():
     claims = claims_from_events(
         [record_for_8k_item("8.01", "AAPL"), record_for_8k_item("7.01", "AAPL", accession="x-2")]
