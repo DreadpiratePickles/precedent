@@ -221,12 +221,12 @@ def _vocabulary() -> frozenset[str]:
 def _load_inputs(directory: Path) -> MechanismInputs:
     """Read the library bundle and the market's open-to-open returns under `directory`.
 
-    NO LIVE RUN: `precedent.libraries.bundle` is Precedent Task 10, not merged into this track
-    yet, so this body is written against its interface (`load_bundle(<dir>/library)` with
-    `events`, `rows`, `sessions`, `session_cutoffs_utc`) and has only run against a fake bundle.
-    Until it merges the import below raises `ModuleNotFoundError`, which `run` reports as
-    `not built yet`. Only the market's returns are loaded: the panel takes every asset's value
-    from the library rows and the market's own from `returns`.
+    NO LIVE RUN: `precedent.libraries.bundle` is in this branch and a synthetic bundle round trip
+    works (`load_bundle(<dir>/library)` with `events`, `rows`, `sessions`,
+    `session_cutoffs_utc`), but the loader has been exercised on a synthetic bundle only, never a
+    real library. A checkout without the engine still reports `not built yet`, because `run`
+    catches the `ModuleNotFoundError`. Only the market's returns are loaded: the panel takes
+    every asset's value from the library rows and the market's own from `returns`.
     """
     from precedent.engine.params import load_engine_params
     from precedent.libraries.bundle import load_bundle

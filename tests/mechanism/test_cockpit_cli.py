@@ -3,8 +3,7 @@
 The plan's `populated_stores` fixture does not exist in this tree, and its events would not match
 the plan's key (digest section 7). The synthetic world of `mechanism_world.py` replaces it: real
 events table, real asset library, real time guard. The one seam is `_load_inputs`, the loader that
-reads the library bundle from disk (`precedent.libraries.bundle`, Precedent Task 10, not merged
-here); it is monkeypatched to hand back the world's inputs, and everything after it is real. The
+reads the library bundle from disk (`precedent.libraries.bundle`); it is monkeypatched to hand back the world's inputs, and everything after it is real. The
 loader body is exercised separately against a fake bundle module and real price parquet files.
 """
 
