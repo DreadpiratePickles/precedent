@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
@@ -54,6 +54,10 @@ class FittedSEM:
     `intercepts[node] + sum(coefficients[node][p] * parent_p)`. Its intercept is minus the
     weighted panel-mean parent value, so that value is the centred score its children's
     equations were fitted on; an unidentified latent has intercept 0.0 and no coefficients.
+
+    `node_ranges` maps every event and intermediate node to the 5th and 95th percentile of its
+    values over the fitted panel (a latent's is its centred score); the cockpit's sliders run
+    over it. A node with no observed value is absent.
     """
 
     coefficients: dict[str, dict[str, float]]
@@ -67,6 +71,7 @@ class FittedSEM:
     graph_version: str
     fitted_asof_utc: pd.Timestamp
     horizon: int
+    node_ranges: dict[str, tuple[float, float]] = field(default_factory=dict)
 
     def to_json_dict(self) -> dict[str, Any]:
         """Plain floats, strings and nested lists, ready for `json.dumps`."""
@@ -82,6 +87,7 @@ class FittedSEM:
             "graph_version": self.graph_version,
             "fitted_asof_utc": self.fitted_asof_utc.isoformat(),
             "horizon": self.horizon,
+            "node_ranges": {node: list(pair) for node, pair in self.node_ranges.items()},
         }
 
     @classmethod
@@ -104,6 +110,10 @@ class FittedSEM:
             graph_version=payload["graph_version"],
             fitted_asof_utc=asof.tz_convert("UTC"),
             horizon=int(payload["horizon"]),
+            node_ranges={
+                node: (float(pair[0]), float(pair[1]))
+                for node, pair in payload.get("node_ranges", {}).items()
+            },
         )
 
 
@@ -301,6 +311,11 @@ def fit_sem(graph: CausalGraph, panel: GuardedPanel, ridge: float = 1.0) -> Fitt
             parent in underdetermined for parent in graph.parents(node)
         ):
             underdetermined.add(node)
+    node_ranges = {
+        node: (float(np.nanpercentile(series[node], 5)), float(np.nanpercentile(series[node], 95)))
+        for node in graph.topological_order()
+        if kinds[node] is not NodeKind.ASSET and not np.isnan(series[node]).all()
+    }
     residual_matrix = np.vstack([residuals[a] for a in assets]) if assets else np.empty((0, 0))
     return FittedSEM(
         coefficients=coefficients,
@@ -314,4 +329,5 @@ def fit_sem(graph: CausalGraph, panel: GuardedPanel, ridge: float = 1.0) -> Fitt
         graph_version=graph.graph_version,
         fitted_asof_utc=panel.asof_utc,
         horizon=panel.horizon,
+        node_ranges=node_ranges,
     )

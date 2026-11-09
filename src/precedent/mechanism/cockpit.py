@@ -93,6 +93,11 @@ class MechanismResult(BaseModel):
     asof_utc: AwareDatetime
     unreachable_interventions: list[str]
     diagonal_fallback: bool
+    # the lower Cholesky factor of fitted.residual_cov, or its clamped diagonal when
+    # diagonal_fallback: computed once by simulate() and embedded so the page never factorises
+    residual_factor: list[list[float]] = []
+    # event and intermediate node -> (p5, p95) of the fitted panel, the sliders' range
+    slider_ranges: dict[str, tuple[float, float]] = {}
     code_commit: str | None
     disclaimer: Literal[DISCLAIMER] = DISCLAIMER
 
@@ -152,6 +157,8 @@ def build_result(
         asof_utc=asof_utc,
         unreachable_interventions=list(rollout.unreachable_interventions),
         diagonal_fallback=rollout.diagonal_fallback,
+        residual_factor=rollout.factor.tolist(),
+        slider_ranges=dict(fitted.node_ranges),
         code_commit=code_commit,
     )
 

@@ -94,6 +94,11 @@ def make_graph(edges=EDGES) -> CausalGraph:
     )
 
 
+# the fitted panel's 5th and 95th percentile per event and intermediate node, which the page's
+# sliders run over (these were the page's fixed ranges before they came from the payload)
+NODE_RANGES = {SIGN: (-1.0, 1.0), RATES: (-3.0, 3.0), RISK: (-3.0, 3.0)}
+
+
 def make_fitted(graph, coefficients=None, cov=None, disagreements=()) -> FittedSEM:
     coefficients = COEFFICIENTS if coefficients is None else coefficients
     assets = [n.id for n in graph.nodes if n.kind.value == "asset"]
@@ -110,6 +115,7 @@ def make_fitted(graph, coefficients=None, cov=None, disagreements=()) -> FittedS
         graph_version=graph.graph_version,
         fitted_asof_utc=pd.Timestamp(ASOF),
         horizon=5,
+        node_ranges=dict(NODE_RANGES),
     )
 
 

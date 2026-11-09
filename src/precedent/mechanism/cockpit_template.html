@@ -101,32 +101,16 @@ footer { padding-bottom: 28px; font-size: 13px; }
     return z;
   }
 
-  // Lower Cholesky factor; a pivot <= 0 means numpy raises, so use the clamped diagonal.
-  function choleskyFactor(cov) {
-    const n = cov.length, factor = cov.map(() => new Float64Array(n));
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j <= i; j++) {
-        let sum = cov[i][j];
-        for (let k = 0; k < j; k++) sum -= factor[i][k] * factor[j][k];
-        if (i === j) {
-          if (!(sum > 0)) return { factor: diagonalFactor(cov), fallback: true };
-          factor[i][i] = Math.sqrt(sum);
-        } else {
-          factor[i][j] = sum / factor[j][j];
-        }
-      }
-    }
-    return { factor, fallback: false };
-  }
-  function diagonalFactor(cov) {
-    return cov.map((row, i) => Float64Array.from(row, (_, j) => (i === j ? Math.sqrt(Math.max(row[i], 0)) : 0)));
-  }
-
+  // The residual draws scale the normals by the factor the payload embeds: Python computed it
+  // once (and chose the diagonal fallback), so the page never factorises on its own.
   let drawCache = { key: null, noise: null };
-  function residualDraws(cov, nPaths, seed) {
-    const key = [seed, nPaths, JSON.stringify(cov)].join("|");
+  function residualDraws(factor, nAssets, nPaths, seed) {
+    if (factor.length !== nAssets || factor.some((row) => row.length !== nAssets)) {
+      throw new Error("payload has no residual factor of size " + nAssets);
+    }
+    const key = [seed, nPaths, JSON.stringify(factor)].join("|");
     if (drawCache.key === key) return drawCache.noise;
-    const n = cov.length, factor = choleskyFactor(cov).factor, z = hashNormals(seed, nPaths, n);
+    const n = nAssets, z = hashNormals(seed, nPaths, n);
     const noise = new Float64Array(nPaths * n);
     for (let p = 0; p < nPaths; p++) {
       for (let j = 0; j < n; j++) {
@@ -177,7 +161,7 @@ footer { padding-bottom: 28px; font-size: 13px; }
     });
     const nAssets = assets.length, column = {};
     assets.forEach((a, j) => { column[a] = j; });
-    const noise = residualDraws(fitted.residual_cov, nPaths, seed);
+    const noise = residualDraws(payload.residual_factor || [], nAssets, nPaths, seed);
     const order = topologicalOrder(graph.nodes, graph.edges);
     const outcomes = assets.map(() => new Float64Array(nPaths)), values = {};
     for (let p = 0; p < nPaths; p++) {
@@ -210,7 +194,6 @@ footer { padding-bottom: 28px; font-size: 13px; }
     return out;
   }
 
-  const EVENT_RANGES = { direction_sign: [-1, 1, 1], severity_band: [0, 2, 1], is_scheduled: [0, 1, 1] };
   // The page starts from the query: its event values and every do() it was run with, whatever
   // the node's kind (an asset has no slider but its intervention still applies). Event nodes are
   // never intervened on: their sliders set the event value and the payload cannot carry a do().
@@ -219,15 +202,26 @@ footer { padding-bottom: 28px; font-size: 13px; }
     payload.interventions.forEach((i) => { forced[i.node] = i.value; });
     return { events: Object.assign({}, payload.event_values), forced };
   }
+  // A slider runs over the fitted panel's 5th to 95th percentile of its node (embedded in the
+  // payload), widened to include the query value. A node with no recorded range is pinned to its
+  // value: no range is invented. An event is an enum moved in whole steps, so its range widens
+  // outward to whole numbers; an intermediate's step is a 60th of its span, to one significant figure.
+  function sliderBounds(payload, node, value, isEvent) {
+    const range = (payload.slider_ranges || {})[node];
+    let min = Math.min(range ? range[0] : value, value), max = Math.max(range ? range[1] : value, value);
+    if (isEvent) { min = Math.floor(min); max = Math.ceil(max); }
+    const step = isEvent ? 1 : (Number(((max - min) / 60).toPrecision(1)) || 0.1);
+    return { min, max, step };
+  }
   function mechanismControls(payload) {
     const forced = mechanismInitialState(payload).forced;
     return payload.graph.nodes.filter((n) => n.kind !== "asset").map((n) => {
       if (n.kind === "event") {
-        const [min, max, step] = EVENT_RANGES[n.id.split(":").pop()] || [-1, 1, 1];
-        return { node: n.id, kind: "event", min, max, step, value: payload.event_values[n.id] ?? 0, free: false };
+        const value = payload.event_values[n.id] ?? 0;
+        return { node: n.id, kind: "event", ...sliderBounds(payload, n.id, value, true), value, free: false };
       }
       const set = has(forced, n.id), value = set ? forced[n.id] : 0;
-      return { node: n.id, kind: "intermediate", min: Math.min(-3, value), max: Math.max(3, value), step: 0.1, value, free: !set };
+      return { node: n.id, kind: "intermediate", ...sliderBounds(payload, n.id, value, false), value, free: !set };
     });
   }
 
