@@ -176,11 +176,12 @@ def _outcome_lines(card: CardModel) -> list[str]:
             lines.append(f"{outcome_type:<{_KEY_WIDTH}}NOT BUILT: {card.not_built[outcome_type]}")
             continue
         lines.append(f"{outcome_type:<{_KEY_WIDTH}}{_OUTCOME_HEADER}")
-        lines.extend(
+        shown = [
             format_outcome_row(row, card.min_neff)
             for row in card.rows
             if row.outcome_type == outcome_type
-        )
+        ]
+        lines.extend(shown or [f"no completed outcomes at horizon {card.horizon}"])
     return lines
 
 

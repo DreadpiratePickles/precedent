@@ -26,7 +26,7 @@ from precedent.engine.card import (
 )
 from precedent.engine.keys import typed_as_line
 from precedent.engine.params import EngineParams, load_engine_params
-from precedent.engine.retrieval import PrecedentQuery, find_precedents, select_precedent_events
+from precedent.engine.retrieval import PrecedentQuery, find_precedents
 from precedent.libraries.build import LIBRARY_DIR_NAME
 from precedent.libraries.bundle import LibraryBundle, load_bundle
 from precedent.libraries.common import OUTCOME_TYPES
@@ -52,9 +52,16 @@ def _check_request(outcome_type: str, horizon: int, params: EngineParams) -> Non
             f"unknown outcome_type {outcome_type!r}; expected one of "
             f"{(ALL_OUTCOME_TYPES, *OUTCOME_TYPES)}"
         )
-    allowed = sorted(set(params.asset_horizons) | set(params.sequence_horizons))
+    union = sorted(set(params.asset_horizons) | set(params.sequence_horizons))
+    allowed = {
+        "asset": sorted(params.asset_horizons),
+        "event_sequence": sorted(params.sequence_horizons),
+    }.get(outcome_type, union)  # market rows carry their own horizons; `all` takes the union
     if horizon not in allowed:
-        raise ValueError(f"unsupported horizon {horizon!r}; expected one of {allowed}")
+        raise ValueError(
+            f"unsupported horizon {horizon!r} for outcome type {outcome_type!r}; "
+            f"expected one of {allowed}"
+        )
 
 
 def _as_date(value: object) -> dt.date:
@@ -221,12 +228,15 @@ def _precedent_card(
     bundle: LibraryBundle,
     params: EngineParams,
 ) -> CardModel:
-    selected = select_precedent_events(query, bundle.events, top_k=params.top_k)
-    n = len(selected)
-    positions = selected["effective_position"].to_numpy()
+    found_by_kind, not_built = _guarded_rows(query, horizon, outcome_type, bundle, params)
+    # P-43: n, independent, the REFUSED decision and the nearest list describe the guarded rows
+    # shown below, never the unguarded selection (whose outcomes may still be pending).
+    guarded = _guarded_events(found_by_kind, bundle.events)
+    n = len(guarded)
+    positions = guarded["effective_position"].to_numpy()
     n_eff = effective_sample_size(np.ones(n), positions, horizon)
     refused = n_eff < params.min_neff
-    sessions = [_as_date(value) for value in selected["effective_session"]]
+    sessions = [_as_date(value) for value in guarded["effective_session"]]
     nearest = [
         NearestPrecedent(
             date=_as_date(event.effective_session),
@@ -234,12 +244,11 @@ def _precedent_card(
             similarity=float(event.similarity),
             source_ref=event.source_ref,
         )
-        for event in selected.head(params.nearest_shown).itertuples(index=False)
+        for event in guarded.head(params.nearest_shown).itertuples(index=False)
     ]
     rows: list[CardRow] = []
-    not_built: dict[str, str] = {}
     if not refused:
-        rows, not_built = _outcome_rows(query, selected, horizon, outcome_type, bundle, params)
+        rows = _outcome_rows(found_by_kind, horizon, query, bundle, params)
     card = _card(
         params=params,
         headline=headline,
@@ -254,7 +263,7 @@ def _precedent_card(
         earliest=min(sessions) if sessions else None,
         latest=max(sessions) if sessions else None,
         rows=rows,
-        not_built=not_built,
+        not_built=not_built if not refused else {},
         nearest=nearest,
         covers=_coverage(bundle),
     )
@@ -266,27 +275,53 @@ def _precedent_card(
 # --- outcome rows -------------------------------------------------------------------------------
 
 
-def _outcome_rows(
+def _guarded_rows(
     query: PrecedentQuery,
-    selected: pd.DataFrame,
     horizon: int,
     outcome_type: str,
     bundle: LibraryBundle,
     params: EngineParams,
-) -> tuple[list[CardRow], dict[str, str]]:
+) -> tuple[dict[str, pd.DataFrame], dict[str, str]]:
+    """The completed, independent precedent rows per asked type, and the types not built."""
     asked = OUTCOME_TYPES if outcome_type == ALL_OUTCOME_TYPES else (outcome_type,)
-    # P-42: find_precedents picks its own events (guard first), so positions come from the library
-    position_of = bundle.events.set_index("event_id")["effective_position"]
-    rows: list[CardRow] = []
+    found_by_kind: dict[str, pd.DataFrame] = {}
     not_built: dict[str, str] = {}
     for kind in asked:
         if not (bundle.rows["outcome_type"] == kind).any():
             not_built[kind] = _NO_PRICES if kind == "asset" else _NO_LIBRARY_ROWS
             continue
-        found = find_precedents(
+        found_by_kind[kind] = find_precedents(
             query, bundle.events, bundle.rows, bundle.session_cutoffs_utc, horizon, kind,
             top_k=params.top_k,
         )
+    return found_by_kind, not_built
+
+
+def _guarded_events(found_by_kind: dict[str, pd.DataFrame], events: pd.DataFrame) -> pd.DataFrame:
+    """The distinct events behind the guarded rows, nearest first, with their `similarity`."""
+    parts = [found[["event_id", "similarity"]] for found in found_by_kind.values()]
+    if not parts:
+        return events.iloc[0:0].assign(similarity=pd.Series(dtype="float64"))
+    ids = pd.concat(parts).groupby("event_id", as_index=False)["similarity"].max()
+    merged = ids.merge(events, on="event_id", how="inner")
+    return merged.sort_values(
+        ["similarity", "effective_position", "event_id"],
+        ascending=[False, False, True],
+        kind="stable",
+    ).reset_index(drop=True)
+
+
+def _outcome_rows(
+    found_by_kind: dict[str, pd.DataFrame],
+    horizon: int,
+    query: PrecedentQuery,
+    bundle: LibraryBundle,
+    params: EngineParams,
+) -> list[CardRow]:
+    # P-42: find_precedents picks its own events (guard first), so positions come from the library
+    position_of = bundle.events.set_index("event_id")["effective_position"]
+    rows: list[CardRow] = []
+    for kind, found in found_by_kind.items():
         found = found.assign(window_start=found["event_id"].map(position_of))
         of_type = [
             _card_row(kind, key, group, horizon, query, bundle, params)
@@ -294,7 +329,7 @@ def _outcome_rows(
         ]
         of_type.sort(key=lambda row: (-row.n, row.outcome_key))
         rows.extend(of_type[: params.card_rows_per_type])
-    return rows, not_built
+    return rows
 
 
 def _card_row(
