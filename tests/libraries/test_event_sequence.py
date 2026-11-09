@@ -1,3 +1,4 @@
+import pandas as pd
 import pytest
 from library_synthetic import SESSIONS, table
 
@@ -100,3 +101,20 @@ def test_unconditional_rate_counts_countries_from_any_row_and_ignores_later_repo
     groups = {"MLI": "EM", "NER": "EM"}
     # two countries x 8 starts; only MLI has a first-report hit at s = 3, 4
     assert unconditional_sequence_rate(events, "trade_or_sanctions", "EM", 2, 9, groups) == pytest.approx(2 / 16)
+
+
+def test_windows_past_the_feed_end_are_skipped_and_counted_not_zero():
+    """P-45 (V-1): the padded calendar must not make windows past the last feed session look complete."""
+    sessions = pd.DatetimeIndex(pd.bdate_range("2021-01-04", periods=200))
+    feed_end = int(sessions.get_loc(pd.Timestamp("2021-06-30")))
+    events = table([("last", "armed_conflict", ["USA"], feed_end)])
+    rows, report = build_event_sequence_library(
+        events, sessions, ("trade_or_sanctions",), (5, 20, 60), feed_end_position=feed_end
+    )
+    assert rows.empty and report.rows == 0 and report.skipped_incomplete_window == 3
+
+
+def test_the_feed_end_defaults_to_the_last_session():
+    events = table([("p", "armed_conflict", ["MLI"], len(SESSIONS) - 30)])
+    rows, report = build_event_sequence_library(events, SESSIONS, TYPES, (5, 20))
+    assert len(rows) == 4 and report.skipped_incomplete_window == 0

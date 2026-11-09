@@ -297,7 +297,11 @@ def build_libraries(
     first_reports = events[events["is_first_report"]]
     event_types = tuple(sorted(set(first_reports["event_type"]) - {_NO_MARKET_EVENT}))
     sequence_rows, sequence_report = build_event_sequence_library(
-        events, sessions, event_types, params.sequence_horizons
+        events,
+        sessions,
+        event_types,
+        params.sequence_horizons,
+        feed_end_position=int(events["effective_position"].max()),
     )
     market_rows, markets_frame, market_report = build_market_resolution_library(
         events, markets, sessions, cutoffs
