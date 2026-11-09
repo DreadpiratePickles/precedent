@@ -161,7 +161,7 @@ def test_defaults_are_horizon_5_and_event_sequence(tmp_path, data_dir, monkeypat
     assert set(seen) == {(5, "event_sequence")}
 
 
-@pytest.mark.parametrize("error", [ValueError("bad horizon")])
+@pytest.mark.parametrize("error", [ValueError("bad horizon"), LibraryMissingError("no library")])
 def test_a_run_card_error_is_exit_2_and_writes_nothing(
     tmp_path, data_dir, monkeypatch, capsys, error
 ):
@@ -178,13 +178,14 @@ def test_a_run_card_error_is_exit_2_and_writes_nothing(
 
 @pytest.mark.parametrize(
     "error",
-    [LibraryMissingError("no library"), LibraryIntegrityError("MANIFEST.json", "sha256 mismatch")],
+    [LibraryIntegrityError("MANIFEST.json", "sha256 mismatch")],
 )
 def test_a_library_fault_is_exit_1_and_writes_nothing(
     tmp_path, data_dir, monkeypatch, capsys, error
 ):
-    """M4 (Opus final review / D76): a library fault is a data fault, so it exits 1 like the
-    dream command's store failures; only usage errors exit 2."""
+    """M4 (Opus final review / D76) as narrowed by D78: a library INTEGRITY fault is a data
+    fault, so it exits 1 like the dream command's store failures; a MISSING library is a
+    usage error and stays exit 2 (below)."""
 
     def failing(q, h, o, d, t, *, asof_utc=None):
         raise error
@@ -209,8 +210,8 @@ def test_a_write_fault_is_exit_1_and_leaves_no_partial_brief(tmp_path, data_dir,
     assert not (tmp_path / "out").exists()
 
 
-def test_a_missing_library_is_exit_1_through_the_real_run_card(tmp_path, capsys):
-    assert run_brief(tmp_path, tmp_path / "empty") == 1
+def test_a_missing_library_is_exit_2_through_the_real_run_card(tmp_path, capsys):
+    assert run_brief(tmp_path, tmp_path / "empty") == 2
     assert capsys.readouterr().err.startswith("error:")
 
 

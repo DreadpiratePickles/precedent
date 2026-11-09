@@ -79,18 +79,19 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def run(argv: list[str]) -> int:
-    """Write `<out>/brief_<date>.md`: 0 written; 2 bad usage (nothing written); 1 a data or
-    store fault, like the dream command (D76/M4)."""
+    """Write `<out>/brief_<date>.md`: 0 written; 2 bad usage — a missing library, bad flags
+    (nothing written); 1 a data or store fault — a corrupt library, a failed write (D76/M4,
+    narrowed by D78)."""
     try:
         args = _parser().parse_args(argv)
     except SystemExit as request:
         return request.code if isinstance(request.code, int) else USAGE_ERROR
     try:
         text = _build(args)
-    except (BriefError, ConfigError, ValueError) as e:
+    except (BriefError, ConfigError, ValueError, LibraryMissingError) as e:
         print(f"error: {e}", file=sys.stderr)
         return USAGE_ERROR
-    except (LibraryMissingError, LibraryIntegrityError) as e:
+    except LibraryIntegrityError as e:
         print(f"error: {e}", file=sys.stderr)
         return DATA_FAILURE
     target = args.out / f"brief_{args.date.isoformat()}.md"
