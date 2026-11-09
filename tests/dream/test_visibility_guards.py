@@ -76,13 +76,15 @@ def test_a_tension_recorded_after_the_cutoff_is_not_opened_by_that_session():
 def test_a_closing_recorded_after_the_cutoff_leaves_the_tension_open_as_of_it():
     opened = tension()
     closed_later = tension(
-        status="closed", closed_session=date(2024, 6, 5), recorded_utc=at("2024-06-09T20:00:00Z")
+        status="closed", closed_session=date(2024, 6, 5), closed_by="lapsed",
+        recorded_utc=at("2024-06-09T20:00:00Z")
     )
     visible = sections_at([opened, closed_later])
     assert visible["closed_tension"] == []
     # without the guard the later record wins and the session would list the closing
     closed_in_time = tension(
-        status="closed", closed_session=date(2024, 6, 5), recorded_utc=at("2024-06-05T20:00:00Z")
+        status="closed", closed_session=date(2024, 6, 5), closed_by="lapsed",
+        recorded_utc=at("2024-06-05T20:00:00Z")
     )
     assert len(sections_at([opened, closed_in_time])["closed_tension"]) == 1
 

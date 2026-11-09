@@ -96,8 +96,8 @@ def busy_stores(tmp_path: Path) -> tuple[TensionStore, ShiftStore]:
         make_shift(11, "CYAN", "link_churn", 4.0),
     ]
     tension_store, shift_store = make_stores(tmp_path / "busy", tensions, shifts)
-    tension_store.close(tensions[0].tension_id, session_date(7), cutoff(7) - HOUR)
-    tension_store.close(tensions[2].tension_id, session_date(16), cutoff(16) - HOUR)
+    tension_store.close(tensions[0].tension_id, session_date(7), cutoff(7) - HOUR, "lapsed")
+    tension_store.close(tensions[2].tension_id, session_date(16), cutoff(16) - HOUR, "lapsed")
     rate = next(s for s in shift_store.read_all() if s.kind == "event_rate" and s.subject == "ACME")
     shift_store.refire(rate.shift_id, 5.0, session_date(13), cutoff(13) - HOUR)
     return tension_store, shift_store
@@ -204,7 +204,7 @@ def test_only_text_vs_price_tensions_feed_the_signed_column(tmp_path: Path) -> N
 def test_a_closed_tension_leaves_the_open_count(tmp_path: Path) -> None:
     tension = make_tension(3)
     tension_store, shift_store = make_stores(tmp_path / "closed", [tension])
-    tension_store.close(tension.tension_id, session_date(6), cutoff(6) - HOUR)
+    tension_store.close(tension.tension_id, session_date(6), cutoff(6) - HOUR, "lapsed")
     panel = panel_of(tension_store, shift_store)
     assert panel.loc[(SESSIONS[5], "ACME"), "dream_open_tensions"] == 1
     assert panel.loc[(SESSIONS[6], "ACME"), "dream_open_tensions"] == 0
@@ -215,7 +215,7 @@ def test_a_closed_tension_leaves_the_open_count(tmp_path: Path) -> None:
 def test_a_close_recorded_after_the_cutoff_is_still_open_that_session(tmp_path: Path) -> None:
     tension = make_tension(3)
     tension_store, shift_store = make_stores(tmp_path / "late_close", [tension])
-    tension_store.close(tension.tension_id, session_date(6), cutoff(6) + HOUR)
+    tension_store.close(tension.tension_id, session_date(6), cutoff(6) + HOUR, "lapsed")
     panel = panel_of(tension_store, shift_store)
     assert panel.loc[(SESSIONS[6], "ACME"), "dream_open_tensions"] == 1
     assert panel.loc[(SESSIONS[7], "ACME"), "dream_open_tensions"] == 0

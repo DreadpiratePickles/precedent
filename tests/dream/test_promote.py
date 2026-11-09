@@ -309,7 +309,7 @@ def test_a_claim_that_already_expired_is_left_alone_and_the_decision_is_still_re
 
 def test_a_tension_the_nightly_run_already_closed_is_left_alone(promote_fixture):
     world = promote_fixture
-    world.tension_store.close(world.tension_id, date(2024, 6, 4), at("2024-06-04T20:00:00Z"))
+    world.tension_store.close(world.tension_id, date(2024, 6, 4), at("2024-06-04T20:00:00Z"), "lapsed")
     assert decide(world, "--accept", "--at", DECIDED) == 0
     assert world.tension_store.latest()[0].closed_session == date(2024, 6, 4)
     assert resolution_status(world.resolution_store, world.resolution_id) == "accepted"

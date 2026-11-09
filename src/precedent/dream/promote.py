@@ -165,7 +165,7 @@ def _accept(
         if tension.status == "closed":
             notes.append("tension was already closed")
         else:
-            tensions.close(tension.tension_id, close_in, at)
+            tensions.close(tension.tension_id, close_in, at, "resolution")
             notes.append(f"closed the tension as of session {close_in}")
     elif tension.status == "open":
         tensions.acknowledge(tension.tension_id, at)

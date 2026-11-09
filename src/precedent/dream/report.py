@@ -601,7 +601,15 @@ def _record_tensions(
         if known is None:
             unseen.append(tension)
         elif known.status == "closed":
-            store.reopen(tension.tension_id, session, tension.claim_ids, cutoff)
+            # D77: a "lapsed" close reopens on a plain recurrence; a "resolution" close
+            # (the owner's decision) reopens only when the group's membership changes — a
+            # claim id the closing record does not hold. Otherwise nothing is appended, so
+            # a replay stays a no-op.
+            membership_changed = bool(set(tension.claim_ids) - set(known.claim_ids))
+            if known.closed_by == "lapsed" or (
+                known.closed_by == "resolution" and membership_changed
+            ):
+                store.reopen(tension.tension_id, session, tension.claim_ids, cutoff)
         elif sorted(known.claim_ids) != sorted(tension.claim_ids):
             store.restate_members(tension.tension_id, tension.claim_ids, cutoff)
     store.append(unseen)
@@ -639,4 +647,4 @@ def _close_lapsed_tensions(
         else:
             holds = set(tension.claim_ids) <= visible
         if not holds:
-            tensions.close(tension.tension_id, session, cutoff)
+            tensions.close(tension.tension_id, session, cutoff, "lapsed")

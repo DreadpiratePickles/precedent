@@ -156,8 +156,11 @@ def test_tension_claim_count_rules_and_status_consistency():
         make_tension(status="closed")
     with pytest.raises(ValidationError):
         make_tension(status="open", closed_session=date(2024, 3, 5))
-    closed = make_tension(status="closed", closed_session=date(2024, 3, 5))
+    closed = make_tension(
+        status="closed", closed_session=date(2024, 3, 5), closed_by="lapsed"
+    )
     assert closed.closed_session == date(2024, 3, 5)
+    assert closed.closed_by == "lapsed"
 
 
 def test_shift_id_and_validation():
