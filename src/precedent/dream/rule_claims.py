@@ -168,15 +168,17 @@ def _typed_claims(
     rule = item_map.get(record.article_id.rsplit(":", 1)[1])
     if rule is None:
         return [], False
+    filer = _filer_instruments(record)
     if rule.attribute is None:
-        filer = _filer_instruments(record)
         has_counterparty = any(i.instrument not in filer for i in record.resolved_impacts)
         # A counterparty alone does not say supplier or customer; the rules parser never
         # resolves one, so no relationship claim is built from an item.
         return [], not has_counterparty
+    # M9 (D76): a typed item describes the filer; a resolved counterparty must not inherit it.
     return [
         _event_claim(record, impact, rule.attribute, rule.value, None)
         for impact in record.resolved_impacts
+        if impact.instrument in filer
     ], False
 
 

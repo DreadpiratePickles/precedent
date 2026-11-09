@@ -85,8 +85,10 @@ class AbnormalReturnsParams(BaseModel):
 
 
 class AsymmetricLinkParams(BaseModel):
+    """No knobs today; D76/M5 removed `lookback_months`, which nothing read. The empty section
+    stays so the JSON shape is stable."""
+
     model_config = ConfigDict(extra="forbid")
-    lookback_months: int = Field(ge=1)
 
 
 class StaleRelianceParams(BaseModel):

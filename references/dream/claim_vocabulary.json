@@ -62,5 +62,6 @@
     "8.01": null,
     "7.01": null,
     "note": "1.01 and 1.02 resolve to supplier_relationship or customer_relationship when the counterparty resolves; Task 2 confirms the item numbers against SEC Form 8-K."
-  }
+  },
+  "note": "conflicting_value_pairs drives value_conflict; event_direction is excluded from value conflicts (D72) — text_vs_price and direction_drift own it."
 }

@@ -309,7 +309,7 @@ def test_a_claim_that_already_expired_is_left_alone_and_the_decision_is_still_re
 
 def test_a_tension_the_nightly_run_already_closed_is_left_alone(promote_fixture):
     world = promote_fixture
-    world.tension_store.close(world.tension_id, date(2024, 6, 4), at("2024-06-04T20:00:00Z"))
+    world.tension_store.close(world.tension_id, date(2024, 6, 4), at("2024-06-04T20:00:00Z"), "lapsed")
     assert decide(world, "--accept", "--at", DECIDED) == 0
     assert world.tension_store.latest()[0].closed_session == date(2024, 6, 4)
     assert resolution_status(world.resolution_store, world.resolution_id) == "accepted"
@@ -361,3 +361,12 @@ def test_review_with_a_bad_since_exits_two(promote_fixture):
 def test_review_of_an_empty_out_directory_says_so(tmp_path, capsys):
     assert run_review(["--out", str(tmp_path)]) == 0
     assert "no proposed resolutions" in capsys.readouterr().out
+
+
+def test_review_on_a_malformed_store_line_is_exit_1_naming_the_file(tmp_path, capsys):
+    """M4 (Opus final review / D76): a malformed store line is a store fault — exit 1 naming
+    the file, not a traceback."""
+    (tmp_path / "resolutions").mkdir(parents=True)
+    (tmp_path / "resolutions" / "resolutions.jsonl").write_text("not json\n", encoding="utf-8")
+    assert run_review(["--out", str(tmp_path)]) == 1
+    assert "resolutions.jsonl" in capsys.readouterr().err

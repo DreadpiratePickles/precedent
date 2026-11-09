@@ -69,7 +69,7 @@ def shift(statistic=3.4, detector="dream-detect-v1") -> Shift:
     )
 
 
-def resolution(hypothesis="one_is_stale") -> Resolution:
+def resolution(hypothesis="one_is_stale", claim_id=None) -> Resolution:
     return Resolution(
         resolution_id="r1",
         tension_id="t1",
@@ -79,6 +79,7 @@ def resolution(hypothesis="one_is_stale") -> Resolution:
         status="proposed",
         proposed_utc=utc("2024-03-05T00:00:00"),
         recorded_utc=utc("2024-03-05T00:00:00"),
+        claim_id=claim_id,
     )
 
 
@@ -273,14 +274,14 @@ def test_tension_store_lifecycle_is_append_only(tmp_path):
     t1 = tension()
     assert store.append([t1]).added == 1
     assert store.append([t1]).identical_skipped == 1
-    closed = store.close(t1.tension_id, date(2024, 3, 6), utc("2024-03-06T21:30:00"))
+    closed = store.close(t1.tension_id, date(2024, 3, 6), utc("2024-03-06T21:30:00"), "lapsed")
     assert closed.status == "closed" and closed.closed_session == date(2024, 3, 6)
     assert line_count(tmp_path / "tensions.jsonl") == 2
     assert store.append([t1]).identical_skipped == 1  # first-record identity, lifecycle ignored
     assert [t.status for t in store.latest()] == ["closed"]
     assert [t.status for t in store.read_all()] == ["open", "closed"]
     with pytest.raises(ConflictError):
-        store.close(t1.tension_id, date(2024, 3, 7), utc("2024-03-07T21:30:00"))
+        store.close(t1.tension_id, date(2024, 3, 7), utc("2024-03-07T21:30:00"), "lapsed")
     with pytest.raises(KeyError):
         store.acknowledge("missing", utc("2024-03-07T21:30:00"))
     refound = t1.model_copy(update={"detector_version": "dream-detect-v2"})
@@ -335,6 +336,16 @@ def test_resolution_store_decide_and_conflict(tmp_path):
     with pytest.raises(KeyError):
         store.decide("missing", "rejected", utc("2024-03-07T00:00:00"))
     assert (tmp_path / "resolutions.jsonl").exists()
+
+
+def test_a_resolution_renaming_its_claim_is_a_conflict_not_a_skip(tmp_path):
+    """M6: `claim_id` is identity — a second proposal under the same id naming a different
+    claim must conflict, not read as identical_skipped."""
+    store = ResolutionStore(tmp_path)
+    store.append([resolution(claim_id="claim-A")])
+    assert store.append([resolution(claim_id="claim-A")]).identical_skipped == 1
+    with pytest.raises(ConflictError):
+        store.append([resolution(claim_id="claim-B")])
 
 
 def test_stores_read_missing_files_as_empty_and_keep_first_seen_order(tmp_path):

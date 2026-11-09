@@ -18,6 +18,7 @@ from precedent.dream.inputs import DreamStores, load_detector_params
 from precedent.dream.shifts import (
     SHIFT_DETECTOR_VERSION,
     SKIP_REASONS,
+    SKIP_SHORT_HISTORY,
     ShiftReport,
     _event_counts,
     _rate_z,
@@ -172,10 +173,29 @@ def test_rate_shift_is_none_without_a_baseline_or_enough_sessions():
 
 
 def test_rate_shift_clips_the_baseline_at_the_start_of_the_axis():
-    # session 100: window 41..100, baseline 0..40 (41 sessions) holds 4 events (0.0976 a session)
+    # Opus final review M12 / D76: at the axis start the clipped baseline (41 sessions) is below
+    # baseline // 2 = 125, so the rate test is short_history, not a z built on a few sessions
     positions = [5, 15, 25, 35] + list(range(41, 101, 3))
-    shift = event_rate_shift(events_at(positions), "ACME", SESSIONS[100], SESSIONS)
+    assert event_rate_shift(events_at(positions), "ACME", SESSIONS[100], SESSIONS) is None
+    # the same shape at session 200 has 141 live baseline sessions (above the minimum) and fires
+    grown = list(range(10, 140, 10)) + list(range(141, 201, 3))
+    shift = event_rate_shift(events_at(grown), "ACME", SESSIONS[200], SESSIONS)
     assert shift is not None and shift.statistic > 3
+
+
+def test_a_one_session_baseline_is_short_history_not_a_noisy_z():
+    """Opus final review M12 / D76: at `here == window` the clipped baseline is a single session;
+    a z resting on one session fired noisily through the first year of any history. It is
+    `short_history` until at least `baseline // 2` live baseline sessions exist."""
+    window, baseline = 60, 250
+    per_position = np.zeros(len(SESSIONS))
+    per_position[0] = 5  # the single clipped baseline session carries events
+    per_position[window] = 40  # and the window spikes: without the guard the z is large
+    z, reason = _rate_z(
+        per_position, here=window, window=window, baseline=baseline,
+        gap=np.zeros(len(SESSIONS), dtype=bool),
+    )  # fmt: skip
+    assert z is None and reason == SKIP_SHORT_HISTORY
 
 
 def test_rate_shift_rejects_a_session_off_the_axis():

@@ -31,7 +31,13 @@ CLAIM_IDENTITY_FIELDS = (
 )
 TENSION_IDENTITY_FIELDS = ("kind", "group_key", "subject")  # members are lifecycle (D72)
 SHIFT_IDENTITY_FIELDS = ("kind", "subject")
-RESOLUTION_IDENTITY_FIELDS = ("tension_id", "hypothesis", "evidence_span", "proposer_version")
+RESOLUTION_IDENTITY_FIELDS = (
+    "tension_id",
+    "hypothesis",
+    "evidence_span",
+    "proposer_version",
+    "claim_id",  # M6 (D76): a proposal under the same id naming a different claim conflicts
+)
 
 
 class ConflictError(Exception):
@@ -164,12 +170,29 @@ class TensionStore(_AppendOnlyStore[Tension]):
     _id_field = "tension_id"
     _identity_fields = TENSION_IDENTITY_FIELDS
 
-    def close(self, tension_id: str, session: date, recorded_utc: datetime) -> Tension:
-        """Mark a tension closed as of `session`. A closed tension cannot change again."""
+    def close(
+        self,
+        tension_id: str,
+        session: date,
+        recorded_utc: datetime,
+        closed_by: Literal["resolution", "lapsed"],
+    ) -> Tension:
+        """Mark a tension closed as of `session`. A closed tension cannot change again.
+
+        `closed_by` names the cause (D77): "resolution" for an owner decision through
+        `promote --accept`, "lapsed" for the automatic per-kind close. Only a "lapsed" close
+        reopens on a plain recurrence; a "resolution" close reopens when the group's
+        membership changes.
+        """
 
         def change(latest: Tension) -> dict[str, Any]:
             self._refuse_if_closed(latest)
-            return {"status": "closed", "closed_session": session, "recorded_utc": recorded_utc}
+            return {
+                "status": "closed",
+                "closed_session": session,
+                "closed_by": closed_by,
+                "recorded_utc": recorded_utc,
+            }
 
         return self._append_update(tension_id, change)
 
@@ -201,6 +224,7 @@ class TensionStore(_AppendOnlyStore[Tension]):
             return {
                 "status": "open",
                 "closed_session": None,
+                "closed_by": None,
                 "opened_session": session,
                 "claim_ids": sorted(claim_ids),
                 "recorded_utc": recorded_utc,

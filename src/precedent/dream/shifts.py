@@ -93,8 +93,10 @@ def _rate_z(
 ) -> tuple[float | None, str | None]:
     """The Poisson z of the window against the baseline, or None and the reason it is undefined.
 
-    Reasons are `short_history` (fewer than `window` positions end at `here`, or none precede
-    the window), `no_live_sessions` (the window or the baseline is made only of feed gaps) and
+    Reasons are `short_history` (fewer than `window` positions end at `here`, none precede the
+    window, or fewer than `baseline // 2` live baseline sessions exist — Opus final review M12 /
+    D76: a clipped baseline of a few sessions fired noisily through the first year of any
+    history), `no_live_sessions` (the window or the baseline is made only of feed gaps) and
     `no_baseline_events`.
     """
     if here < window:
@@ -104,6 +106,8 @@ def _rate_z(
     baseline_live = [p for p in baseline_range if not gap[p]]
     if not window_live or not baseline_live:
         return None, SKIP_NO_LIVE_SESSIONS
+    if len(baseline_live) < baseline // 2:
+        return None, SKIP_SHORT_HISTORY
     baseline_events = int(per_position[baseline_live].sum())
     if baseline_events == 0:
         return None, SKIP_NO_BASELINE_EVENTS
@@ -131,7 +135,9 @@ def event_rate_shift(
     With `lambda_b` the baseline events per session and `w` the window's remaining sessions,
     `z = (n_window - lambda_b * w) / sqrt(lambda_b * w)`; the shift fires when `z > threshold`.
     None when fewer than `window` positions end at `session`, when either window has no usable
-    session, or when the baseline holds no event.
+    session, when fewer than `baseline // 2` live baseline sessions exist (a clipped baseline
+    is `short_history`, not a z on a few sessions — Opus final review M12 / D76), or when the
+    baseline holds no event.
     """
     here = _position_of(session, sessions)
     z, _ = _rate_z(

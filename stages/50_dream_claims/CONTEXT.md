@@ -6,7 +6,7 @@ Build dated, evidenced claims from the event and link stores and expire them whe
 ## Inputs
 | Path or source | Layer | Authority | Required | Relevant section |
 |---|---:|---|---:|---|
-| `stages/01_ingest/output/` event store (`events_<parser_version>.jsonl`) | 4 | Authoritative for events and their `first_seen_utc`; read-only | Yes | All records |
+| `stages/01_ingest/output/` event store (`events_<parser_version>.jsonl`) | 4 | Authoritative for events and their `available_utc` (`first_seen_utc` folded in by the spine); read-only | Yes | Records available by the session cutoff |
 | Ripple link store at `stages/30_*/output/`, once built | 4 | Authoritative for links between instruments; read-only | When links are claimed | Link records |
 | `references/dream/claim_vocabulary.json` | 3 | Authoritative for attributes, periods, values and the 8-K item map | Yes | All sections |
 | `references/dream/claim_schema_v1.json` | 3 | Authoritative for the stored claim shape | Yes | All |
@@ -16,7 +16,7 @@ Build dated, evidenced claims from the event and link stores and expire them whe
 | `<out>/claims/claims.jsonl` (the `ClaimStore` root is `<out>/claims`) | 4 | This stage's own store; `<out>` is the `dream` command's `--out` directory (default `stages/52_dream_report/output`), which holds all four Dream stores | Yes | Existing lines |
 
 ## Process
-1. Deterministic: read events and links; skip any record without `first_seen_utc`.
+1. Deterministic: read events and links; skip any record without `available_utc`. Knowledge time is `available_utc`, not the ingest clock: `ingested_utc` is audit-only in the spine and no gate (D69); an event claim's `recorded_utc` is its `valid_from_utc`.
 2. Deterministic: map 8-K items to claims with the item map; these claims carry a `rules-` extractor version and need no evidence span.
 3. Judgment (model call, injected extractor): where a claims prompt applies, the model emits claims in the schema, each with an evidence span that occurs in the source text. The model never forecasts and never states an outcome.
 4. Deterministic: validate each claim against the schema; reject unknown enums, naive timestamps and a missing evidence span.
