@@ -6,7 +6,6 @@ surprising. The end is derived from references/nyse_holidays.json `last_year`, n
 import json
 from datetime import date, timedelta
 
-import pytest
 from dream_synthetic import gdelt_record, write_events
 
 from precedent.config import references_dir

@@ -10,7 +10,7 @@ Detect tensions between claims, and between claims and prices, and silent shifts
 | `stages/01_ingest/output/` event store | 4 | Authoritative for events and `first_seen_utc`; read-only | For shifts and text-vs-price | Events up to the cutoff |
 | Ripple link store at `stages/30_*/output/`, once built | 4 | Authoritative for links; read-only | For link tensions and churn | Links up to the cutoff |
 | `references/dream/detector_params.json` | 3 | Authoritative for thresholds and windows | Yes | All sections |
-| `references/dream/claim_vocabulary.json` | 3 | Authoritative for conflicting value pairs | Yes | `conflicting_value_pairs` |
+| `references/dream/claim_vocabulary.json` | 3 | Authoritative for conflicting value pairs (`event_direction` is excluded from value conflicts, D72) | Yes | `conflicting_value_pairs` |
 | `references/dream/resolve_prompt_v*.txt` | 3 | Authoritative for the resolution prompt; versioned in `proposer_version` | For model proposals | Latest version |
 | Development and held-out resolution labels | 3 | Authoritative for scoring; read-only to the worker | For scoring | Label splits |
 | `<out>/tensions/`, `<out>/shifts/`, `<out>/resolutions/` (one `.jsonl` each) | 4 | This stage's own stores; `<out>` is the `dream` command's `--out` directory (default `stages/52_dream_report/output`), which holds all four Dream stores | Yes | Existing lines |
@@ -18,7 +18,7 @@ Detect tensions between claims, and between claims and prices, and silent shifts
 ## Process
 1. Deterministic: take the session cutoff and read only what `claims_asof`, the event store and the link store show at that cutoff; nothing recorded later is read.
 2. Deterministic: detect tensions (value conflict, text versus price, asymmetric link, stale reliance) and shifts (event rate, direction drift, link churn) with the parameters file.
-3. Deterministic: append new tensions and shifts keyed by id; a shift that fires again is re-fired in place; a tension that no longer holds is closed by appending an update.
+3. Deterministic: append new tensions keyed by the group id (`kind` + group key, D72): a changed membership appends a `restate_members` update, a recurrence of a closed group reopens it, a shift that fires again is re-fired in place, and a tension that no longer holds is closed by appending an update, each kind by its own test. `event_direction` takes no part in value conflicts (D72).
 4. Judgment (model call, injected proposer): for each open tension the model proposes one hypothesis (`one_is_stale`, `different_scope`, `genuine_conflict`, `extraction_error`) with an evidence span. A proposal is `proposed` until the owner accepts or rejects it.
 5. No detector output is ever used as a prediction.
 
