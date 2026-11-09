@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 from engine_synthetic import CUTOFFS, SESSIONS
 
+from precedent.engine.aggregate import effective_sample_size
 from precedent.engine.keys import key_from_flags
 from precedent.engine.retrieval import (
     PrecedentQuery,
@@ -148,25 +149,62 @@ def test_an_unfinished_analog_is_never_returned():
     assert found["event_id"].unique().tolist() == ["A"]
 
 
+def _reference_precedents(query, events, rows, otype, horizon, top_k, query_position):
+    """The P-42 rule, written naively: guard first, similarity then recency, skip overlaps."""
+    similarity = exact_key_similarity(query, events)
+    pool = events.assign(similarity=similarity)
+    pool = pool[(pool["similarity"] > 0) & (pool["available_utc"] <= query.available_utc)]
+    pool = pool.sort_values(
+        ["similarity", "effective_position", "event_id"], ascending=[False, False, True]
+    )
+    own = rows[rows["outcome_type"] == otype].set_index("event_id")
+    taken: dict[object, list[int]] = {}
+    out = []
+    for event in pool.itertuples(index=False):
+        if event.event_id not in own.index:
+            continue
+        for row in own.loc[[event.event_id]].itertuples():
+            if SESSIONS.get_loc(row.response_complete_session) > query_position:
+                continue  # unfinished
+            if otype != "market_resolution" and row.horizon != horizon:
+                continue
+            slot = (row.outcome_key, row.horizon) if otype == "market_resolution" else row.outcome_key
+            mine = taken.setdefault(slot, [])
+            if len(mine) >= top_k or any(
+                abs(event.effective_position - o) < row.horizon for o in mine
+            ):
+                continue
+            mine.append(event.effective_position)
+            out.append((event.event_id, slot))
+    return out
+
+
 def test_time_guard_holds_for_random_libraries():
     returned = withheld = 0
     for seed in range(50):
         query, events, rows, query_position = random_query_and_library(seed)
-        selected = select_precedent_events(query, events)
+        position_of = events.set_index("event_id")["effective_position"]
         for otype in OUTCOME_TYPES:
             found = find_precedents(query, events, rows, CUTOFFS, horizon=5, outcome_type=otype)
             assert (
                 CUTOFFS.loc[found["response_complete_session"]].to_numpy() <= query.available_utc
             ).all()
-            of_selected = rows[
-                (rows["outcome_type"] == otype) & rows["event_id"].isin(selected["event_id"])
+            expected = _reference_precedents(query, events, rows, otype, 5, 30, query_position)
+            slots = [
+                (r.outcome_key, r.horizon) if otype == "market_resolution" else r.outcome_key
+                for r in found.itertuples()
             ]
-            finished = (
-                of_selected["response_complete_session"].map(SESSIONS.get_loc) <= query_position
-            )
-            assert sorted(found["event_id"]) == sorted(of_selected.loc[finished, "event_id"])
+            assert list(zip(found["event_id"], slots, strict=True)) == expected
+            # pairwise non-overlap per instrument
+            for slot in set(slots):
+                mask = [x == slot for x in slots]
+                chosen = found.loc[mask]
+                starts = np.sort(position_of.loc[chosen["event_id"]].to_numpy())
+                assert (np.diff(starts) >= chosen["horizon"].iloc[0]).all()
+                assert len(chosen) <= 30
             returned += len(found)
-            withheld += len(of_selected) - len(found)
+            of_type = rows[rows["outcome_type"] == otype]
+            withheld += len(of_type) - len(found)
     assert returned > 0
     assert withheld > 0
 
@@ -221,10 +259,24 @@ def test_exact_similarity_is_aligned_to_the_events_index():
     assert str(similarity.dtype) == "float64"
 
 
-def test_top_k_keeps_the_latest_matches():
-    events = events_table([(f"M{i:02d}", KEY_ANY_DIRECTION, i) for i in range(40)])
-    picked = select_precedent_events(query_for(KEY_ANY_DIRECTION, position=100), events, top_k=30)
-    assert len(picked) == 30 and picked["effective_position"].min() == 10  # the 30 latest
+def test_top_k_keeps_the_latest_completed_non_overlapping_matches():
+    # P-42 (documented requirement change): top_k is applied after the completion guard and to
+    # events whose outcome windows do not overlap, most recent first. 40 events spaced one
+    # horizon (5 sessions) apart; the 30 latest are kept, not the 30 latest of an unguarded pool.
+    events = events_table([(f"M{i:02d}", KEY_ANY_DIRECTION, 5 * i) for i in range(40)])
+    rows = library_rows(
+        [
+            {"event_id": f"M{i:02d}", "outcome_type": "asset", "effective": 5 * i,
+             "complete": 5 * i + 6}
+            for i in range(40)
+        ]
+    )
+    found = find_precedents(
+        query_for(KEY_ANY_DIRECTION, position=250), events, rows, CUTOFFS, 5, "asset", top_k=30
+    )
+    assert len(found) == 30
+    assert found["event_id"].iloc[0] == "M39" and "M09" not in set(found["event_id"])
+    assert "M10" in set(found["event_id"])  # the 30 latest are M10..M39
 
 
 def test_selection_order_ties_break_on_position_then_event_id():
@@ -382,3 +434,89 @@ def test_a_row_whose_session_is_missing_from_the_cutoffs_raises():
             horizon=5,
             outcome_type="event_sequence",
         )
+
+
+def _dense_world(per_session, n_sessions, horizon):
+    """The Opus probe_i3 setup: one key, events every session, asset rows completing 1+h later."""
+    ev, rows, k = [], [], 0
+    for position in range(10, 10 + n_sessions):
+        for _ in range(per_session):
+            event_id = f"e{k:04d}"
+            k += 1
+            ev.append((event_id, KEY_ANY_DIRECTION, position))
+            rows.append({"event_id": event_id, "outcome_type": "asset", "outcome_key": "SPY",
+                         "horizon": horizon, "effective": position,
+                         "complete": position + 1 + horizon})
+    query = PrecedentQuery(
+        KEY_ANY_DIRECTION, CUTOFFS.iloc[10 + n_sessions] - pd.Timedelta(hours=1)
+    )
+    return events_table(ev), library_rows(rows), query
+
+
+def test_a_frequent_key_at_a_long_horizon_returns_all_the_independent_precedents_there_are():
+    # probe_i3 setup, h=20: 300 daily events leave 14 completed, independent ones (the old rule
+    # returned 9 and a refused band); every returned precedent counts toward n_eff.
+    events, rows, query = _dense_world(per_session=1, n_sessions=300, horizon=20)
+    found = find_precedents(query, events, rows, CUTOFFS, 20, "asset", top_k=30)
+    assert len(found) == 14
+    starts = events.set_index("event_id").loc[found["event_id"], "effective_position"]
+    assert (np.diff(np.sort(starts.to_numpy())) >= 20).all()  # non-overlapping windows
+    assert (CUTOFFS.loc[found["response_complete_session"]].to_numpy() <= query.available_utc).all()
+    assert effective_sample_size(np.ones(14), starts.to_numpy(), 20) == 14
+
+
+def test_a_frequent_key_returns_top_k_independent_precedents_when_history_allows():
+    events, rows, query = _dense_world(per_session=1, n_sessions=340, horizon=10)
+    found = find_precedents(query, events, rows, CUTOFFS, 10, "asset", top_k=30)
+    starts = events.set_index("event_id").loc[found["event_id"], "effective_position"]
+    assert len(found) == 30
+    assert effective_sample_size(np.ones(30), starts.to_numpy(), 10) == 30
+
+
+def test_several_events_per_session_still_give_non_overlapping_precedents():
+    events, rows, query = _dense_world(per_session=5, n_sessions=200, horizon=5)
+    found = find_precedents(query, events, rows, CUTOFFS, 5, "asset", top_k=30)
+    starts = events.set_index("event_id").loc[found["event_id"], "effective_position"]
+    assert len(found) == 30 and (np.diff(np.sort(starts.to_numpy())) >= 5).all()
+
+
+def test_nothing_unfinished_ever_enters_the_selection():
+    # the 10 most recent events are still unfinished at the query; they must not take slots
+    events = events_table([(f"U{i:02d}", KEY_ANY_DIRECTION, 100 + 6 * i) for i in range(20)])
+    rows = library_rows(
+        [
+            {"event_id": f"U{i:02d}", "outcome_type": "asset", "effective": 100 + 6 * i,
+             "complete": 100 + 6 * i + 6}
+            for i in range(20)
+        ]
+    )
+    query = query_for(KEY_ANY_DIRECTION, position=100 + 6 * 10 + 6)  # only U00..U10 are complete
+    found = find_precedents(query, events, rows, CUTOFFS, 5, "asset", top_k=30)
+    assert sorted(found["event_id"]) == [f"U{i:02d}" for i in range(11)]
+    assert (CUTOFFS.loc[found["response_complete_session"]].to_numpy() <= query.available_utc).all()
+
+
+def test_slots_are_counted_per_instrument():
+    # 12 old events carry SPY and QQQ rows; 40 newer events carry QQQ only. top_k=5 must still
+    # give SPY its own five slots (the newer events do not take them).
+    old = [(f"O{i:02d}", KEY_ANY_DIRECTION, 6 * i) for i in range(12)]
+    new = [(f"N{i:02d}", KEY_ANY_DIRECTION, 100 + 6 * i) for i in range(40)]
+    events = events_table(old + new)
+    records = []
+    for event_id, _, position in old:
+        for instrument in ("SPY", "QQQ"):
+            records.append({"event_id": event_id, "outcome_type": "asset",
+                            "outcome_key": instrument, "effective": position,
+                            "complete": position + 6})
+    for event_id, _, position in new:
+        records.append({"event_id": event_id, "outcome_type": "asset", "outcome_key": "QQQ",
+                        "effective": position, "complete": position + 6})
+    found = find_precedents(
+        query_for(KEY_ANY_DIRECTION, position=380), events, library_rows(records), CUTOFFS, 5,
+        "asset", top_k=5,
+    )
+    counts = found["outcome_key"].value_counts().to_dict()
+    assert counts == {"SPY": 5, "QQQ": 5}
+    assert set(found.loc[found["outcome_key"] == "SPY", "event_id"]) == {
+        f"O{i:02d}" for i in range(7, 12)
+    }

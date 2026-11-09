@@ -31,11 +31,13 @@ precedents     n=<n>  independent=<n_eff>  earliest <date>  latest <date>
 <outcome key, e.g. trade_or_sanctions by G7>   20        14/23 (61%)   [43%, 77%]     23  outside
 <outcome key, e.g. SPY abnormal return>        5         -0.8%         [-3.1%, +1.4%] 19  inside
 
-nearest precedents
+nearest independent precedents (non-overlapping outcome windows)
 <date>  <one line>  similarity <s>  <source id>
 library covers  <source>: <first date> to <last date>, <N> events; ...
 These are past outcomes of similar events, not a forecast.
 ```
+
+The nearest list shows the nearest independent precedents: the guarded events whose outcome windows do not overlap (P-42), not every near match.
 
 (The illustrative band `[43%, 77%]` is not what the planned Wilson code gives for 14 of 23; the plan's test pins about `[48%, 73%]`. Trust the plan's tests, not the illustration.)
 
@@ -43,7 +45,7 @@ The refusal, which the thesis picks as the README's first screenshot:
 
 ```text
 REFUSED        <n> usable precedents, need <min_neff>. No band is drawn below that.
-nearest precedents
+nearest independent precedents (non-overlapping outcome windows)
 <date>  <one line>  ...
 library covers  ...
 These are past outcomes of similar events, not a forecast.

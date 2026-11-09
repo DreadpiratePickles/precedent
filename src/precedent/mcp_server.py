@@ -17,7 +17,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from precedent import config
 from precedent.config import ConfigError
-from precedent.engine.ask import UNTYPED, run_card
+from precedent.engine.ask import UNTYPED, refused_card_without_library, run_card
 from precedent.engine.card import KEY_FLAGS_HINT, CardModel, render_json, render_text
 from precedent.engine.keys import key_from_dict
 from precedent.engine.retrieval import PrecedentQuery
@@ -46,7 +46,17 @@ def _build_card(
         query = text
     else:  # unreachable: exactly one of the two is given
         raise ValueError("give exactly one of `text` and `key`")
-    return run_card(query, horizon, outcome_type, config.data_dir(), typer_from_env())
+    typer = typer_from_env()
+    try:
+        return run_card(query, horizon, outcome_type, config.data_dir(), typer)
+    except LibraryMissingError:
+        if key is not None:
+            raise
+        # V-4: text the typer cannot type is refused whether or not a library is installed
+        refusal = refused_card_without_library(query, horizon, outcome_type, typer)
+        if refusal.typed_as != UNTYPED:
+            raise
+        return refusal
 
 
 def precedents(
@@ -90,8 +100,8 @@ def _tool_errors(function: Callable[_P, _R]) -> Callable[_P, _R]:
             raise ToolError(f"{error}; {MISSING_LIBRARY_HINT}") from error
         except ConfigError as error:
             raise ToolError(f"{error}\n{KEY_FLAGS_HINT}") from error
-        except (ValueError, LibraryIntegrityError) as error:
-            raise ToolError(str(error)) from error
+        except (ValueError, KeyError, LibraryIntegrityError) as error:
+            raise ToolError(error.args[0] if isinstance(error, KeyError) else str(error)) from error
 
     return wrapper
 

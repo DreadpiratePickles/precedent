@@ -129,7 +129,12 @@ def test_panel_index_is_exactly_what_find_precedents_returned(world, graph):
     assert panel.asset_returns.index.equals(panel.event_values.index)
     unfinished = world.event_id_at(position - 12)
     assert unfinished not in panel.event_values.index  # selected by top_k, dropped by the guard
-    assert panel.n_obs == TOP_K - 2  # the query's own event and the unfinished analog
+    # P-42: guard first, then window-aware; a 20-session horizon leaves 15 independent analogs
+    assert panel.n_obs == 15
+    starts = world.events.set_index("event_id").loc[
+        panel.event_values.index, "effective_position"
+    ]
+    assert (np.diff(np.sort(starts.to_numpy("int64"))) >= horizon).all()
     assert panel.horizon == horizon
     assert panel.asof_utc == world.available_utc_at(position)
     assert list(panel.asset_returns.columns) == asset_ids(graph)

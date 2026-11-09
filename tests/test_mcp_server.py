@@ -235,3 +235,43 @@ def test_core_modules_import_no_provider_and_no_research_extra():
             "import lightgbm",
         ):
             assert banned not in text, (path, banned)
+
+
+def test_untypable_text_with_no_library_returns_the_refusal_card(monkeypatch, tmp_path):
+    # V-4 / P-47: the amendment says untypable text gets the refusal and the key flags, library
+    # or not
+    monkeypatch.setenv("PRECEDENT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PRECEDENT_TYPER", "rules")
+    text = mcp_server.card(text="zzzz qqqq")
+    assert "typed as       UNTYPED" in text and "--event-type" in text
+    data = mcp_server.precedents(text="zzzz qqqq")
+    assert data["typed_as"] == "UNTYPED" and data["refused"] is True and data["covers"] == []
+
+
+def test_typable_text_with_no_library_is_still_a_tool_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("PRECEDENT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PRECEDENT_TYPER", "rules")
+    message = error_text(
+        call_tool("card", {"text": "The Federal Reserve raised interest rates unexpectedly"})
+    )
+    assert "precedent fetch" in message
+
+
+def test_a_keyerror_from_retrieval_becomes_a_tool_error(monkeypatch, library_root):
+    # M4 / P-47: a session missing from the cutoffs raises KeyError inside find_precedents
+    monkeypatch.setenv("PRECEDENT_DATA_DIR", str(library_root))
+
+    def missing_session(*args, **kwargs):
+        raise KeyError("response_complete_session 2020-02-01 is not in session_cutoffs_utc")
+
+    monkeypatch.setattr(mcp_server, "run_card", missing_session)
+    message = error_text(call_tool("precedents", {"key": CENTRAL_BANK_US_HIGH_DICT}))
+    assert "response_complete_session 2020-02-01" in message
+
+
+def test_ask_still_exports_the_card_api():
+    from precedent.engine import ask, card_build
+
+    assert ask.run_card is card_build.run_card
+    assert ask.refused_card_without_library is card_build.refused_card_without_library
+    assert ask.UNTYPED == card_build.UNTYPED == "UNTYPED"

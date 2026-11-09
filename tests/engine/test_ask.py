@@ -245,13 +245,16 @@ def test_asset_rows_are_continuous_with_a_band_and_a_time_guarded_placebo(tmp_pa
 def test_a_card_never_shows_an_outcome_that_completed_after_the_query(library_root):
     asof = ROOT_CUTOFFS.iloc[212]  # events at positions 10 .. 210 (9) are available
     card = _card(library_root, "event_sequence", asof=asof)
-    assert (card.n, card.refused) == (9, False)
+    # P-43/P-49: the header counts the guarded rows (8), not the ninth, still-pending event (9)
+    assert (card.n, card.refused) == (8, False)
     assert card.rows[0].n == 8  # the 9th event's horizon-5 response completes at position 215
 
 
 def test_a_missing_horizon_in_the_rows_leaves_the_section_empty(library_root):
-    card = _card(library_root, "event_sequence", horizon=1)
-    assert card.rows == [] and card.refused is False
+    # P-43/V-3/P-49: horizon 1 is not an event_sequence horizon, so the request is rejected; the
+    # empty-section line is pinned in test_card_guarded_header.py
+    with pytest.raises(ValueError, match="horizon"):
+        _card(library_root, "event_sequence", horizon=1)
 
 
 def test_an_untyped_text_card_carries_the_typer_reason_and_the_hint(library_root):

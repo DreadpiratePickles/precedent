@@ -215,3 +215,46 @@ def test_unknown_rung_and_unsupported_quantile_are_rejected(separable_asset_even
         score_precedent_ladder(**separable_asset_events, outcome_type="asset", rungs=("B9",))
     with pytest.raises(ValueError, match="quantile"):
         score_precedent_ladder(**separable_asset_events, outcome_type="asset", quantiles=(0.3,))
+
+
+def _rare_key_inputs():
+    """40 early key-A events, then 3 key-B events: B1 refuses the B events, B0 would not."""
+    placements = [(f"a{i:03d}", KEY_A, 10 + 4 * i) for i in range(40)]
+    placements += [(f"b{i:03d}", KEY_B, 180 + 4 * i) for i in range(3)]
+    outcomes = [
+        (event_id, position, "event_sequence", "trade_or_sanctions/linked_country", 1.0, _HORIZON)
+        for event_id, _, position in placements
+    ]
+    return _ladder_inputs(placements, outcomes)
+
+
+def test_rungs_are_scored_on_paired_units_only():
+    """P-46 (I1): a unit refused by any compared rung is scored by none, so B1 - B0 is paired."""
+    table = score_precedent_ladder(**_rare_key_inputs(), outcome_type="event_sequence")
+    scored = table.pivot(index="event_type", columns="rung", values="n_scored")
+    assert (scored["B0"] == scored["B1"]).all()
+    assert scored.loc["armed_conflict"].tolist() == [0, 0]
+
+
+def test_refusals_are_reported_per_rung_even_for_units_dropped_from_the_pairing():
+    """P-46 (I1): n_refused stays each rung's own count; B0 refuses none of the B events."""
+    table = score_precedent_ladder(**_rare_key_inputs(), outcome_type="event_sequence")
+    refused = table.pivot(index="event_type", columns="rung", values="n_refused")
+    assert refused.loc["armed_conflict", "B1"] == 3 and refused.loc["armed_conflict", "B0"] == 0
+
+
+def test_b0_scores_units_on_a_dense_library_and_pairs_with_b1():
+    """P-42 / N-4: several events per session, horizon 20; B0 must score and match B1's units."""
+    rng = np.random.default_rng(0)
+    placements, outcomes = [], []
+    for position in range(10, 300):
+        for slot in range(3):
+            event_id = f"d{position:03d}_{slot}"
+            placements.append((event_id, KEY_A, position))
+            outcomes.append((event_id, position, "asset", "SPY", float(rng.normal()), 20))
+    table = score_precedent_ladder(
+        **_ladder_inputs(placements, outcomes), outcome_type="asset", horizon=20
+    )
+    n_scored = table.query("quantile == 0.5").set_index("rung")["n_scored"]
+    assert n_scored["B0"] > 0
+    assert n_scored["B0"] == n_scored["B1"]

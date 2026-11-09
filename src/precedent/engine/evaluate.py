@@ -2,12 +2,16 @@
 
 Events are visited in time order and each is scored from earlier events only, through
 `find_precedents`, so every band goes through the same time guard as a precedent card. Rung B0
-pools every earlier first report (the unconditional distribution or rate); rung B1 keeps only
-events with the same typed key. Continuous outcomes are scored with pinball loss per quantile
-and the coverage of the 80% band; binary outcomes with the Brier score. A refused summary
-(too few effective precedents) counts in `n_refused` and adds no loss. Rung B2 is the exact-key
-match again, meaningful only when the events were typed by a model; rung B3 blends the exact key
-with the similarity of canonical texts from an injected embedder (`engine.embedder`).
+pools the `top_k` most recent first reports of any type that pass the time guard (the
+unconditional distribution or rate over recent history, not every earlier first report); rung
+B1 keeps only events with the same typed key. Continuous outcomes are scored with pinball loss
+per quantile and the coverage of the 80% band; binary outcomes with the Brier score. A refused
+summary (too few effective precedents) counts in `n_refused` for the rung that refused. Rungs are
+scored on paired units only (P-46): a unit that any requested rung refuses is scored by no rung,
+so the rungs' losses compare on identical units and `n_scored` is that paired count. Rung B2 is
+the exact-key match again, meaningful only when the events were typed by a model; rung B3
+blends the exact key with the similarity of canonical texts from an injected embedder
+(`engine.embedder`).
 """
 
 from __future__ import annotations
@@ -119,7 +123,8 @@ def score_precedent_ladder(
     still serves as a precedent through the time guard; only the listed events add to the
     tallies. None scores every first report.
 
-    Rungs: B0 pools every earlier first report; B1 and B2 both match the exact key, computed
+    Rungs: B0 pools the `top_k` most recent first reports of any type that pass the time guard
+    (not every earlier first report); B1 and B2 both match the exact key, computed
     identically (B2 is labelled apart because it is meaningful only when the caller passes
     events typed by a model; B1 is the rules-typed control). B3 is
     `embedding_similarity(embedder, embedding_weight)`; `embedding_weight=None` means
@@ -166,8 +171,8 @@ def score_precedent_ladder(
         )
         if "B3" in rungs and query.canonical_text is None:
             raise ValueError(f"rung B3 needs a {_TEXT_COLUMN} for event {event.event_id!r}")
-        for rung in rungs:
-            found = find_precedents(
+        found_by_rung = {
+            rung: find_precedents(
                 query,
                 events,
                 rows,
@@ -177,11 +182,16 @@ def score_precedent_ladder(
                 top_k=params.top_k,
                 similarity=similarity_of_rung[rung],
             )
-            tally = tallies.setdefault((rung, event.event_type), _Tally())
-            for row in event_rows.itertuples(index=False):
-                is_binary = bool(row.is_binary)
+            for rung in rungs
+        }
+        for rung in rungs:
+            tallies.setdefault((rung, event.event_type), _Tally())
+        for row in event_rows.itertuples(index=False):
+            is_binary = bool(row.is_binary)
+            summaries = {}
+            for rung, found in found_by_rung.items():
                 precedents = found.loc[found["outcome_key"] == row.outcome_key]
-                summary = summarize_responses(
+                summaries[rung] = summarize_responses(
                     precedents["value"].to_numpy(dtype=float),
                     np.ones(len(precedents)),
                     precedents["event_id"].map(position_of).to_numpy(),
@@ -192,9 +202,13 @@ def score_precedent_ladder(
                     min_neff=params.min_neff,
                     z=params.wilson_z,
                 )
+            for rung, summary in summaries.items():
                 if summary.refused:
-                    tally.n_refused += 1
-                    continue
+                    tallies[(rung, event.event_type)].n_refused += 1
+            if any(summary.refused for summary in summaries.values()):
+                continue  # P-46: a unit counts only when every compared rung scored it
+            for rung, summary in summaries.items():
+                tally = tallies[(rung, event.event_type)]
                 tally.realized.append(float(row.value))
                 if is_binary:
                     tally.rates.append(float(summary.rate))

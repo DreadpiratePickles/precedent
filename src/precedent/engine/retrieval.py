@@ -3,6 +3,12 @@
 `find_precedents` is the single guard. An outcome is returned only when the session that completes
 its response closed, by its cutoff, at or before the moment the query became available. Every band
 on a precedent card goes through this function.
+
+Ruling P-42: the guard comes first and the cut second. Candidates are the similar past events
+that have a completed row of the requested outcome type and horizon by the query time; slots are
+counted per instrument for asset rows; and selection is window-aware (similarity, then recency;
+an event whose outcome window overlaps one already accepted for that instrument is skipped) until
+`top_k`. So `top_k` means "the `top_k` nearest completed, independent precedents".
 """
 
 from __future__ import annotations
@@ -70,9 +76,18 @@ def select_precedent_events(
     Order of operations: events available at or before the query; first reports only; not the
     query's own story; similarity; drop zero similarity; sort by similarity, then latest
     `effective_position`, then `event_id`; keep `top_k`. The index of the result is fresh.
+
+    This is the unguarded pool of look-alikes, not what a card shows: outcome bands come from
+    `find_precedents`, which applies the completion guard before its own cut (P-42).
     """
     if top_k < 1:
         raise ValueError(f"top_k must be at least 1, got {top_k}")
+    return _rank_candidates(query, events, similarity).head(top_k).reset_index(drop=True)
+
+
+def _rank_candidates(
+    query: PrecedentQuery, events: pd.DataFrame, similarity: SimilarityFunction
+) -> pd.DataFrame:
     if "similarity" in events.columns:
         raise ValueError("events already has a similarity column")
     if not events["event_id"].is_unique:
@@ -96,7 +111,7 @@ def select_precedent_events(
         ascending=[False, False, True],
         kind="stable",
     )
-    return ranked.head(top_k).reset_index(drop=True)
+    return ranked
 
 
 def find_precedents(
@@ -109,21 +124,27 @@ def find_precedents(
     top_k: int = 30,
     similarity: SimilarityFunction = exact_key_similarity,
 ) -> pd.DataFrame:
-    """Outcome rows of the selected precedent events that the query is allowed to see.
+    """Completed outcome rows of the `top_k` nearest independent precedents the query may see.
 
     Rows are of `outcome_type`, and their `response_complete_session` cutoff is at or before
     `query.available_utc`; a session missing from `session_cutoffs_utc` raises `KeyError`.
     Rows are filtered to `horizon` except for `market_resolution`, which carry their own.
-    Returns `LIBRARY_COLUMNS` plus `similarity`, in selection order.
+    The guard is applied first; then, per instrument (asset rows; per market and horizon for
+    `market_resolution`), events are taken in order of similarity, then recency, skipping any whose
+    outcome window (`effective_position` .. + row horizon) overlaps one already taken, until
+    `top_k`. Returns `LIBRARY_COLUMNS` plus `similarity`, in selection order.
     """
     if outcome_type not in OUTCOME_TYPES:
         raise ValueError(f"unknown outcome_type {outcome_type!r}; expected one of {OUTCOME_TYPES}")
     if not session_cutoffs_utc.index.is_unique:
         raise ValueError("session_cutoffs_utc has duplicate sessions")
-    selected = select_precedent_events(query, events, top_k=top_k, similarity=similarity)
+    if top_k < 1:
+        raise ValueError(f"top_k must be at least 1, got {top_k}")
+    pool = _rank_candidates(query, events, similarity)
     of_type = rows.loc[rows["outcome_type"] == outcome_type, list(LIBRARY_COLUMNS)]
-    found = selected[["event_id", "similarity"]].merge(of_type, on="event_id", how="inner")
-    found = found[[*LIBRARY_COLUMNS, "similarity"]]
+    found = pool[["event_id", "similarity", "effective_position"]].merge(
+        of_type, on="event_id", how="inner"
+    )
     if found.empty:
         return _empty_found()
     sessions = found["response_complete_session"]
@@ -136,8 +157,33 @@ def find_precedents(
     keep = cutoffs <= query.available_utc
     if outcome_type != "market_resolution":
         keep &= found["horizon"] == horizon
-    result = found.loc[keep].reset_index(drop=True)
+    found = found.loc[keep].reset_index(drop=True)
+    if found.empty:
+        return _empty_found()
+    chosen = _accept_independent(found, outcome_type, top_k)
+    result = found.loc[chosen, [*LIBRARY_COLUMNS, "similarity"]].reset_index(drop=True)
     return result if not result.empty else _empty_found()
+
+
+def _accept_independent(found: pd.DataFrame, outcome_type: str, top_k: int) -> list[int]:
+    """Row positions accepted in rank order: at most `top_k` per instrument, windows disjoint."""
+    keys = found["outcome_key"].to_numpy()
+    horizons = found["horizon"].to_numpy()
+    starts = found["effective_position"].to_numpy()
+    accepted: dict[object, list[int]] = {}
+    chosen: list[int] = []
+    for i in range(len(found)):
+        slot = (keys[i], int(horizons[i])) if outcome_type == "market_resolution" else keys[i]
+        taken = accepted.setdefault(slot, [])
+        if len(taken) >= top_k:
+            continue
+        width = int(horizons[i])
+        start = int(starts[i])
+        if any(abs(start - other) < width for other in taken):
+            continue
+        taken.append(start)
+        chosen.append(i)
+    return chosen
 
 
 def _empty_found() -> pd.DataFrame:

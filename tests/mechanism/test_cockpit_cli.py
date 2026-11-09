@@ -188,7 +188,10 @@ def test_band_uses_the_exact_key_and_the_fit_uses_direction_zero(world):
     finished = events["effective_position"].map(lambda p: cutoffs.iloc[p + 1 + HORIZON] <= asof)
     seen = events[events["available_utc"] <= asof]
     top = seen.sort_values("effective_position", ascending=False).head(params.top_k)
-    assert fitted.n_obs == int(finished[top.index].sum())
+    # P-42: the guard comes before the cut, so the fit sees top_k finished events (was 29,
+    # the finished ones among the 30 latest unguarded).
+    assert int(finished[top.index].sum()) == 29
+    assert fitted.n_obs == params.top_k == 30
     signed = events["key"].map(lambda k: EventKey.from_string(k).direction_sign == 1)
     same_sign = events[signed & (events["available_utc"] <= asof)]
     expected = int(finished[same_sign.index].sum())

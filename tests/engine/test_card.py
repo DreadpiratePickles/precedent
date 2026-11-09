@@ -31,7 +31,7 @@ EXPECTED = "\n".join([
     "central_bank/scheduled/US               res   refused: independent=5, need 8",
     "asset                               NOT BUILT: no prices",
     "",
-    "nearest precedents",
+    "nearest independent precedents (non-overlapping outcome windows)",
     "2023-07-26  Federal Reserve raises policy rate  similarity 1.00  gdelt:1112223334",
     "library covers  gdelt2: 2015-02-19 to 2024-03-31, 41233 events; kalshi: 2021-07-01 to 2024-03-31, 812 markets",
     "These are past outcomes of similar events, not a forecast.",
@@ -43,7 +43,7 @@ REFUSED_EXPECTED = "\n".join([
     "precedents     n=3  independent=3  earliest 2019-03-04  latest 2023-11-09",
     "",
     "REFUSED        3 usable precedents, need 8. No band is drawn below that.",
-    "nearest precedents",
+    "nearest independent precedents (non-overlapping outcome windows)",
     "2023-11-09  8-K item 1.05 cybersecurity incident  similarity 1.00  0000950170-23-061234:1.05",
     "library covers  edgar_8k: 2015-01-02 to 2024-03-29, 9120 events",
     "These are past outcomes of similar events, not a forecast.",
@@ -229,7 +229,7 @@ def test_empty_covers_says_no_library_loaded(golden_card):
 def test_empty_nearest_prints_none(golden_card):
     card = golden_card.model_copy(update={"nearest": []})
     lines = render_text(card).splitlines()
-    assert lines[lines.index("nearest precedents") + 1] == "(none)"
+    assert lines[lines.index("nearest independent precedents (non-overlapping outcome windows)") + 1] == "(none)"
 
 
 def test_the_caller_trims_rows_so_the_model_has_no_row_cap_field():

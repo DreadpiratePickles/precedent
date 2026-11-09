@@ -297,9 +297,13 @@ def test_the_default_rungs_are_unchanged_and_need_no_embedder():
 
 
 def _text_driven_inputs():
-    """One key throughout; the outcome follows the text, so only text similarity can separate."""
+    """One key throughout; the outcome follows the text, so only text similarity can separate.
+
+    P-42/P-48: events are spaced one horizon apart, so past the first top_k there are more
+    independent completed events than slots and the embedding weight changes which are chosen.
+    """
     placements = [
-        (f"t{i:03d}", KEY_A, 10 + 4 * i, TEXT_A if i % 2 == 0 else TEXT_B) for i in range(80)
+        (f"t{i:03d}", KEY_A, 10 + 6 * i, TEXT_A if i % 2 == 0 else TEXT_B) for i in range(60)
     ]
     events = _events_with_text(placements)
     rows = _sequence_rows(events)

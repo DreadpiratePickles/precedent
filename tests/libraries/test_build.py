@@ -358,3 +358,12 @@ def test_current_commit_treats_any_os_error_as_unknown(monkeypatch):
 
     monkeypatch.setattr(build_module.subprocess, "run", refuse)
     assert current_commit() == "unknown"
+
+
+def test_no_event_sequence_row_completes_after_the_last_event_of_the_feed(populated_stores):
+    """P-45 (V-1): the 120-day calendar pad is not feed coverage."""
+    build_libraries(populated_stores, PARAMS, commit=COMMIT)
+    bundle = load_bundle(populated_stores / "library")
+    last_event_session = pd.Timestamp(max(bundle.events["effective_session"]))
+    sequence = bundle.rows[bundle.rows["outcome_type"] == "event_sequence"]
+    assert (sequence["response_complete_session"] <= last_event_session).all()
